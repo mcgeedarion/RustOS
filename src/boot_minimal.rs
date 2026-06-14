@@ -26,6 +26,21 @@ pub fn enter<A: MinimalBootArch>(boot_info: &'static BootInfo) -> ! {
     crate::serial_println!("RustOS: boot-minimal entering common path");
     crate::serial_println!("RustOS: arch={}", A::NAME);
     crate::serial_println!("RustOS: boot priority={}", BootInfo::priority().as_str());
+    if boot_info.rsdp_phys != 0 {
+        crate::serial_println!("RustOS: rsdp present");
+    } else {
+        crate::serial_println!("RustOS: rsdp absent");
+    }
+    if boot_info.efi_memory_map.is_empty() {
+        crate::serial_println!("RustOS: efi_mmap absent");
+    } else {
+        crate::serial_println!("RustOS: efi_mmap present");
+    }
+    if boot_info.initramfs.is_empty() {
+        crate::serial_println!("RustOS: initrd absent");
+    } else {
+        crate::serial_println!("RustOS: initrd present");
+    }
     crate::serial_println!("RustOS: rsdp={:#x}", boot_info.rsdp_phys);
     crate::serial_println!(
         "RustOS: efi_mmap ptr={:#x} size={} desc={}",

@@ -103,6 +103,49 @@ case "$ARCH" in
 esac
 
 log=$(mktemp)
+fifo=
+trap 'rm -f "$log" ${fifo:+"$fifo"}' EXIT
+
+if [[ $SMOKE -eq 1 ]]; then
+  fifo=$(mktemp -u)
+  mkfifo "$fifo"
+
+  "$QEMU" "${args[@]}" >"$fifo" 2>&1 &
+  qemu_pid=$!
+
+  marker=0
+  deadline=$((SECONDS + TIMEOUT))
+  exec 3<"$fifo"
+  while (( SECONDS < deadline )); do
+    if IFS= read -r -t 1 line <&3; then
+      printf '%s\n' "$line" | tee -a "$log"
+      if [[ "$line" == *"BOOT_MINIMAL_OK"* ]]; then
+        marker=1
+        break
+      fi
+      continue
+    fi
+
+    if ! kill -0 "$qemu_pid" 2>/dev/null; then
+      break
+    fi
+  done
+  exec 3<&-
+
+  if [[ $marker -eq 1 ]]; then
+    kill "$qemu_pid" 2>/dev/null || true
+    wait "$qemu_pid" 2>/dev/null || true
+    exit 0
+  fi
+
+  wait "$qemu_pid" 2>/dev/null
+  status=$?
+  if ! grep -q "BOOT_MINIMAL_OK" "$log"; then
+    echo "run_qemu.sh: smoke marker BOOT_MINIMAL_OK not observed" >&2
+    exit 1
+  fi
+  exit "$status"
+fi
 trap 'rm -f "$log"' EXIT
 
 set +e
