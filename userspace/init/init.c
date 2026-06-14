@@ -274,8 +274,9 @@ int main(void)
                 write(2, "\n", 1);
             }
 
-            puts_fd(1, "[init] restarting compositor in " \
-                       RESTART_DELAY_SEC == 1 ? "1" : "?" " second...");
+            puts_fd(1, "[init] restarting compositor in ");
+            putint_fd(1, RESTART_DELAY_SEC);
+            puts_fd(1, RESTART_DELAY_SEC == 1 ? " second..." : " seconds...");
             sleep_sec(RESTART_DELAY_SEC);
             compositor_pid = spawn_compositor();
         }

@@ -25,8 +25,16 @@ pub fn cpuid_cr4_features() -> (bool, bool, bool) {
     let ebx: u32;
     unsafe {
         core::arch::asm!(
-            "mov eax, 7", "xor ecx, ecx", "cpuid",
-            out("ebx") ebx, out("eax") _, out("ecx") _, out("edx") _,
+            "push rbx",
+            "mov eax, 7",
+            "xor ecx, ecx",
+            "cpuid",
+            "mov {ebx_out:e}, ebx",
+            "pop rbx",
+            ebx_out = lateout(reg) ebx,
+            out("eax") _,
+            out("ecx") _,
+            out("edx") _,
             options(nostack)
         );
     }

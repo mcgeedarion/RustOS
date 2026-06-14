@@ -119,7 +119,7 @@ if [[ $SMOKE -eq 1 ]]; then
   while (( SECONDS < deadline )); do
     if IFS= read -r -t 1 line <&3; then
       printf '%s\n' "$line" | tee -a "$log"
-      if [[ "$line" == *"BOOT_MINIMAL_OK"* ]]; then
+      if [[ "$line" == *"BOOT_MINIMAL_OK"* || "$line" == *"FULL_OS_USERSPACE_OK"* ]]; then
         marker=1
         break
       fi
@@ -140,8 +140,8 @@ if [[ $SMOKE -eq 1 ]]; then
 
   wait "$qemu_pid" 2>/dev/null
   status=$?
-  if ! grep -q "BOOT_MINIMAL_OK" "$log"; then
-    echo "run_qemu.sh: smoke marker BOOT_MINIMAL_OK not observed" >&2
+  if ! grep -Eq "BOOT_MINIMAL_OK|FULL_OS_USERSPACE_OK" "$log"; then
+    echo "run_qemu.sh: smoke marker BOOT_MINIMAL_OK/FULL_OS_USERSPACE_OK not observed" >&2
     exit 1
   fi
   exit "$status"
@@ -153,8 +153,8 @@ timeout "$TIMEOUT" "$QEMU" "${args[@]}" 2>&1 | tee "$log"
 status=${PIPESTATUS[0]}
 set -e
 
-if [[ $SMOKE -eq 1 ]] && ! grep -q "BOOT_MINIMAL_OK" "$log"; then
-  echo "run_qemu.sh: smoke marker BOOT_MINIMAL_OK not observed" >&2
+if [[ $SMOKE -eq 1 ]] && ! grep -Eq "BOOT_MINIMAL_OK|FULL_OS_USERSPACE_OK" "$log"; then
+  echo "run_qemu.sh: smoke marker BOOT_MINIMAL_OK/FULL_OS_USERSPACE_OK not observed" >&2
   exit 1
 fi
 
