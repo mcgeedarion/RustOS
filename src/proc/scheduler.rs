@@ -93,7 +93,7 @@
 //!
 //! ### MmReadGuard drop order
 //!
-//! The struct field order is `_arc` first, `_guard` second.  Rust drops
+//! The struct field order is `_guard` first, `_arc` second.  Rust drops
 //! fields in declaration order (top to bottom), so the `RwLockReadGuard` is
 //! dropped before the `Arc`, which means the `RwLock` is never freed while
 //! the guard still holds a reference into it.
@@ -307,6 +307,7 @@ pub struct RunQueue {
     pub load_weight: u64,
     pub tick_count: u64,
     pub curr_vruntime_start: u64,
+    pub rr_slice_start: u64,
 }
 
 unsafe impl Send for RunQueue {}
@@ -325,6 +326,7 @@ impl RunQueue {
             load_weight: 0,
             tick_count: 0,
             curr_vruntime_start: 0,
+            rr_slice_start: 0,
         }
     }
 
@@ -572,6 +574,9 @@ pub fn schedule() {
     let blk = unsafe { &mut *blk };
 
     let now = crate::time::clock::monotonic_ns();
+    if blk.runqueue.curr_vruntime_start == 0 {
+        blk.runqueue.curr_vruntime_start = now;
+    }
 
     let prev_task = blk.current_task;
     if !prev_task.is_null() {
@@ -624,6 +629,11 @@ pub fn schedule() {
     }
 
     blk.runqueue.curr_vruntime_start = now;
+    if next.sched.policy == SchedPolicy::Rr {
+        blk.runqueue.rr_slice_start = now;
+    } else {
+        blk.runqueue.rr_slice_start = 0;
+    }
     blk.current_task = next_task;
     blk.current_pid = next.pid;
     blk.ctx_switches += 1;
@@ -751,7 +761,7 @@ pub fn tick(cpu: u32) {
         let t = unsafe { &mut *curr };
 
         if t.sched.policy == SchedPolicy::Rr {
-            let elapsed = now.saturating_sub(blk.runqueue.curr_vruntime_start);
+            let elapsed = now.saturating_sub(blk.runqueue.rr_slice_start);
 
             if elapsed >= TICK_NS {
                 let pid = t.pid;
@@ -867,7 +877,7 @@ fn load_balance(this_cpu: u32) {
                 .runqueue
                 .enqueue(task);
         }
-        crate::smp::ipi::send_reschedule(this_cpu);
+        crate::smp::ipi::send_reschedule(busiest_cpu);
     }
 }
 
@@ -993,8 +1003,8 @@ pub fn suspend_current_until_child_exec(_child_pid: usize) {
 }
 
 pub struct MmReadGuard {
-    _arc: alloc::sync::Arc<spin::RwLock<()>>,
     _guard: spin::RwLockReadGuard<'static, ()>,
+    _arc: alloc::sync::Arc<spin::RwLock<()>>,
 }
 
 unsafe impl Send for MmReadGuard {}
@@ -1008,8 +1018,8 @@ pub fn with_current_mm_read() -> MmReadGuard {
         (*raw).read()
     };
     MmReadGuard {
-        _arc: arc,
         _guard: guard,
+        _arc: arc,
     }
 }
 

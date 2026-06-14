@@ -169,7 +169,13 @@ pub fn sys_wait4(pid: isize, wstatus_va: usize, options: u32, rusage_va: usize) 
 }
 
 fn sys_wait4_impl(pid: isize, wstatus_va: usize, options: u32, rusage_va: usize) -> isize {
-    let caller = scheduler::current_pid();
+    let caller = scheduler::current_pid() as usize;
+    let wait_pid = if pid == 0 {
+        let caller_pgid = scheduler::with_proc(caller, |p| p.pgid).unwrap_or(caller);
+        -(caller_pgid as isize)
+    } else {
+        pid
+    };
     let wnohang = options & WNOHANG != 0;
     let wuntraced = options & WUNTRACED != 0;
     let wcont = options & WCONTINUED != 0;
@@ -191,7 +197,7 @@ fn sys_wait4_impl(pid: isize, wstatus_va: usize, options: u32, rusage_va: usize)
                 if p_ppid != caller {
                     continue;
                 }
-                if !matches_pid(p_pid, p_pgid, pid) {
+                if !matches_pid(p_pid, p_pgid, wait_pid) {
                     continue;
                 }
 

@@ -256,7 +256,7 @@ pub fn sys_clone3(args_va: usize, args_size: usize) -> isize {
     };
 
     let user_sp = if ca.stack != 0 {
-        (ca.stack + ca.stack_size) as usize
+        (ca.stack.saturating_add(ca.stack_size) & !15u64) as usize
     } else {
         0
     };
