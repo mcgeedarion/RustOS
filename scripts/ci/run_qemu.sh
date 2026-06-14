@@ -5,6 +5,8 @@ ARCH=${ARCH:-x86_64}
 BOOT=uefi
 TIMEOUT=${TIMEOUT:-30}
 SMOKE=0
+SMOKE_MARKER_RE=${SMOKE_MARKER_RE:-'BOOT_MINIMAL_OK|FULL_OS_USERSPACE_OK|rustos: kernel_main reached'}
+SMOKE_MARKER_DESC=${SMOKE_MARKER_DESC:-'BOOT_MINIMAL_OK/FULL_OS_USERSPACE_OK/rustos: kernel_main reached'}
 SMOKE_MARKER_RE='BOOT_MINIMAL_OK|entering common kernel_main|rustos: kernel_main reached'
 SMOKE_MARKER_DESC='BOOT_MINIMAL_OK/common kernel_main/rustos: kernel_main reached'
 
@@ -121,6 +123,7 @@ if [[ $SMOKE -eq 1 ]]; then
   while (( SECONDS < deadline )); do
     if IFS= read -r -t 1 line <&3; then
       printf '%s\n' "$line" | tee -a "$log"
+      if [[ "$line" =~ $SMOKE_MARKER_RE ]]; then
       if [[ "$line" == *"BOOT_MINIMAL_OK"* || "$line" == *"entering common kernel_main"* || "$line" == *"rustos: kernel_main reached"* ]]; then
         marker=1
         break
