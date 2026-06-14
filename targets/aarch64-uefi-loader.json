@@ -1,9 +1,9 @@
 {
   "llvm-target": "aarch64-unknown-windows",
   "target-endian": "little",
-  "target-pointer-width": "64",
-  "target-c-int-width": "32",
-  "data-layout": "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-n32:64-S128",
+  "target-pointer-width": 64,
+  "target-c-int-width": 32,
+  "data-layout": "e-m:w-p270:32:32-p271:32:32-p272:64:64-p:64:64-i32:32-i64:64-i128:128-n32:64-S128-Fn32",
   "arch": "aarch64",
   "os": "uefi",
   "env": "",
@@ -18,7 +18,7 @@
   "panic-strategy": "abort",
   "relocation-model": "static",
   "code-model": "small",
-  "features": "-neon,+strict-align",
+  "features": "+strict-align",
   "max-atomic-width": 128,
   "frame-pointer": "always",
   "pre-link-args": {

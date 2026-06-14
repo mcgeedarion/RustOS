@@ -166,6 +166,7 @@ pub unsafe extern "efiapi" fn uefi_start(
     let bs = &*st.boot_services;
 
     efi_print(st.con_out, "RustOS (RISC-V) booting via UEFI...\r\n");
+    #[cfg(not(feature = "boot_minimal"))]
     let _ =
         crate::drivers::gop::capture_from_boot_services(st.boot_services as *mut core::ffi::c_void);
 
@@ -181,6 +182,7 @@ pub unsafe extern "efiapi" fn uefi_start(
             let start = *data as usize;
             let size = *data.add(1) as usize;
             if start != 0 && size > 0 {
+                #[cfg(not(feature = "boot_minimal"))]
                 crate::initramfs::set_initramfs_range(start, size);
                 initramfs = BootRange::new(start, size);
                 ovmf_initrd_found = true;
@@ -263,6 +265,11 @@ pub unsafe extern "efiapi" fn uefi_start(
     extern "C" {
         fn kernel_main(boot_info: &'static BootInfo) -> !;
     }
+    #[cfg(feature = "boot_minimal")]
+    {
+        kernel_main(&BOOT_INFO)
+    }
+    #[cfg(not(feature = "boot_minimal"))]
     asm!(
         "la   sp, {stack_top}",
         "mv   s0, zero",
@@ -329,6 +336,7 @@ unsafe fn load_initrd_via_loadfile2(bs: &EfiBootServices) -> Option<BootRange> {
         initrd_buf as *mut core::ffi::c_void,
     ) == EFI_SUCCESS
     {
+        #[cfg(not(feature = "boot_minimal"))]
         crate::initramfs::set_initramfs_range(initrd_buf as usize, initrd_size);
         Some(BootRange::new(initrd_buf as usize, initrd_size))
     } else {

@@ -200,8 +200,15 @@ pub static mut EFI_DESC_SIZE: usize = 0;
 
 static mut BOOT_INFO: BootInfo = BootInfo::empty();
 
+pub unsafe extern "efiapi" fn efi_entry_raw(
+    image_handle: *mut core::ffi::c_void,
+    system_table: *mut core::ffi::c_void,
+) -> ! {
+    uefi_start(image_handle, system_table as *mut EfiSystemTable)
+}
+
 #[no_mangle]
-pub unsafe extern "efiapi" fn uefi_start(
+unsafe extern "efiapi" fn uefi_start(
     image_handle: EfiHandle,
     system_table: *mut EfiSystemTable,
 ) -> ! {
@@ -222,8 +229,11 @@ pub unsafe extern "efiapi" fn uefi_start(
     );
 
     // 2. Capture GOP framebuffer — graceful fallback if firmware has no GOP.
+    #[cfg(not(feature = "boot_minimal"))]
     let gop_ok =
         crate::drivers::gop::capture_from_boot_services(st.boot_services as *mut core::ffi::c_void);
+    #[cfg(feature = "boot_minimal")]
+    let gop_ok = false;
     if !gop_ok {
         efi_print(
             st.con_out,
@@ -244,6 +254,7 @@ pub unsafe extern "efiapi" fn uefi_start(
             let phys_start = *data as usize;
             let byte_size = *data.add(1) as usize;
             if phys_start != 0 && byte_size > 0 {
+                #[cfg(not(feature = "boot_minimal"))]
                 crate::initramfs::set_initramfs_range(phys_start, byte_size);
                 initramfs = BootRange::new(phys_start, byte_size);
                 ovmf_initrd_found = true;
@@ -409,6 +420,7 @@ unsafe fn load_initrd_via_loadfile2(bs: &EfiBootServices) -> Option<BootRange> {
         initrd_buf as *mut core::ffi::c_void,
     );
     if status == EFI_SUCCESS {
+        #[cfg(not(feature = "boot_minimal"))]
         crate::initramfs::set_initramfs_range(initrd_buf as usize, initrd_size);
         return Some(BootRange::new(initrd_buf as usize, initrd_size));
     }
