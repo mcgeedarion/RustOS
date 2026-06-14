@@ -41,18 +41,6 @@ pub fn enter<A: MinimalBootArch>(boot_info: &'static BootInfo) -> ! {
     } else {
         crate::serial_println!("RustOS: initrd present");
     }
-    crate::serial_println!("RustOS: rsdp={:#x}", boot_info.rsdp_phys);
-    crate::serial_println!(
-        "RustOS: efi_mmap ptr={:#x} size={} desc={}",
-        boot_info.efi_memory_map.ptr,
-        boot_info.efi_memory_map.size,
-        boot_info.efi_memory_map.desc_size
-    );
-    crate::serial_println!(
-        "RustOS: initrd start={:#x} len={}",
-        boot_info.initramfs.start,
-        boot_info.initramfs.len
-    );
     crate::serial_println!("RustOS: BOOT_MINIMAL_OK");
 
     loop {

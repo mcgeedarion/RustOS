@@ -33,7 +33,7 @@
 //! invariant that the hardware enforces at `call` instructions.
 
 use crate::init::boot_info::BootInfo;
-use core::arch::asm;
+use core::arch::naked_asm;
 
 /// Hart ID saved by _start before any Rust code runs.
 pub static mut BOOT_HART_ID: usize = 0;
@@ -70,7 +70,7 @@ pub static BOOT_STACK_TOP: [u8; 0] = [];
 #[unsafe(naked)]
 #[link_section = ".text.boot"]
 pub unsafe extern "C" fn _start() -> ! {
-    asm!(
+    naked_asm!(
         // Only hart 0 proceeds; all others park in wfi.
         "mv   tp, a0",
         "bnez a0, 1f",
@@ -103,6 +103,5 @@ pub unsafe extern "C" fn _start() -> ! {
         stack_top = sym BOOT_STACK_TOP,
         boot_info = sym BOOT_INFO,
         kmain     = sym crate::kernel_main::kernel_main,
-        options(noreturn)
     );
 }
