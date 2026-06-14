@@ -1,0 +1,67 @@
+name: Apply targeted kernel fixes
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/apply-targeted-kernel-fixes.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch requested files
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          def once(text, old, new, label):
+              if old not in text:
+                  raise SystemExit(f"missing pattern: {label}")
+              return text.replace(old, new, 1)
+
+          p = Path("src/proc/scheduler.rs")
+          s = p.read_text()
+          s = s.replace(
+              "//! The struct field order is `_arc` first, `_guard` second.  Rust drops\n//! fields in declaration order (top to bottom), so the `RwLockReadGuard` is\n//! dropped before the `Arc`, which means the `RwLock` is never freed while\n//! the guard still holds a reference into it.",
+              "//! The struct field order is `_guard` first, `_arc` second.  Rust drops\n//! fields in declaration order (top to bottom), so the `RwLockReadGuard` is\n//! dropped before the `Arc`, which means the `RwLock` is never freed while\n//! the guard still holds a reference into it.",
+              1,
+          )
+          if "    pub rr_slice_start: u64,\n" not in s:
+              s = once(s, "    pub tick_count: u64,\n    pub curr_vruntime_start: u64,\n}", "    pub tick_count: u64,\n    pub curr_vruntime_start: u64,\n    pub rr_slice_start: u64,\n}", "rr field")
+              s = once(s, "            tick_count: 0,\n            curr_vruntime_start: 0,\n        }", "            tick_count: 0,\n            curr_vruntime_start: 0,\n            rr_slice_start: 0,\n        }", "rr init")
+          if "if blk.runqueue.curr_vruntime_start == 0" not in s:
+              s = once(s, "    let now = crate::time::clock::monotonic_ns();\n\n    let prev_task = blk.current_task;", "    let now = crate::time::clock::monotonic_ns();\n    if blk.runqueue.curr_vruntime_start == 0 {\n        blk.runqueue.curr_vruntime_start = now;\n    }\n\n    let prev_task = blk.current_task;", "cold start")
+          if "        blk.runqueue.rr_slice_start = now;\n" not in s:
+              s = once(s, "    blk.runqueue.curr_vruntime_start = now;\n    blk.current_task = next_task;", "    blk.runqueue.curr_vruntime_start = now;\n    if next.sched.policy == SchedPolicy::Rr {\n        blk.runqueue.rr_slice_start = now;\n    } else {\n        blk.runqueue.rr_slice_start = 0;\n    }\n    blk.current_task = next_task;", "rr schedule")
+          s = once(s, "        if t.sched.policy == SchedPolicy::Rr {\n            let elapsed = now.saturating_sub(blk.runqueue.curr_vruntime_start);\n\n            if elapsed >= TICK_NS {", "        if t.sched.policy == SchedPolicy::Rr {\n            let elapsed = now.saturating_sub(blk.runqueue.rr_slice_start);\n\n            if elapsed >= TICK_NS {", "rr tick")
+          s = once(s, "        unsafe {\n            crate::smp::percpu::PERCPU_BLOCKS[this_cpu as usize]\n                .runqueue\n                .enqueue(task);\n        }\n        crate::smp::ipi::send_reschedule(this_cpu);", "        unsafe {\n            crate::smp::percpu::PERCPU_BLOCKS[this_cpu as usize]\n                .runqueue\n                .enqueue(task);\n        }\n        crate::smp::ipi::send_reschedule(busiest_cpu);", "balance ipi")
+          s = once(s, "pub struct MmReadGuard {\n    _arc: alloc::sync::Arc<spin::RwLock<()>>,\n    _guard: spin::RwLockReadGuard<'static, ()>,\n}", "pub struct MmReadGuard {\n    _guard: spin::RwLockReadGuard<'static, ()>,\n    _arc: alloc::sync::Arc<spin::RwLock<()>>,\n}", "mm guard")
+          s = once(s, "    MmReadGuard {\n        _arc: arc,\n        _guard: guard,\n    }", "    MmReadGuard {\n        _guard: guard,\n        _arc: arc,\n    }", "mm guard ctor")
+          p.write_text(s)
+
+          p = Path("src/proc/clone.rs")
+          s = p.read_text()
+          s = once(s, "    let user_sp = if ca.stack != 0 {\n        (ca.stack + ca.stack_size) as usize\n    } else {\n        0\n    };", "    let user_sp = if ca.stack != 0 {\n        (ca.stack.saturating_add(ca.stack_size) & !15u64) as usize\n    } else {\n        0\n    };", "clone user_sp")
+          p.write_text(s)
+
+          p = Path("src/proc/wait.rs")
+          s = p.read_text()
+          s = once(s, "    let caller = scheduler::current_pid();\n    let wnohang = options & WNOHANG != 0;", "    let caller = scheduler::current_pid() as usize;\n    let wait_pid = if pid == 0 {\n        let caller_pgid = scheduler::with_proc(caller, |p| p.pgid).unwrap_or(caller);\n        -(caller_pgid as isize)\n    } else {\n        pid\n    };\n    let wnohang = options & WNOHANG != 0;", "wait caller pgid")
+          s = once(s, "                if !matches_pid(p_pid, p_pgid, pid) {", "                if !matches_pid(p_pid, p_pgid, wait_pid) {", "wait pid match")
+          p.write_text(s)
+          PY
+
+          rm -f .github/workflows/apply-targeted-kernel-fixes.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Fix scheduler, clone, and waitpid correctness bugs"
+          git push origin HEAD:main
