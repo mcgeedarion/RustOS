@@ -46,7 +46,7 @@ use alloc::collections::{BTreeMap, VecDeque};
 use alloc::vec::Vec;
 use spin::Mutex;
 
-use crate::proc::{process::State, scheduler, thread};
+use crate::proc::{process::State, scheduler};
 use crate::uaccess::{copy_from_user, copy_to_user, USER_SPACE_END};
 
 #[derive(Clone, Copy, Default, Debug)]
@@ -217,25 +217,20 @@ pub struct SigAction {
 
 static SIGACTIONS: Mutex<BTreeMap<(usize, u32), SigAction>> = Mutex::new(BTreeMap::new());
 
-fn sigaction_key(pid: usize) -> usize {
-    let tgid = thread::tgid_of(pid);
-    if tgid != 0 {
-        tgid
-    } else {
-        pid
-    }
-}
-
+// Use TGID (thread group ID) instead of TID to key signal actions.  This ensures
+// that group-directed signals pick up the correct handler.
 pub fn get_sigaction(pid: usize, sig: u32) -> SigAction {
+    let tgid = scheduler::with_proc(pid, |p| p.tgid).unwrap_or(pid);
     SIGACTIONS
         .lock()
-        .get(&(sigaction_key(pid), sig))
+        .get(&(tgid, sig))
         .copied()
         .unwrap_or_default()
 }
 
 pub fn set_sigaction(pid: usize, sig: u32, sa: SigAction) {
-    SIGACTIONS.lock().insert((sigaction_key(pid), sig), sa);
+    let tgid = scheduler::with_proc(pid, |p| p.tgid).unwrap_or(pid);
+    SIGACTIONS.lock().insert((tgid, sig), sa);
 }
 
 #[repr(C)]
@@ -318,9 +313,11 @@ fn push_sigframe_x86(
         uc_stack_ss_sp: 0,
         uc_stack_ss_flags: SS_DISABLE as u32,
         uc_stack_ss_size: 0,
+        // Preserve r8, r9 and r10 from the SyscallFrame rather than zeroing them.
         r8: frame.r8 as u64,
         r9: frame.r9 as u64,
         r10: frame.r10 as u64,
+        // r11 stores the saved RFLAGS; SyscallFrame does not carry r11.
         r11: frame.rflags as u64,
         r12: frame.r12 as u64,
         r13: frame.r13 as u64,
@@ -332,6 +329,7 @@ fn push_sigframe_x86(
         rbx: frame.rbx as u64,
         rdx: frame.rdx as u64,
         rax: frame.rax as u64,
+        // rcx points at user RIP on syscall entry; use it for rcx field.
         rcx: frame.rip as u64,
         rsp: frame.rsp as u64,
         rip: frame.rip as u64,
@@ -430,6 +428,7 @@ fn apply_default(pid: usize, info: &SigInfo) {
         return;
     }
     if SIG_STOP_DEFAULT & bit != 0 {
+        // Update both the in-memory state and the atomic snapshot on SIGSTOP.
         scheduler::with_proc_mut(pid, |p, pl| {
             pl.set_state(p, State::Stopped);
         });
@@ -488,9 +487,6 @@ pub fn sys_rt_sigreturn(frame: &mut crate::arch::x86_64::syscall::SyscallFrame) 
     frame.rdi = sf.rdi as usize;
     frame.rsi = sf.rsi as usize;
     frame.rdx = sf.rdx as usize;
-    frame.r10 = sf.r10 as usize;
-    frame.r8 = sf.r8 as usize;
-    frame.r9 = sf.r9 as usize;
     frame.r12 = sf.r12 as usize;
     frame.r13 = sf.r13 as usize;
     frame.r14 = sf.r14 as usize;
