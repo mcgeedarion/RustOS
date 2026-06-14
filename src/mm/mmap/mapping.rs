@@ -72,7 +72,7 @@ pub fn sys_mmap(
     }
 
     // Allocate a virtual address region.  For MAP_FIXED/NOREPLACE we reuse the user-supplied
-    // address; for anonymous hints we bump next_va.
+    // address; for anonymous hints we choose the next free region by scanning for collisions.
     let (va, user_cr3) = with_mm_write(pid, |p| {
         let va = if is_fixed || is_fixed_noreplace {
             // On MAP_FIXED (but not noreplace) remove existing VMAs in the range.  We
@@ -83,7 +83,19 @@ pub fn sys_mmap(
             }
             addr
         } else {
-            let v = p.next_va;
+            // Find a hole for the requested length.  This avoids collisions when next_va overlaps
+            // existing VMAs (bug #next_va-overlap).
+            let mut v = p.next_va;
+            loop {
+                let end = v + len;
+                let collision = p.vmas.iter().any(|vma| vma.start < end && vma.end > v);
+                if !collision {
+                    break;
+                }
+                // Bump by one page and align up.
+                v = page_align_up(v + PAGE);
+            }
+            // Update next_va for future allocations.  Leave a guard page to catch overruns.
             p.next_va = page_align_up(v + len + PAGE);
             v
         };
@@ -245,7 +257,16 @@ fn mmap_phys(addr: usize, len: usize, prot: u32, flags: u32, pid: usize, offset:
             remove_vma_inner(p, addr, va_end_of(addr, len));
             addr
         } else {
-            let v = p.next_va;
+            // Find a non-overlapping region for physmap as well.
+            let mut v = p.next_va;
+            loop {
+                let end = v + len;
+                let collision = p.vmas.iter().any(|vma| vma.start < end && vma.end > v);
+                if !collision {
+                    break;
+                }
+                v = page_align_up(v + PAGE);
+            }
             p.next_va = page_align_up(v + len + PAGE);
             v
         };
