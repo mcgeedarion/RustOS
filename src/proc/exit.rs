@@ -130,15 +130,16 @@ pub fn do_exit(pid: usize, code: i32) {
 
     crate::fs::process_fd::proc_fd_free(pid);
 
-    crate::proc::cgroup::cgroup_exit(pid);
-
     let last = is_last_live_thread(pid, tgid);
     if last {
+        // Free the user address space before cgroup teardown to avoid UAF in cgroup hooks.
         let user_satp = scheduler::with_proc(pid, |p| p.user_satp).unwrap_or(0);
         free_address_space(pid, user_satp);
         crate::proc::signal::group_pending_clear(tgid);
         ns_exit(pid);
     }
+    // Move cgroup_exit after free_address_space to ensure no stale vmas are accessed.
+    crate::proc::cgroup::cgroup_exit(pid);
 
     let vfork_parent = zombify(pid, code);
     if vfork_parent != 0 {
@@ -181,7 +182,13 @@ pub fn sys_exit_group(status: i32) -> isize {
         crate::syscall::driver::cleanup_pid(sibling);
         crate::ipc::endpoint_cleanup_pid(sibling);
         crate::fs::process_fd::proc_fd_free(sibling);
-        crate::proc::cgroup::cgroup_exit(sibling); // ← cgroup hook
+        // Free the sibling's address space before performing cgroup exit.
+        let user_satp_sibling = scheduler::with_proc(sibling, |p| p.user_satp).unwrap_or(0);
+        if user_satp_sibling != 0 {
+            free_address_space(sibling, user_satp_sibling);
+        }
+        // After freeing pages, call cgroup_exit for this sibling.
+        crate::proc::cgroup::cgroup_exit(sibling);
         let vfork_parent = zombify(sibling, status);
         if vfork_parent != 0 {
             scheduler::wake_pid(vfork_parent);
