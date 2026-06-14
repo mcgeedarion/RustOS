@@ -14,13 +14,13 @@
 //! |             | Called from `kernel_main` after NIC + DHCP init.             |
 
 pub mod boot_info;
-#[cfg(not(feature = "boot_minimal"))]
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod crt;
-#[cfg(not(feature = "boot_minimal"))]
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod initramfs;
-#[cfg(not(feature = "boot_minimal"))]
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod loader;
-#[cfg(not(feature = "boot_minimal"))]
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod schemes;
-#[cfg(not(feature = "boot_minimal"))]
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod service_manager;

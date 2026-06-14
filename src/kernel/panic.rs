@@ -1,14 +1,14 @@
 //! Kernel panic handler and global allocator error handler.
 //! Canonical location: src/kernel/panic.rs
 
-#[cfg(not(feature = "boot_minimal"))]
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 use crate::arch::{
     api::{Cpu, Interrupts, Serial},
     Arch,
 };
 use core::fmt::Write;
 
-#[cfg(not(feature = "boot_minimal"))]
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 #[cold]
 #[inline(never)]
 fn halt_loop() -> ! {
@@ -17,7 +17,7 @@ fn halt_loop() -> ! {
     }
 }
 
-#[cfg(feature = "boot_minimal")]
+#[cfg(any(feature = "boot_minimal", feature = "userspace_boot"))]
 #[cold]
 #[inline(never)]
 fn halt_loop() -> ! {
@@ -29,7 +29,7 @@ fn halt_loop() -> ! {
 #[panic_handler]
 #[cold]
 fn panic(info: &core::panic::PanicInfo) -> ! {
-    #[cfg(not(feature = "boot_minimal"))]
+    #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
     {
         Arch::disable();
         crate::smp::ipi::halt_all_except_self();
@@ -51,7 +51,7 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 #[alloc_error_handler]
 #[cold]
 fn alloc_error(layout: core::alloc::Layout) -> ! {
-    #[cfg(not(feature = "boot_minimal"))]
+    #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
     Arch::disable();
     serial_write(b"\r\n*** OOM: alloc_error ***\r\n");
     serial_write(b"Requested size:  ");
@@ -72,9 +72,9 @@ impl Write for ArchSerialWriter {
 
 fn serial_write(bytes: &[u8]) {
     for &b in bytes {
-        #[cfg(not(feature = "boot_minimal"))]
+        #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
         Arch::serial_putc(b);
-        #[cfg(feature = "boot_minimal")]
+        #[cfg(any(feature = "boot_minimal", feature = "userspace_boot"))]
         unsafe {
             crate::arch::console::early_putchar(b);
         }

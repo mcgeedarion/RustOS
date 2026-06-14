@@ -27,6 +27,7 @@
 #![warn(clippy::match_same_arms)]
 #![warn(clippy::large_enum_variant)]
 
+#[cfg(not(feature = "userspace_boot"))]
 extern crate alloc;
 
 // Organised by kernel layer (outermost = most dependent on others):
@@ -67,55 +68,58 @@ pub mod kernel;
 #[cfg(feature = "boot_minimal")]
 pub mod boot_minimal;
 
-#[cfg(not(feature = "boot_minimal"))]
+#[cfg(feature = "userspace_boot")]
+pub mod userspace_boot;
+
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod block;
-#[cfg(not(feature = "boot_minimal"))]
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod core;
-#[cfg(not(feature = "boot_minimal"))]
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod device;
-#[cfg(not(feature = "boot_minimal"))]
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod display;
-#[cfg(not(feature = "boot_minimal"))]
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod drivers;
-#[cfg(not(feature = "boot_minimal"))]
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod exec;
-#[cfg(not(feature = "boot_minimal"))]
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod firmware;
-#[cfg(not(feature = "boot_minimal"))]
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod fs;
-#[cfg(not(feature = "boot_minimal"))]
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub use exec::elf;
-#[cfg(not(feature = "boot_minimal"))]
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub use init::initramfs;
-#[cfg(not(feature = "boot_minimal"))]
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub use kernel::rand;
-#[cfg(not(feature = "boot_minimal"))]
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub use kernel::uaccess;
-#[cfg(not(feature = "boot_minimal"))]
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub use mm::allocator;
-#[cfg(not(feature = "boot_minimal"))]
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod io_uring;
-#[cfg(not(feature = "boot_minimal"))]
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod ipc;
-#[cfg(not(feature = "boot_minimal"))]
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod irq;
-#[cfg(not(feature = "boot_minimal"))]
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod mm;
-#[cfg(not(feature = "boot_minimal"))]
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod net;
-#[cfg(not(feature = "boot_minimal"))]
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod proc;
-#[cfg(not(feature = "boot_minimal"))]
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod security;
-#[cfg(not(feature = "boot_minimal"))]
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod smp;
-#[cfg(not(feature = "boot_minimal"))]
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod sync;
-#[cfg(not(feature = "boot_minimal"))]
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod syscall;
-#[cfg(not(feature = "boot_minimal"))]
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod time;
-#[cfg(not(feature = "boot_minimal"))]
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod tty;
 
 // Feature-gated subsystems — only compiled when the matching flag is set.

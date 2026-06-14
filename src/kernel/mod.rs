@@ -10,12 +10,12 @@
 //!   `utils`   — Small cross-cutting helpers (alignment, bit ops, etc.).
 //!   `architecture` — Hybrid-kernel architecture contract and diagnostics.
 
-#[cfg(not(feature = "boot_minimal"))]
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod architecture;
 pub mod panic;
-#[cfg(not(feature = "boot_minimal"))]
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod rand;
-#[cfg(not(feature = "boot_minimal"))]
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod uaccess;
-#[cfg(not(feature = "boot_minimal"))]
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod utils;

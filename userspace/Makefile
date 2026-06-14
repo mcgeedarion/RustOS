@@ -43,7 +43,7 @@ CFLAGS := $(COMMON_CFLAGS) $(ARCH_CFLAGS) -fno-stack-protector
 
 # Wayland compositor requires special CFLAGS for security and compatibility.
 # See wayland target comments below for detailed rationale.
-WAYLAND_CFLAGS := $(COMMON_CFLAGS) $(ARCH_CFLAGS) -D_GNU_SOURCE -fstack-protector-strong
+WAYLAND_CFLAGS := $(COMMON_CFLAGS) $(ARCH_CFLAGS) -D_GNU_SOURCE -idirafter /usr/include -idirafter /usr/include/$(shell $(CC) -dumpmachine) -fstack-protector-strong
 
 # List every subdirectory that contains a C program here.
 PROGRAMS := init hello smoke kmtest wayland

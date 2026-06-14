@@ -83,7 +83,10 @@ pub const fn align_down(addr: usize, align: usize) -> usize {
 pub const fn align_up(addr: usize, align: usize) -> Option<usize> {
     debug_assert!(align.is_power_of_two(), "align must be a power of two");
     let mask = align - 1;
-    addr.checked_add(mask).map(|a| a & !mask)
+    match addr.checked_add(mask) {
+        Some(a) => Some(a & !mask),
+        None => None,
+    }
 }
 
 /// Returns `true` if `addr` is aligned to `align` bytes.
