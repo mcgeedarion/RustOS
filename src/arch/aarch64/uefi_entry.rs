@@ -216,12 +216,14 @@ pub unsafe extern "efiapi" fn efi_main(
 ) -> ! {
     // Null-check: non-conformant firmware or misconfigured QEMU can pass NULL.
     if system_table.is_null() {
+        #[cfg(not(feature = "boot_minimal"))]
         crate::arch::aarch64::hal::init();
         kernel_main_jump(&BOOT_INFO);
     }
 
     let st = &*system_table;
     if st.boot_services.is_null() {
+        #[cfg(not(feature = "boot_minimal"))]
         crate::arch::aarch64::hal::init();
         kernel_main_jump(&BOOT_INFO);
     }
@@ -234,8 +236,11 @@ pub unsafe extern "efiapi" fn efi_main(
     );
 
     // 2. Capture GOP framebuffer — graceful fallback if firmware has no GOP.
+    #[cfg(not(feature = "boot_minimal"))]
     let gop_ok =
         crate::drivers::gop::capture_from_boot_services(st.boot_services as *mut core::ffi::c_void);
+    #[cfg(feature = "boot_minimal")]
+    let gop_ok = false;
     if !gop_ok {
         efi_print(
             st.con_out,
@@ -256,6 +261,7 @@ pub unsafe extern "efiapi" fn efi_main(
             let phys_start = *data as usize;
             let byte_size = *data.add(1) as usize;
             if phys_start != 0 && byte_size > 0 {
+                #[cfg(not(feature = "boot_minimal"))]
                 crate::initramfs::set_initramfs_range(phys_start, byte_size);
                 initramfs = BootRange::new(phys_start, byte_size);
                 ovmf_initrd_found = true;
@@ -347,6 +353,7 @@ pub unsafe extern "efiapi" fn efi_main(
     }
 
     // 6. Switch to kernel boot stack and tail-call kernel_main.
+    #[cfg(not(feature = "boot_minimal"))]
     crate::arch::aarch64::hal::init();
     kernel_main_jump(&BOOT_INFO);
 }
@@ -361,14 +368,20 @@ unsafe fn kernel_main_jump(boot_info: &'static BootInfo) -> ! {
     extern "C" {
         fn kernel_main(boot_info: &'static BootInfo) -> !;
     }
+    #[cfg(feature = "boot_minimal")]
+    {
+        kernel_main(boot_info)
+    }
+    #[cfg(not(feature = "boot_minimal"))]
     asm!(
         "adr x9, {stack_top}",
         "mov sp, x9",
-        "mov x29, xzr",   // clear frame pointer
-        "mov x30, xzr",   // clear link register
-        "br  {km}",
+        "mov x29, xzr", // clear frame pointer
+        "mov x30, xzr", // clear link register
+        "adr x10, {km}",
+        "br  x10",
         stack_top = sym BOOT_STACK_TOP,
-        km        = sym kernel_main,
+        km = sym kernel_main,
         in("x0") boot_info as *const BootInfo,
         options(noreturn),
     );
@@ -422,6 +435,7 @@ unsafe fn load_initrd_via_loadfile2(bs: &EfiBootServices) -> Option<BootRange> {
         initrd_buf as *mut core::ffi::c_void,
     );
     if status == EFI_SUCCESS {
+        #[cfg(not(feature = "boot_minimal"))]
         crate::initramfs::set_initramfs_range(initrd_buf as usize, initrd_size);
         return Some(BootRange::new(initrd_buf as usize, initrd_size));
     }

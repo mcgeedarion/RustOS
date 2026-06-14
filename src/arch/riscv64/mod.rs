@@ -1,23 +1,58 @@
+#[cfg(not(feature = "boot_minimal"))]
 pub mod boot;
+#[cfg(not(feature = "boot_minimal"))]
 pub mod csr;
+#[cfg(not(feature = "boot_minimal"))]
 pub mod fdt;
 pub mod hal;
 pub mod mem_layout;
+#[cfg(not(feature = "boot_minimal"))]
 pub mod memory;
+#[cfg(not(feature = "boot_minimal"))]
 pub mod paging;
+#[cfg(not(feature = "boot_minimal"))]
 pub mod smp;
+#[cfg(not(feature = "boot_minimal"))]
 pub mod syscall;
+#[cfg(not(feature = "boot_minimal"))]
 pub mod trampoline;
+#[cfg(not(feature = "boot_minimal"))]
 pub mod trap;
+#[cfg(any(feature = "uefi_boot", feature = "boot_minimal"))]
 pub mod uefi_entry;
+#[cfg(not(feature = "boot_minimal"))]
 pub mod uentry;
 
 // Canonical home for the RISC-V PLIC driver is `crate::irq::riscv64::plic`.
 // Re-export it here so call sites that use the `arch::riscv64::plic` path
 // (FDT walker, kernel init, etc.) keep working without a flag day.
+#[cfg(not(feature = "boot_minimal"))]
 pub use crate::irq::riscv64::plic;
 
 /// RISC-V early/kernel boot hook used by the common entry point.
+#[cfg(feature = "boot_minimal")]
+pub fn init(boot_info: &'static crate::init::boot_info::BootInfo) -> ! {
+    crate::boot_minimal::enter::<MinimalArch>(boot_info)
+}
+
+#[cfg(feature = "boot_minimal")]
+struct MinimalArch;
+
+#[cfg(feature = "boot_minimal")]
+impl crate::boot_minimal::MinimalBootArch for MinimalArch {
+    const NAME: &'static str = "riscv64";
+
+    fn early_console_init() {}
+
+    fn idle_once() {
+        unsafe {
+            core::arch::asm!("wfi", options(nostack, nomem));
+        }
+    }
+}
+
+/// RISC-V early/kernel boot hook used by the common entry point.
+#[cfg(not(feature = "boot_minimal"))]
 pub fn init(boot_info: &'static crate::init::boot_info::BootInfo) -> ! {
     use crate::arch::riscv64::{fdt, trap};
     use crate::irq::riscv64::plic;

@@ -9,7 +9,10 @@ pub extern "C" fn kernel_main(boot_info: &'static BootInfo) -> ! {
         BootInfo::priority().as_str(),
     );
 
-    crate::kernel::architecture::log_kernel_architecture();
-    debug_assert!(crate::kernel::architecture::is_hybrid_kernel());
+    #[cfg(not(feature = "boot_minimal"))]
+    {
+        crate::kernel::architecture::log_kernel_architecture();
+        debug_assert!(crate::kernel::architecture::is_hybrid_kernel());
+    }
     crate::arch::init(boot_info)
 }
