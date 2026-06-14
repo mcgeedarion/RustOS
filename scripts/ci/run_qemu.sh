@@ -146,6 +146,7 @@ if [[ $SMOKE -eq 1 ]]; then
   fi
   exit "$status"
 fi
+trap 'rm -f "$log"' EXIT
 
 set +e
 timeout "$TIMEOUT" "$QEMU" "${args[@]}" 2>&1 | tee "$log"
