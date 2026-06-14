@@ -46,7 +46,7 @@ use alloc::collections::{BTreeMap, VecDeque};
 use alloc::vec::Vec;
 use spin::Mutex;
 
-use crate::proc::{process::State, scheduler};
+use crate::proc::{process::State, scheduler, thread};
 use crate::uaccess::{copy_from_user, copy_to_user, USER_SPACE_END};
 
 #[derive(Clone, Copy, Default, Debug)]
@@ -217,16 +217,25 @@ pub struct SigAction {
 
 static SIGACTIONS: Mutex<BTreeMap<(usize, u32), SigAction>> = Mutex::new(BTreeMap::new());
 
+fn sigaction_key(pid: usize) -> usize {
+    let tgid = thread::tgid_of(pid);
+    if tgid != 0 {
+        tgid
+    } else {
+        pid
+    }
+}
+
 pub fn get_sigaction(pid: usize, sig: u32) -> SigAction {
     SIGACTIONS
         .lock()
-        .get(&(pid, sig))
+        .get(&(sigaction_key(pid), sig))
         .copied()
         .unwrap_or_default()
 }
 
 pub fn set_sigaction(pid: usize, sig: u32, sa: SigAction) {
-    SIGACTIONS.lock().insert((pid, sig), sa);
+    SIGACTIONS.lock().insert((sigaction_key(pid), sig), sa);
 }
 
 #[repr(C)]
@@ -309,9 +318,9 @@ fn push_sigframe_x86(
         uc_stack_ss_sp: 0,
         uc_stack_ss_flags: SS_DISABLE as u32,
         uc_stack_ss_size: 0,
-        r8: 0,
-        r9: 0,
-        r10: 0,
+        r8: frame.r8 as u64,
+        r9: frame.r9 as u64,
+        r10: frame.r10 as u64,
         r11: frame.rflags as u64,
         r12: frame.r12 as u64,
         r13: frame.r13 as u64,
@@ -421,8 +430,8 @@ fn apply_default(pid: usize, info: &SigInfo) {
         return;
     }
     if SIG_STOP_DEFAULT & bit != 0 {
-        scheduler::with_proc_mut(pid, |p| {
-            p.state = State::Stopped;
+        scheduler::with_proc_mut(pid, |p, pl| {
+            pl.set_state(p, State::Stopped);
         });
         return;
     }
@@ -479,6 +488,9 @@ pub fn sys_rt_sigreturn(frame: &mut crate::arch::x86_64::syscall::SyscallFrame) 
     frame.rdi = sf.rdi as usize;
     frame.rsi = sf.rsi as usize;
     frame.rdx = sf.rdx as usize;
+    frame.r10 = sf.r10 as usize;
+    frame.r8 = sf.r8 as usize;
+    frame.r9 = sf.r9 as usize;
     frame.r12 = sf.r12 as usize;
     frame.r13 = sf.r13 as usize;
     frame.r14 = sf.r14 as usize;
