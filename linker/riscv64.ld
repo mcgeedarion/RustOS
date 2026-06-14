@@ -1,5 +1,5 @@
 OUTPUT_ARCH(riscv)
-ENTRY(uefi_start)
+ENTRY(_start)
 
 /*
  * Initramfs location symbols — default to 0 (no initramfs).

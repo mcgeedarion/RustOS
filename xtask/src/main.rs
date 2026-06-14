@@ -91,7 +91,7 @@ fn target_json(root: &Path, arch: Arch, boot: Boot) -> PathBuf {
         (Arch::AArch64, Boot::Uefi) => PathBuf::from("aarch64-unknown-uefi"),
         (Arch::AArch64, Boot::Baremetal) => root.join("targets/aarch64-kernel.json"),
         (Arch::RiscV64, Boot::Uefi) => root.join("targets/riscv64-uefi-loader.json"),
-        (Arch::RiscV64, Boot::Sbi) => PathBuf::from("riscv64gc-unknown-none-elf"),
+        (Arch::RiscV64, Boot::Sbi) => root.join("targets/riscv64-kernel.json"),
         // Use the upstream built-in target. The custom JSON spec (with
         // `is-like-windows`/`is-like-msvc`) triggers `compiler_builtins`
         // assembly errors under current nightly.
@@ -105,7 +105,7 @@ fn target_dir_name(arch: Arch, boot: Boot) -> &'static str {
         (Arch::AArch64, Boot::Uefi) => "aarch64-unknown-uefi",
         (Arch::AArch64, Boot::Baremetal) => "aarch64-kernel",
         (Arch::RiscV64, Boot::Uefi) => "riscv64-uefi-loader",
-        (Arch::RiscV64, Boot::Sbi) => "riscv64gc-unknown-none-elf",
+        (Arch::RiscV64, Boot::Sbi) => "riscv64-kernel",
         (Arch::X86_64, Boot::Uefi) => "x86_64-unknown-uefi",
         _ => unreachable!("validate_contract must run before target_dir_name"),
     }
@@ -412,10 +412,13 @@ fn write_fat16_esp(img_path: &Path, efi_path: &Path, efi_name: &str) -> Result<(
     const FILE_FIRST_CLUSTER: u16 = 4;
 
     let file = fs::read(efi_path).with_context(|| format!("read {}", efi_path.display()))?;
+    let startup_nsh = format!("FS0:\\EFI\\BOOT\\{efi_name}\r\n");
+    let startup_bytes = startup_nsh.as_bytes();
     let file_clusters = file.len().div_ceil(BYTES_PER_SECTOR).max(1);
     let last_file_cluster = FILE_FIRST_CLUSTER as usize + file_clusters - 1;
+    let startup_cluster = last_file_cluster + 1;
     let max_cluster = TOTAL_SECTORS - FIRST_DATA_SECTOR + 1;
-    if last_file_cluster > max_cluster {
+    if startup_cluster > max_cluster {
         bail!("EFI binary is too large for the built-in 4 MiB ESP image");
     }
 
@@ -439,6 +442,7 @@ fn write_fat16_esp(img_path: &Path, efi_path: &Path, efi_name: &str) -> Result<(
             (cluster + 1) as u16
         };
     }
+    fat[startup_cluster] = 0xffff;
     for fat_index in 0..FAT_COUNT {
         let start = (RESERVED_SECTORS + fat_index * SECTORS_PER_FAT) * BYTES_PER_SECTOR;
         for (i, entry) in fat.iter().enumerate() {
@@ -454,6 +458,14 @@ fn write_fat16_esp(img_path: &Path, efi_path: &Path, efi_name: &str) -> Result<(
         0x10,
         EFI_CLUSTER,
         0,
+    )?;
+    write_dir_entry(
+        &mut img[root_start + 32..root_start + 64],
+        "STARTUP",
+        "NSH",
+        0x20,
+        startup_cluster as u16,
+        startup_bytes.len() as u32,
     )?;
 
     let efi_dir_start = cluster_offset(EFI_CLUSTER, FIRST_DATA_SECTOR, BYTES_PER_SECTOR);
@@ -508,6 +520,8 @@ fn write_fat16_esp(img_path: &Path, efi_path: &Path, efi_name: &str) -> Result<(
 
     let file_start = cluster_offset(FILE_FIRST_CLUSTER, FIRST_DATA_SECTOR, BYTES_PER_SECTOR);
     img[file_start..file_start + file.len()].copy_from_slice(&file);
+    let startup_start = cluster_offset(startup_cluster as u16, FIRST_DATA_SECTOR, BYTES_PER_SECTOR);
+    img[startup_start..startup_start + startup_bytes.len()].copy_from_slice(startup_bytes);
     fs::write(img_path, img).with_context(|| format!("write {}", img_path.display()))?;
     Ok(())
 }
