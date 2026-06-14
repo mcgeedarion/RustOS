@@ -12,9 +12,6 @@ xtask = "run --target x86_64-unknown-linux-gnu -p xtask --"
 [build]
 target = "targets/aarch64-uefi-loader.json"
 
-# Required for the freestanding kernel target. Keeping this in Cargo config makes
-# the default command path explicit instead of hiding it in scripts only.
-[unstable]
-build-std = ["core", "alloc", "compiler_builtins"]
-build-std-features = ["compiler-builtins-mem"]
-json-target-spec = true
+# Freestanding kernel builds require -Z build-std. xtask injects those flags
+# only for kernel cargo invocations so the host xtask binary can compile with
+# the normal std toolchain.

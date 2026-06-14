@@ -17,3 +17,12 @@
 // symbols (`uefi_start`, `kernel_main`, architecture modules, panic handler, and
 // allocator hooks) are linked into the artifact that xtask converts to EFI.
 extern crate rustos_kernel;
+
+#[cfg(all(target_os = "uefi", target_arch = "x86_64"))]
+#[no_mangle]
+pub unsafe extern "efiapi" fn efi_main(
+    image_handle: *mut core::ffi::c_void,
+    system_table: *mut core::ffi::c_void,
+) -> ! {
+    rustos_kernel::arch::x86_64::uefi_entry::efi_entry_raw(image_handle, system_table)
+}
