@@ -8,7 +8,7 @@
 //! Canonical ESP staging path:
 //!   target/esp/<arch>/EFI/BOOT/BOOT*.EFI
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use std::{
     env, fs,
     path::{Path, PathBuf},
@@ -88,7 +88,7 @@ fn validate_contract(arch: Arch, boot: Boot) -> Result<()> {
 
 fn target_json(root: &Path, arch: Arch, boot: Boot) -> PathBuf {
     match (arch, boot) {
-        (Arch::AArch64, Boot::Uefi) => root.join("targets/aarch64-uefi-loader.json"),
+        (Arch::AArch64, Boot::Uefi) => PathBuf::from("aarch64-unknown-uefi"),
         (Arch::AArch64, Boot::Baremetal) => root.join("targets/aarch64-kernel.json"),
         (Arch::RiscV64, Boot::Uefi) => root.join("targets/riscv64-uefi-loader.json"),
         (Arch::RiscV64, Boot::Sbi) => PathBuf::from("riscv64gc-unknown-none-elf"),
@@ -102,7 +102,7 @@ fn target_json(root: &Path, arch: Arch, boot: Boot) -> PathBuf {
 
 fn target_dir_name(arch: Arch, boot: Boot) -> &'static str {
     match (arch, boot) {
-        (Arch::AArch64, Boot::Uefi) => "aarch64-uefi-loader",
+        (Arch::AArch64, Boot::Uefi) => "aarch64-unknown-uefi",
         (Arch::AArch64, Boot::Baremetal) => "aarch64-kernel",
         (Arch::RiscV64, Boot::Uefi) => "riscv64-uefi-loader",
         (Arch::RiscV64, Boot::Sbi) => "riscv64gc-unknown-none-elf",
@@ -267,6 +267,12 @@ fn build_kernel(root: &Path, opts: &BuildOpts) -> Result<()> {
     }
     match &opts.features {
         Some(features) => {
+            if features
+                .split(',')
+                .any(|feature| feature.trim() == "boot_minimal")
+            {
+                cmd.arg("--no-default-features");
+            }
             cmd.arg("--features").arg(features);
         },
         None if opts.boot == Boot::Uefi => {
@@ -433,7 +439,9 @@ fn main() {
             print_help();
             Ok(())
         },
-        other => bail!("unknown subcommand: {other:?}. Try `cargo xtask help`."),
+        other => Err(anyhow!(
+            "unknown subcommand: {other:?}. Try `cargo xtask help`."
+        )),
     };
     if let Err(error) = result {
         eprintln!("[xtask] ERROR: {error:#}");

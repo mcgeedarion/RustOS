@@ -38,9 +38,15 @@ fn main() {
     let out = PathBuf::from(std::env::var("OUT_DIR").unwrap());
     let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
 
-    println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_ARCH");
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let boot_minimal = std::env::var("CARGO_FEATURE_BOOT_MINIMAL").is_ok();
 
-    compile_crt(&target_arch);
+    println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_ARCH");
+    println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_OS");
+
+    if target_os != "uefi" && !boot_minimal {
+        compile_crt(&target_arch);
+    }
 
     if target_arch == "riscv64" {
         assemble_riscv_uentry(&out);
