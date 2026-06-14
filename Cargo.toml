@@ -51,6 +51,12 @@ cc = "1"
 # UEFI/SBI builds through their target-specific commands.
 default = ["uefi_boot", "input_events", "gdbstub"]
 
+# Compile only the firmware handoff, common BootInfo path, early console,
+# panic handler, and an architecture idle loop. This is the first-stage boot
+# target used to keep x86_64/aarch64/riscv64 bring-up paths aligned before
+# re-enabling the full kernel services.
+boot_minimal = []
+
 # Evdev / virtio-input subsystem.
 input_events = []
 
@@ -75,6 +81,9 @@ debugstub = ["gdbstub"]
 
 # Ring-buffer trace event drain, flushed to serial on panic.
 trace = []
+
+# Optional in-kernel test harness.
+kmtest = []
 
 [profile.release]
 opt-level = 3
