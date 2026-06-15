@@ -92,9 +92,6 @@ fn target_json(root: &Path, arch: Arch, boot: Boot) -> PathBuf {
         (Arch::AArch64, Boot::Baremetal) => root.join("targets/aarch64-kernel.json"),
         (Arch::RiscV64, Boot::Uefi) => root.join("targets/riscv64-uefi-loader.json"),
         (Arch::RiscV64, Boot::Sbi) => root.join("targets/riscv64-kernel.json"),
-        // Use the upstream built-in target. The custom JSON spec (with
-        // `is-like-windows`/`is-like-msvc`) triggers `compiler_builtins`
-        // assembly errors under current nightly.
         (Arch::X86_64, Boot::Uefi) => PathBuf::from("x86_64-unknown-uefi"),
         _ => unreachable!("validate_contract must run before target_json"),
     }
