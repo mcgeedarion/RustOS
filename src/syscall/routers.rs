@@ -81,9 +81,7 @@ pub fn dispatch_filesystem(ctx: &SyscallContext) -> Option<isize> {
         SYS_FCHOWNAT => Some(crate::syscall::sys_fchownat_impl(
             a as i32, b, c as u32, d as u32, e as i32,
         )),
-        SYS_FCHMODAT => Some(crate::syscall::sys_fchmodat_impl(
-            a as i32, b, c as u32,
-        )),
+        SYS_FCHMODAT => Some(crate::syscall::sys_fchmodat_impl(a as i32, b, c as u32)),
         SYS_FUTIMESAT => Some(crate::syscall::sys_futimesat_impl(a as i32, b, c)),
         SYS_NEWFSTATAT => Some(crate::syscall::sys_newfstatat_impl(
             a as i32, b, c, d as u32,
