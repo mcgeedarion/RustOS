@@ -11,7 +11,7 @@ name = "rustos-kernel"
 version = "0.1.0"
 edition = "2021"
 authors = ["Darion McGee"]
-description = "A Rust-based operating system kernel with UEFI and debugging support"
+description = "A Rust-based operating system"
 license = "MIT"
 repository = "https://github.com/mcgeedarion/RustOS"
 
