@@ -190,10 +190,9 @@ fn remove_vma_inner(p: &mut crate::proc::process::Pcb, addr: usize, end: usize) 
     for page_va in (addr..end).step_by(PAGE) {
         if let Some(pa) = <Arch as Paging>::virt_to_phys(user_cr3, page_va) {
             // Check if this page belongs to a PhysMap VMA before removal.
-            let is_phys = p
-                .vmas
-                .iter()
-                .any(|v| page_va >= v.start && page_va < v.end && matches!(v.kind, VmaKind::PhysMap(_)));
+            let is_phys = p.vmas.iter().any(|v| {
+                page_va >= v.start && page_va < v.end && matches!(v.kind, VmaKind::PhysMap(_))
+            });
             // Unmap the page from the old address space.
             <Arch as Paging>::unmap_page(user_cr3, page_va);
             if !is_phys {

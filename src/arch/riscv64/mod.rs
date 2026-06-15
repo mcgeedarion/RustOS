@@ -1,4 +1,7 @@
-#[cfg(any(not(feature = "boot_minimal"), all(feature = "boot_minimal", not(feature = "uefi_boot"))))]
+#[cfg(any(
+    not(feature = "boot_minimal"),
+    all(feature = "boot_minimal", not(feature = "uefi_boot"))
+))]
 pub mod boot;
 #[cfg(not(feature = "boot_minimal"))]
 pub mod csr;

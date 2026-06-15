@@ -42,10 +42,10 @@ use crate::arch::{
     Arch,
 };
 use crate::mm::mmap::{find_vma, VmaKind, PROT_EXEC, PROT_WRITE};
+use crate::mm::phys::phys_to_virt;
 use crate::mm::pmm::{alloc_page, free_page};
 use crate::proc::scheduler;
 use crate::proc::signal::{send_signal, send_signal_info, send_sigsegv, SigInfo};
-use crate::mm::phys::phys_to_virt;
 
 const PAGE_SIZE: usize = 4096;
 const PAGE_MASK: usize = !(PAGE_SIZE - 1);

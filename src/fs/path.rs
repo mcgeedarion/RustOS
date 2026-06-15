@@ -9,7 +9,10 @@ pub fn normalize(path: &str) -> String {
     let mut out = String::new();
     out.push('/');
     let mut first = true;
-    for part in path.split('/').filter(|part| !part.is_empty() && *part != ".") {
+    for part in path
+        .split('/')
+        .filter(|part| !part.is_empty() && *part != ".")
+    {
         if !first {
             out.push('/');
         }

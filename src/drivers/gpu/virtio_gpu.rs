@@ -232,7 +232,11 @@ pub fn is_initialised() -> bool {
 /// Returns the number of active scanouts (displays).
 /// Always 1 when initialised (single-head virtio-gpu).
 pub fn num_scanouts() -> usize {
-    if is_initialised() { 1 } else { 0 }
+    if is_initialised() {
+        1
+    } else {
+        0
+    }
 }
 
 pub fn display_info() -> Option<DisplayInfo> {
