@@ -5,10 +5,9 @@ ARCH=${ARCH:-x86_64}
 BOOT=uefi
 TIMEOUT=${TIMEOUT:-30}
 SMOKE=0
-SMOKE_MARKER_RE=${SMOKE_MARKER_RE:-'BOOT_MINIMAL_OK|FULL_OS_USERSPACE_OK|rustos: kernel_main reached'}
-SMOKE_MARKER_DESC=${SMOKE_MARKER_DESC:-'BOOT_MINIMAL_OK/FULL_OS_USERSPACE_OK/rustos: kernel_main reached'}
-SMOKE_MARKER_RE='BOOT_MINIMAL_OK|entering common kernel_main|rustos: kernel_main reached'
-SMOKE_MARKER_DESC='BOOT_MINIMAL_OK/common kernel_main/rustos: kernel_main reached'
+TEMP_FW_VARS=""
+SMOKE_MARKER_RE=${SMOKE_MARKER_RE:-'BOOT_MINIMAL_OK|FULL_OS_USERSPACE_OK|entering common kernel_main|rustos: kernel_main reached'}
+SMOKE_MARKER_DESC=${SMOKE_MARKER_DESC:-'BOOT_MINIMAL_OK/FULL_OS_USERSPACE_OK/common kernel_main/rustos: kernel_main reached'}
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -20,13 +19,18 @@ while [[ $# -gt 0 ]]; do
       TIMEOUT=${2:?missing --timeout value}; shift 2 ;;
     --smoke)
       SMOKE=1; shift ;;
+    --test)
+      SMOKE=1
+      SMOKE_MARKER_RE='KMTEST  DONE'
+      SMOKE_MARKER_DESC='KMTEST DONE'
+      shift ;;
     *)
       echo "run_qemu.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 
 if [[ "$BOOT" != "uefi" && !( "$ARCH" == "riscv64" && "$BOOT" == "sbi" ) ]]; then
-  echo "run_qemu.sh: supported boot contracts are x86_64/aarch64 UEFI and riscv64 SBI" >&2
+  echo "run_qemu.sh: supported boot contracts are x86_64/aarch64/riscv64 UEFI and riscv64 SBI" >&2
   exit 2
 fi
 
@@ -107,24 +111,81 @@ case "$ARCH" in
     )
     ;;
   riscv64)
-    if [[ "$BOOT" != "sbi" ]]; then
-      echo "run_qemu.sh: riscv64 UEFI is not runnable here; use --boot sbi" >&2
-      exit 2
-    fi
     QEMU=${QEMU:-qemu-system-riscv64}
     if ! command -v "$QEMU" >/dev/null 2>&1; then
       echo "run_qemu.sh: $QEMU not found on PATH" >&2
       exit 1
     fi
-    args=(
-      -machine virt
-      -m 512M
-      -kernel "$KERNEL"
-      -serial stdio
-      -display none
-      -no-reboot
-      -no-shutdown
-    )
+    if [[ "$BOOT" == "uefi" ]]; then
+      find_existing_file() {
+        for path in "$@"; do
+          [[ -f "$path" ]] && { echo "$path"; return 0; }
+        done
+        return 1
+      }
+
+      FW_KIND=""
+      FW_CODE="${RISCV_UEFI_CODE:-}"
+      FW_VARS="${RISCV_UEFI_VARS:-}"
+      if [[ -n "$FW_CODE" ]]; then
+        if [[ ! -f "$FW_CODE" ]]; then
+          echo "run_qemu.sh: RISCV_UEFI_CODE not found: $FW_CODE" >&2
+          exit 1
+        fi
+        FW_KIND="${RISCV_UEFI_KIND:-edk2}"
+      elif FW_CODE=$(find_existing_file \
+          /usr/share/qemu-efi-riscv64/RISCV_VIRT_CODE.fd \
+          /usr/share/edk2/riscv64/RISCV_VIRT_CODE.fd \
+          /usr/share/qemu/edk2-riscv-code.fd \
+          /usr/share/qemu/edk2-riscv64-code.fd); then
+        FW_KIND="edk2"
+      elif FW_CODE=$(find_existing_file \
+          /usr/lib/u-boot/qemu-riscv64_smode/uboot.elf \
+          /usr/lib/u-boot/qemu-riscv64/uboot.elf \
+          /usr/share/u-boot/qemu-riscv64_smode/uboot.elf \
+          /usr/share/u-boot/qemu-riscv64/uboot.elf); then
+        FW_KIND="uboot"
+      else
+        echo "run_qemu.sh: RISC-V UEFI firmware not found; install qemu-efi-riscv64 or u-boot-qemu, or set RISCV_UEFI_CODE" >&2
+        exit 1
+      fi
+
+      args=(
+        -machine virt
+        -cpu rv64
+        -m 512M
+      )
+      if [[ "$FW_KIND" == "edk2" ]]; then
+        if [[ -z "$FW_VARS" ]]; then
+          FW_VARS=$(mktemp /tmp/RISCV_VIRT_VARS.XXXXXX.fd)
+          TEMP_FW_VARS="$FW_VARS"
+          dd if=/dev/zero of="$FW_VARS" bs=1M count=64 2>/dev/null
+        fi
+        args+=(
+          -drive "if=pflash,unit=0,format=raw,file=${FW_CODE},readonly=on"
+          -drive "if=pflash,unit=1,format=raw,file=${FW_VARS}"
+        )
+      else
+        args+=(-bios "$FW_CODE")
+      fi
+      args+=(
+        -drive if=virtio,format=raw,file="$IMG"
+        -serial stdio
+        -display none
+        -no-reboot
+        -no-shutdown
+      )
+    else
+      args=(
+        -machine virt
+        -m 512M
+        -kernel "$KERNEL"
+        -serial stdio
+        -display none
+        -no-reboot
+        -no-shutdown
+      )
+    fi
     ;;
   *)
     echo "run_qemu.sh: unsupported ARCH=$ARCH" >&2
@@ -134,7 +195,7 @@ esac
 
 log=$(mktemp)
 fifo=
-trap 'rm -f "$log" ${fifo:+"$fifo"}' EXIT
+trap 'rm -f "$log" ${fifo:+"$fifo"} ${TEMP_FW_VARS:+"$TEMP_FW_VARS"}' EXIT
 
 if [[ $SMOKE -eq 1 ]]; then
   fifo=$(mktemp -u)
@@ -150,7 +211,6 @@ if [[ $SMOKE -eq 1 ]]; then
     if IFS= read -r -t 1 line <&3; then
       printf '%s\n' "$line" | tee -a "$log"
       if [[ "$line" =~ $SMOKE_MARKER_RE ]]; then
-      if [[ "$line" == *"BOOT_MINIMAL_OK"* || "$line" == *"entering common kernel_main"* || "$line" == *"rustos: kernel_main reached"* ]]; then
         marker=1
         break
       fi
@@ -180,7 +240,7 @@ if [[ $SMOKE -eq 1 ]]; then
   fi
   exit "$status"
 fi
-trap 'rm -f "$log"' EXIT
+trap 'rm -f "$log" ${TEMP_FW_VARS:+"$TEMP_FW_VARS"}' EXIT
 
 set +e
 timeout "$TIMEOUT" "$QEMU" "${args[@]}" 2>&1 | tee "$log"
