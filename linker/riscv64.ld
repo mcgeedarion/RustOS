@@ -1,3 +1,4 @@
+OUTPUT_FORMAT("elf64-littleriscv")
 OUTPUT_ARCH(riscv)
 ENTRY(_start)
 
@@ -9,6 +10,12 @@ ENTRY(_start)
 PROVIDE(INITRAMFS_BASE = 0);
 PROVIDE(INITRAMFS_SIZE = 0);
 
+PHDRS {
+  text   PT_LOAD FLAGS(5); /* R + X */
+  rodata PT_LOAD FLAGS(4); /* R */
+  data   PT_LOAD FLAGS(6); /* R + W */
+}
+
 SECTIONS {
   . = 0x80200000;
   _kernel_start = .;
@@ -18,24 +25,40 @@ SECTIONS {
    * the very first instruction executed.  Mark it with
    * #[link_section = ".text.boot"] in Rust.
    */
-  .text.boot : { *(.text.boot) }
+  .text.boot ALIGN(4096) : {
+    KEEP(*(.text.boot))
+  } :text
 
-  .text   : { *(.text   .text.*)   }
-  .rodata : { *(.rodata .rodata.*) }
+  .text ALIGN(4096) : {
+    *(.text .text.*)
+  } :text
+
+  .rodata ALIGN(4096) : {
+    *(.rodata .rodata.*)
+    *(.srodata .srodata.*)
+  } :rodata
 
   .init_array ALIGN(8) : {
     __init_array_start = .;
-    *(.init_array .init_array.*)
+    KEEP(*(.init_array .init_array.*))
     __init_array_end = .;
-  }
+  } :rodata
 
   .fini_array ALIGN(8) : {
     __fini_array_start = .;
-    *(.fini_array .fini_array.*)
+    KEEP(*(.fini_array .fini_array.*))
     __fini_array_end = .;
-  }
+  } :rodata
 
-  .data : { *(.data .data.*) }
+  .eh_frame ALIGN(8) : {
+    *(.eh_frame .eh_frame.*)
+  } :rodata
+
+  .data ALIGN(4096) : {
+    *(.data .data.*)
+    *(.sdata .sdata.*)
+    *(.got .got.*)
+  } :data
 
   /*
    * Kernel test registry — populated at link time by #[kernel_test] statics.
@@ -45,10 +68,22 @@ SECTIONS {
     __kmtest_start = .;
     KEEP(*(.kmtest_registry))
     __kmtest_end = .;
-  }
+  } :data
 
-  .bss  : { *(.bss  .bss.*)  *(COMMON) }
+  .bss ALIGN(4096) : {
+    __bss_start = .;
+    *(.bss .bss.*)
+    *(.sbss .sbss.*)
+    *(COMMON)
+    __bss_end = .;
+  } :data
 
   . = ALIGN(4096);
+  _kernel_end = .;
   _end = .;
+
+  /DISCARD/ : {
+    *(.comment)
+    *(.note.GNU-stack)
+  }
 }
