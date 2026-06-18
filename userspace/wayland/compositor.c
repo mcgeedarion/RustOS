@@ -137,6 +137,15 @@ static int valid_shm_format(uint32_t format) {
            format == WL_SHM_FORMAT_XRGB8888;
 }
 
+static int shm_fd_covers_size(int fd, int32_t size) {
+    struct stat st;
+    if (size <= 0 || fstat(fd, &st) < 0)
+        return 0;
+    if (!S_ISREG(st.st_mode))
+        return 0;
+    return st.st_size >= (off_t)size;
+}
+
 static int object_id_exists(Client *c, uint32_t id) {
     if (!id) return 1;
     if (id == WL_DISPLAY_ID) return 1;
@@ -466,6 +475,14 @@ static void dispatch_message(Client *c, uint32_t obj, uint16_t op,
                 return;
             }
             int fd = c->pending_fds[0];
+            if (!shm_fd_covers_size(fd, size)) {
+                post_error(c, obj, WL_DISPLAY_ERROR_BAD_VALUE, "wl_shm pool fd is too small");
+                close(fd);
+                memmove(c->pending_fds, c->pending_fds + 1,
+                        (size_t)(c->n_pending_fds - 1) * sizeof(c->pending_fds[0]));
+                c->n_pending_fds--;
+                return;
+            }
             memmove(c->pending_fds, c->pending_fds + 1,
                     (size_t)(c->n_pending_fds - 1) * sizeof(c->pending_fds[0]));
             c->n_pending_fds--;
@@ -556,6 +573,11 @@ static void dispatch_message(Client *c, uint32_t obj, uint16_t op,
             if (new_size <= pool->size) {
                 post_error(c, obj, WL_DISPLAY_ERROR_BAD_VALUE,
                            "wl_shm_pool.resize must grow the pool");
+                return;
+            }
+            if (!shm_fd_covers_size(pool->shm_fd, new_size)) {
+                post_error(c, obj, WL_DISPLAY_ERROR_BAD_VALUE,
+                           "wl_shm pool resize exceeds fd size");
                 return;
             }
             void *new_map = mmap(NULL, (size_t)new_size, PROT_READ, MAP_SHARED, pool->shm_fd, 0);
@@ -893,6 +915,19 @@ static void compositor_selftest_formats(void) {
     SELFTEST_ASSERT(!valid_shm_format(0xDEADBEEFu));
 }
 
+static void compositor_selftest_shm_fd_size(void) {
+    char path[] = "/tmp/rustos-wayland-selftest-XXXXXX";
+    int fd = mkstemp(path);
+    SELFTEST_ASSERT(fd >= 0);
+    if (fd < 0) return;
+    (void)unlink(path);
+    SELFTEST_ASSERT(ftruncate(fd, 4096) == 0);
+    SELFTEST_ASSERT(shm_fd_covers_size(fd, 4096));
+    SELFTEST_ASSERT(!shm_fd_covers_size(fd, 4097));
+    SELFTEST_ASSERT(!shm_fd_covers_size(fd, 0));
+    close(fd);
+}
+
 static void compositor_selftest_layer_layout(void) {
     LayerSurface ls;
     memset(&ls, 0, sizeof(ls));
@@ -944,6 +979,7 @@ int main(void) {
     g.clients = clients_storage;
     compositor_selftest_damage();
     compositor_selftest_formats();
+    compositor_selftest_shm_fd_size();
     compositor_selftest_layer_layout();
     compositor_selftest_damage_rect();
     compositor_selftest_serial_wrap();
