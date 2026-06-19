@@ -63,6 +63,7 @@ case "$ARCH" in
     OVMF_CODE=${OVMF_CODE:-}
     for candidate in \
       /usr/share/OVMF/OVMF_CODE.fd \
+      /usr/share/OVMF/OVMF_CODE_4M.fd \
       /usr/share/ovmf/OVMF.fd \
       /usr/share/qemu/OVMF.fd; do
       [[ -n "$OVMF_CODE" ]] && break
