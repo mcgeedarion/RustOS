@@ -8,10 +8,6 @@ SMOKE=0
 TEMP_FW_VARS=""
 SMOKE_MARKER_RE=${SMOKE_MARKER_RE:-'BOOT_MINIMAL_OK|FULL_OS_USERSPACE_OK|entering common kernel_main|rustos: kernel_main reached'}
 SMOKE_MARKER_DESC=${SMOKE_MARKER_DESC:-'BOOT_MINIMAL_OK/FULL_OS_USERSPACE_OK/common kernel_main/rustos: kernel_main reached'}
-SMOKE_MARKER_RE=${SMOKE_MARKER_RE:-'BOOT_MINIMAL_OK|FULL_OS_USERSPACE_OK|rustos: kernel_main reached'}
-SMOKE_MARKER_DESC=${SMOKE_MARKER_DESC:-'BOOT_MINIMAL_OK/FULL_OS_USERSPACE_OK/rustos: kernel_main reached'}
-SMOKE_MARKER_RE='BOOT_MINIMAL_OK|entering common kernel_main|rustos: kernel_main reached'
-SMOKE_MARKER_DESC='BOOT_MINIMAL_OK/common kernel_main/rustos: kernel_main reached'
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
