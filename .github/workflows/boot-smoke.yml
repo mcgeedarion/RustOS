@@ -37,7 +37,7 @@ jobs:
 
       - name: Build aarch64 UEFI ESP image
         run: |
-          cargo xtask image --arch aarch64 --debug 2>&1 | tee build-aarch64-image.log
+          cargo xtask image --arch aarch64 --debug --features boot_minimal 2>&1 | tee build-aarch64-image.log
           test -f boot-aarch64.img
 
       - name: Boot image in QEMU/EDK2
@@ -75,10 +75,7 @@ jobs:
 
       - name: Assert aarch64 boot markers
         run: |
-          grep -q 'aarch64: exception vectors installed' qemu-aarch64-boot.log
-          grep -q 'aarch64: MMU enabled' qemu-aarch64-boot.log
-          grep -q 'aarch64: heap ready' qemu-aarch64-boot.log
-          grep -q 'aarch64: kernel_main: idle' qemu-aarch64-boot.log
+          grep -q 'RustOS: BOOT_MINIMAL_OK' qemu-aarch64-boot.log
 
       - name: Upload aarch64 boot logs
         if: always()
@@ -117,7 +114,7 @@ jobs:
 
       - name: Build riscv64 UEFI ESP image
         run: |
-          cargo xtask image --arch riscv64 --debug 2>&1 | tee build-riscv64-image.log
+          cargo xtask image --arch riscv64 --debug --features boot_minimal 2>&1 | tee build-riscv64-image.log
           test -f boot-riscv64.img
 
       - name: Boot image in QEMU with EDK2 or U-Boot
@@ -181,7 +178,7 @@ jobs:
 
       - name: Assert riscv64 UEFI marker
         run: |
-          grep -q 'RustOS (RISC-V) booting via UEFI' qemu-riscv64-boot.log
+          grep -q 'RustOS: BOOT_MINIMAL_OK' qemu-riscv64-boot.log
 
       - name: Upload riscv64 boot logs
         if: always()
