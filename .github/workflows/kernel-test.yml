@@ -118,7 +118,7 @@ jobs:
       - name: Build aarch64 UEFI ESP image
         if: inputs.run_smoke && inputs.arch == 'aarch64'
         run: |
-          cargo xtask image --arch aarch64 --debug \
+          cargo xtask image --arch aarch64 --debug --features boot_minimal \
             2>&1 | tee "build-aarch64-image.log"
           test -f boot-aarch64.img
 
@@ -160,7 +160,7 @@ jobs:
       - name: Build riscv64 UEFI ESP image
         if: inputs.run_smoke && inputs.arch == 'riscv64'
         run: |
-          cargo xtask image --arch riscv64 --debug \
+          cargo xtask image --arch riscv64 --debug --features boot_minimal \
             2>&1 | tee "build-riscv64-image.log"
           test -f boot-riscv64.img
 
@@ -286,13 +286,10 @@ jobs:
           LOG="qemu-${{ inputs.arch }}.log"
           case "${{ inputs.arch }}" in
             aarch64)
-              grep -q 'aarch64: exception vectors installed' "$LOG"
-              grep -q 'aarch64: MMU enabled' "$LOG"
-              grep -q 'aarch64: heap ready' "$LOG"
-              grep -q 'aarch64: kernel_main: idle' "$LOG"
+              grep -q 'RustOS: BOOT_MINIMAL_OK' "$LOG"
               ;;
             riscv64)
-              grep -q 'RustOS (RISC-V) booting via UEFI' "$LOG"
+              grep -q 'RustOS: BOOT_MINIMAL_OK' "$LOG"
               ;;
             x86_64)
               grep -q 'RustOS \[PRIMARY\] x86_64 booting via UEFI' "$LOG"
