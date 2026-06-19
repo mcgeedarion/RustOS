@@ -28,7 +28,7 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y --no-install-recommends \
-            clang lld llvm qemu-system-arm qemu-system-data qemu-efi-aarch64 mtools
+            clang lld llvm qemu-system-arm qemu-system-data qemu-efi-aarch64 ipxe-qemu mtools
 
       - name: Plain cargo build uses repo default aarch64 UEFI target
         run: |
