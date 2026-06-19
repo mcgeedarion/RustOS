@@ -8,10 +8,6 @@ SMOKE=0
 TEMP_FW_VARS=""
 SMOKE_MARKER_RE=${SMOKE_MARKER_RE:-'BOOT_MINIMAL_OK|FULL_OS_USERSPACE_OK|entering common kernel_main|rustos: kernel_main reached'}
 SMOKE_MARKER_DESC=${SMOKE_MARKER_DESC:-'BOOT_MINIMAL_OK/FULL_OS_USERSPACE_OK/common kernel_main/rustos: kernel_main reached'}
-SMOKE_MARKER_RE=${SMOKE_MARKER_RE:-'BOOT_MINIMAL_OK|FULL_OS_USERSPACE_OK|rustos: kernel_main reached'}
-SMOKE_MARKER_DESC=${SMOKE_MARKER_DESC:-'BOOT_MINIMAL_OK/FULL_OS_USERSPACE_OK/rustos: kernel_main reached'}
-SMOKE_MARKER_RE='BOOT_MINIMAL_OK|entering common kernel_main|rustos: kernel_main reached'
-SMOKE_MARKER_DESC='BOOT_MINIMAL_OK/common kernel_main/rustos: kernel_main reached'
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -108,7 +104,8 @@ case "$ARCH" in
       -cpu cortex-a57
       -m 512M
       -bios "$QEMU_EFI"
-      -drive format=raw,file="$IMG",if=virtio
+      -drive if=none,id=esp,format=raw,file="$IMG"
+      -device virtio-blk-device,drive=esp
       -serial stdio
       -display none
       -no-reboot
@@ -164,7 +161,7 @@ case "$ARCH" in
         if [[ -z "$FW_VARS" ]]; then
           FW_VARS=$(mktemp /tmp/RISCV_VIRT_VARS.XXXXXX.fd)
           TEMP_FW_VARS="$FW_VARS"
-          dd if=/dev/zero of="$FW_VARS" bs=1M count=64 2>/dev/null
+          dd if=/dev/zero of="$FW_VARS" bs=1M count=32 2>/dev/null
         fi
         args+=(
           -drive "if=pflash,unit=0,format=raw,file=${FW_CODE},readonly=on"
