@@ -32,9 +32,8 @@ jobs:
 
       - name: Plain cargo build uses repo default aarch64 UEFI target
         run: |
-          cargo build 2>&1 | tee cargo-build-aarch64-boot.log
-          test -f target/aarch64-uefi-loader/debug/rustos || \
-            test -f target/aarch64-uefi-loader/debug/rustos.efi
+          ARCH=aarch64 BOOT=uefi bash scripts/ci/build.sh \
+            2>&1 | tee cargo-build-aarch64-boot.log
 
       - name: Build aarch64 UEFI ESP image
         run: |
@@ -113,10 +112,8 @@ jobs:
 
       - name: Build riscv64 UEFI target
         run: |
-          cargo build --target targets/riscv64-uefi-loader.json --features uefi_boot \
+          ARCH=riscv64 BOOT=uefi bash scripts/ci/build.sh \
             2>&1 | tee cargo-build-riscv64-boot.log
-          test -f target/riscv64-uefi-loader/debug/rustos || \
-            test -f target/riscv64-uefi-loader/debug/rustos.efi
 
       - name: Build riscv64 UEFI ESP image
         run: |
@@ -218,9 +215,8 @@ jobs:
 
       - name: Build x86_64 UEFI loader target
         run: |
-          cargo build --target x86_64-unknown-uefi --features uefi_boot \
+          ARCH=x86_64 BOOT=uefi bash scripts/ci/build.sh \
             2>&1 | tee cargo-build-x86_64-boot.log
-          test -f target/x86_64-unknown-uefi/debug/rustos.efi
 
       - name: Build x86_64 UEFI ESP image
         run: |
@@ -229,14 +225,35 @@ jobs:
 
       - name: Boot image in QEMU/OVMF
         run: |
-          cp /usr/share/OVMF/OVMF_VARS.fd /tmp/OVMF_VARS.fd
+          find_existing_file() {
+            for path in "$@"; do
+              [ -f "$path" ] && { echo "$path"; return 0; }
+            done
+            return 1
+          }
+
+          OVMF_CODE=$(find_existing_file \
+            /usr/share/OVMF/OVMF_CODE.fd \
+            /usr/share/OVMF/OVMF_CODE_4M.fd \
+            /usr/share/ovmf/OVMF.fd \
+            /usr/share/qemu/OVMF.fd)
+          test -n "$OVMF_CODE"
+
+          OVMF_VAR_ARGS=()
+          if OVMF_VARS_TEMPLATE=$(find_existing_file \
+              /usr/share/OVMF/OVMF_VARS.fd \
+              /usr/share/OVMF/OVMF_VARS_4M.fd); then
+            cp "$OVMF_VARS_TEMPLATE" /tmp/OVMF_VARS.fd
+            OVMF_VAR_ARGS=(-drive if=pflash,format=raw,file=/tmp/OVMF_VARS.fd)
+          fi
+
           set +e
           timeout 30 qemu-system-x86_64 \
             -machine q35 \
             -cpu qemu64,+xsave,+avx \
             -m 256M \
-            -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE.fd \
-            -drive if=pflash,format=raw,file=/tmp/OVMF_VARS.fd \
+            -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" \
+            "${OVMF_VAR_ARGS[@]}" \
             -drive if=virtio,format=raw,file=boot-x86_64.img \
             -netdev user,id=net0,net=10.0.2.0/24,host=10.0.2.2,dns=10.0.2.3,dhcpstart=10.0.2.15 \
             -device virtio-net-pci,netdev=net0,id=nic0 \
