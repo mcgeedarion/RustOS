@@ -733,7 +733,7 @@ fn main() {
             mkinitramfs(&root, opts.arch)
         },
         "image" => image(&root, &parse_build_args(&rest)),
-        "smoke" => smoke(root),
+        "smoke" => smoke(&root),
         "help" | "--help" | "-h" | "" => {
             print_help();
             Ok(())
