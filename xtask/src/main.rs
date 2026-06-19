@@ -369,6 +369,12 @@ fn image(root: &Path, opts: &BuildOpts) -> Result<()> {
         bail!("EFI binary not found at {}", efi_path.display());
     }
     let img_path = root.join(image_name(opts.arch));
+    let startup_nsh = format!("FS0:\\EFI\\BOOT\\{efi_name}\r\n");
+    let startup_nsh_path = root
+        .join("target/esp")
+        .join(arch_str(opts.arch))
+        .join("STARTUP.NSH");
+    fs::write(&startup_nsh_path, startup_nsh).context("write startup.nsh")?;
     if which_first(&["mformat"]).is_some()
         && which_first(&["mmd"]).is_some()
         && which_first(&["mcopy"]).is_some()
@@ -386,6 +392,11 @@ fn image(root: &Path, opts: &BuildOpts) -> Result<()> {
             .arg(&img_path)
             .arg(&efi_path)
             .arg(format!("::/EFI/BOOT/{efi_name}")))?;
+        run(Command::new("mcopy")
+            .args(["-i"])
+            .arg(&img_path)
+            .arg(&startup_nsh_path)
+            .arg("::/STARTUP.NSH"))?;
     } else {
         log("mtools not found; using built-in FAT16 ESP writer");
         write_fat16_esp(&img_path, &efi_path, efi_name)?;
@@ -722,7 +733,7 @@ fn main() {
             mkinitramfs(&root, opts.arch)
         },
         "image" => image(&root, &parse_build_args(&rest)),
-        "smoke" => smoke(&root),
+        "smoke" => smoke(root),
         "help" | "--help" | "-h" | "" => {
             print_help();
             Ok(())
