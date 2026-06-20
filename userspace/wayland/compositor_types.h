@@ -103,6 +103,35 @@
 #define WL_KEYBOARD_EVT_REPEAT_INFO 6u
 #endif
 
+/*
+ * strscpy() — bounded, always-NUL-terminated string copy.
+ *
+ * Preferred over strncpy() which has ambiguous NUL-termination semantics
+ * and zero-pads the remainder of the destination buffer unnecessarily.
+ *
+ * Returns the number of bytes copied (excluding the NUL terminator) on
+ * success, or -E2BIG if the source was truncated to fit within count bytes.
+ *
+ * This shim is provided for musl and other libc environments that do not
+ * yet expose strscpy() from <string.h>. On Linux 6.x+ glibc or toolchains
+ * that provide it natively, the macro guard below prevents redefinition.
+ */
+#ifndef strscpy
+static inline MAYBE_UNUSED ssize_t
+strscpy(char *dst, const char *src, size_t count)
+{
+    size_t i;
+    if (count == 0)
+        return -E2BIG;
+    for (i = 0; i < count - 1 && src[i] != '\0'; i++)
+        dst[i] = src[i];
+    dst[i] = '\0';
+    if (src[i] != '\0')
+        return -E2BIG;
+    return (ssize_t)i;
+}
+#endif /* strscpy */
+
 /* ── Common types ──────────────────────────────────────────────────────── */
 typedef struct { int32_t x, y, w, h; } Rect;
 
