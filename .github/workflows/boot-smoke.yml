@@ -12,7 +12,7 @@ permissions:
 jobs:
   aarch64-uefi:
     name: aarch64 UEFI boot smoke
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
 
     steps:
@@ -85,7 +85,7 @@ jobs:
 
   riscv64-uefi:
     name: riscv64 UEFI boot smoke
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
 
     steps:
@@ -183,7 +183,7 @@ jobs:
 
   x86_64-uefi:
     name: x86_64 UEFI boot smoke
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
 
     steps:
