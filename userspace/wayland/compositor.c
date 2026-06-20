@@ -730,12 +730,11 @@ static int setup_wayland_socket(const char *path) {
     struct sockaddr_un addr;
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
-    if (strlen(path) >= sizeof(addr.sun_path)) {
+    if (strscpy(addr.sun_path, path, sizeof(addr.sun_path)) < 0) {
         close(fd);
         errno = ENAMETOOLONG;
         return -1;
     }
-    strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
     (void)unlink(path);
     if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         close(fd);
