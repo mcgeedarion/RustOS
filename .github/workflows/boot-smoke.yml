@@ -101,7 +101,7 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y --no-install-recommends \
-            binutils clang lld llvm qemu-system-misc qemu-efi-riscv64 u-boot-qemu mtools
+            binutils binutils-riscv64-linux-gnu clang lld llvm qemu-system-misc qemu-efi-riscv64 u-boot-qemu mtools
 
       - name: Build riscv64 UEFI ESP image
         run: |
