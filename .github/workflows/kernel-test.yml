@@ -86,7 +86,7 @@ jobs:
       - name: Install common build tools
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y --no-install-recommends clang lld llvm make cpio
+          sudo apt-get install -y --no-install-recommends binutils clang lld llvm make cpio
 
       - name: Install QEMU and firmware
         if: inputs.run_smoke || inputs.run_kmtest
@@ -104,20 +104,23 @@ jobs:
           esac
 
       - name: Build kernel debug
-        if: inputs.run_build || inputs.run_smoke
+        if: inputs.run_build
         run: |
+          set -o pipefail
           ARCH="${{ inputs.arch }}" BOOT="${BOOT}" bash scripts/ci/build.sh \
             2>&1 | tee "build-${{ inputs.arch }}.log"
 
       - name: Build kernel release
         if: inputs.run_build
         run: |
+          set -o pipefail
           ARCH="${{ inputs.arch }}" BOOT="${BOOT}" RELEASE=1 bash scripts/ci/build.sh \
             2>&1 | tee "build-${{ inputs.arch }}-release.log"
 
       - name: Build aarch64 UEFI ESP image
         if: inputs.run_smoke && inputs.arch == 'aarch64'
         run: |
+          set -o pipefail
           cargo xtask image --arch aarch64 --debug --features boot_minimal \
             2>&1 | tee "build-aarch64-image.log"
           test -f boot-aarch64.img
@@ -161,6 +164,7 @@ jobs:
       - name: Build riscv64 UEFI ESP image
         if: inputs.run_smoke && inputs.arch == 'riscv64'
         run: |
+          set -o pipefail
           cargo xtask image --arch riscv64 --debug --features boot_minimal \
             2>&1 | tee "build-riscv64-image.log"
           test -f boot-riscv64.img
@@ -230,6 +234,7 @@ jobs:
       - name: Build x86_64 UEFI ESP image
         if: inputs.run_smoke && inputs.arch == 'x86_64'
         run: |
+          set -o pipefail
           cargo xtask image --arch x86_64 --debug \
             2>&1 | tee "build-x86_64-image.log"
           test -f boot-x86_64.img
@@ -300,6 +305,7 @@ jobs:
       - name: QEMU kmtest boot (x86_64)
         if: inputs.run_kmtest && inputs.arch == 'x86_64'
         run: |
+          set -o pipefail
           ARCH=x86_64 bash scripts/ci/run_qemu.sh --boot uefi --test --timeout 90 \
             2>&1 | tee "qemu-kmtest-x86_64.log"
 
