@@ -314,12 +314,40 @@ fn install_efi(root: &Path, opts: &BuildOpts) -> Result<()> {
 }
 
 fn convert_riscv64_efi(src: &Path, dest: &Path) -> Result<()> {
-    let objcopy = which_first(&["objcopy"]).context("objcopy not found; install binutils")?;
-    run(Command::new(objcopy)
-        .arg("--output-target=efi-app-riscv64")
-        .arg(src)
-        .arg(dest))
-    .with_context(|| format!("convert {} to {}", src.display(), dest.display()))
+    let objcopy = which_first(&[
+        "riscv64-linux-gnu-objcopy",
+        "riscv64-unknown-elf-objcopy",
+        "llvm-objcopy",
+        "rust-objcopy",
+        "objcopy",
+    ])
+    .context("objcopy not found; install binutils-riscv64-linux-gnu or binutils")?;
+    let attempts: &[&[&str]] = &[
+        &["--output-target=efi-app-riscv64"],
+        &["--output-target=pei-riscv64-little", "--subsystem=efi-app"],
+    ];
+    let mut last_status = String::new();
+    for args in attempts {
+        let _ = fs::remove_file(dest);
+        let mut cmd = Command::new(&objcopy);
+        for arg in *args {
+            cmd.arg(*arg);
+        }
+        cmd.arg(src).arg(dest);
+        log(format!("running: {:?}", cmd));
+        let status = cmd.status().context("failed to spawn objcopy")?;
+        if status.success() {
+            return Ok(());
+        }
+        last_status = status.to_string();
+    }
+    bail!(
+        "convert {} to {} with {} failed after all target formats; last status: {}",
+        src.display(),
+        dest.display(),
+        objcopy,
+        last_status
+    )
 }
 
 fn require_initramfs_tools(arch: Arch) -> Result<()> {

@@ -96,7 +96,7 @@ jobs:
               sudo apt-get install -y --no-install-recommends qemu-system-arm qemu-system-data qemu-efi-aarch64 ipxe-qemu mtools
               ;;
             riscv64)
-              sudo apt-get install -y --no-install-recommends qemu-system-misc qemu-efi-riscv64 u-boot-qemu mtools
+              sudo apt-get install -y --no-install-recommends binutils-riscv64-linux-gnu qemu-system-misc qemu-efi-riscv64 u-boot-qemu mtools
               ;;
             x86_64)
               sudo apt-get install -y --no-install-recommends qemu-system-x86 ovmf mtools musl-tools
