@@ -1,16 +1,18 @@
 {
-  "llvm-target": "riscv64-unknown-none-elf",
+  "llvm-target": "riscv64-unknown-windows",
   "target-endian": "little",
   "target-pointer-width": 64,
   "target-c-int-width": 32,
   "data-layout": "e-m:e-p:64:64-i64:64-i128:128-n32:64-S128",
   "arch": "riscv64",
-  "os": "none",
+  "os": "uefi",
   "env": "",
   "vendor": "rustos",
+  "is-like-windows": true,
+  "is-like-msvc": true,
   "linker": "rust-lld",
-  "linker-flavor": "gnu-lld",
-  "lld-flavor": "gnu",
+  "linker-flavor": "lld-link",
+  "lld-flavor": "link",
   "executables": true,
   "disable-redzone": true,
   "panic-strategy": "abort",
@@ -21,9 +23,9 @@
   "max-atomic-width": 64,
   "frame-pointer": "always",
   "pre-link-args": {
-    "gnu-lld": [
-      "-e",
-      "efi_main"
+    "lld-link": [
+      "/subsystem:efi_application",
+      "/entry:efi_main"
     ]
   }
 }
