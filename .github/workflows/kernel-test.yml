@@ -104,18 +104,10 @@ jobs:
           esac
 
       - name: Build kernel debug
-        if: inputs.run_build || inputs.run_smoke
+        if: inputs.run_build
         run: |
           set -o pipefail
-          BUILD_FEATURES=""
-          if [ "${{ inputs.run_smoke }}" = "true" ] && [ "${{ inputs.run_build }}" != "true" ]; then
-            case "${{ inputs.arch }}" in
-              aarch64|riscv64)
-                BUILD_FEATURES=boot_minimal
-                ;;
-            esac
-          fi
-          ARCH="${{ inputs.arch }}" BOOT="${BOOT}" FEATURES="${BUILD_FEATURES}" bash scripts/ci/build.sh \
+          ARCH="${{ inputs.arch }}" BOOT="${BOOT}" bash scripts/ci/build.sh \
             2>&1 | tee "build-${{ inputs.arch }}.log"
 
       - name: Build kernel release

@@ -90,7 +90,15 @@ pick_kernel_artifact() {
 
 # ── Append optional extra features ─────────────────────────────────────────
 
-[[ -n "$FEATURES" ]] && EXTRA_FLAGS+=(--features "$FEATURES")
+if [[ -n "$FEATURES" ]]; then
+  FEATURES_COMPACT="${FEATURES//[[:space:]]/}"
+  case ",${FEATURES_COMPACT}," in
+    *,boot_minimal,*)
+      EXTRA_FLAGS+=(--no-default-features)
+      ;;
+  esac
+  EXTRA_FLAGS+=(--features "$FEATURES")
+fi
 
 # ── Build ───────────────────────────────────────────────────────────────────
 
