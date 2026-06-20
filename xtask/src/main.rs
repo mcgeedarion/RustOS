@@ -369,7 +369,7 @@ fn image(root: &Path, opts: &BuildOpts) -> Result<()> {
         bail!("EFI binary not found at {}", efi_path.display());
     }
     let img_path = root.join(image_name(opts.arch));
-    let startup_nsh = format!("FS0:\\EFI\\BOOT\\{efi_name}\r\n");
+    let startup_nsh = format!("FS0:\r\n\\EFI\\BOOT\\{efi_name}\r\n");
     let startup_nsh_path = root
         .join("target/esp")
         .join(arch_str(opts.arch))
@@ -420,7 +420,7 @@ fn write_fat16_esp(img_path: &Path, efi_path: &Path, efi_name: &str) -> Result<(
     const FILE_FIRST_CLUSTER: u16 = 4;
 
     let file = fs::read(efi_path).with_context(|| format!("read {}", efi_path.display()))?;
-    let startup_nsh = format!("FS0:\\EFI\\BOOT\\{efi_name}\r\n");
+    let startup_nsh = format!("FS0:\r\n\\EFI\\BOOT\\{efi_name}\r\n");
     let startup_bytes = startup_nsh.as_bytes();
     let file_clusters = file.len().div_ceil(BYTES_PER_SECTOR).max(1);
     let last_file_cluster = FILE_FIRST_CLUSTER as usize + file_clusters - 1;
