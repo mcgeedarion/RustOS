@@ -33,7 +33,7 @@ jobs:
       - name: Plain cargo build uses repo default aarch64 UEFI target
         run: |
           set -o pipefail
-          ARCH=aarch64 BOOT=uefi bash scripts/ci/build.sh \
+          ARCH=aarch64 BOOT=uefi FEATURES=boot_minimal bash scripts/ci/build.sh \
             2>&1 | tee cargo-build-aarch64-boot.log
 
       - name: Build aarch64 UEFI ESP image
@@ -113,7 +113,7 @@ jobs:
       - name: Build riscv64 UEFI target
         run: |
           set -o pipefail
-          ARCH=riscv64 BOOT=uefi bash scripts/ci/build.sh \
+          ARCH=riscv64 BOOT=uefi FEATURES=boot_minimal bash scripts/ci/build.sh \
             2>&1 | tee cargo-build-riscv64-boot.log
 
       - name: Build riscv64 UEFI ESP image

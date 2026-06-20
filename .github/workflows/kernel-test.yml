@@ -107,7 +107,15 @@ jobs:
         if: inputs.run_build || inputs.run_smoke
         run: |
           set -o pipefail
-          ARCH="${{ inputs.arch }}" BOOT="${BOOT}" bash scripts/ci/build.sh \
+          BUILD_FEATURES=""
+          if [ "${{ inputs.run_smoke }}" = "true" ] && [ "${{ inputs.run_build }}" != "true" ]; then
+            case "${{ inputs.arch }}" in
+              aarch64|riscv64)
+                BUILD_FEATURES=boot_minimal
+                ;;
+            esac
+          fi
+          ARCH="${{ inputs.arch }}" BOOT="${BOOT}" FEATURES="${BUILD_FEATURES}" bash scripts/ci/build.sh \
             2>&1 | tee "build-${{ inputs.arch }}.log"
 
       - name: Build kernel release
