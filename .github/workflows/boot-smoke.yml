@@ -32,11 +32,13 @@ jobs:
 
       - name: Plain cargo build uses repo default aarch64 UEFI target
         run: |
+          set -o pipefail
           ARCH=aarch64 BOOT=uefi bash scripts/ci/build.sh \
             2>&1 | tee cargo-build-aarch64-boot.log
 
       - name: Build aarch64 UEFI ESP image
         run: |
+          set -o pipefail
           cargo xtask image --arch aarch64 --debug --features boot_minimal 2>&1 | tee build-aarch64-image.log
           test -f boot-aarch64.img
 
@@ -106,15 +108,17 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y --no-install-recommends \
-            clang lld llvm qemu-system-misc qemu-efi-riscv64 u-boot-qemu mtools
+            binutils clang lld llvm qemu-system-misc qemu-efi-riscv64 u-boot-qemu mtools
 
       - name: Build riscv64 UEFI target
         run: |
+          set -o pipefail
           ARCH=riscv64 BOOT=uefi bash scripts/ci/build.sh \
             2>&1 | tee cargo-build-riscv64-boot.log
 
       - name: Build riscv64 UEFI ESP image
         run: |
+          set -o pipefail
           cargo xtask image --arch riscv64 --debug --features boot_minimal 2>&1 | tee build-riscv64-image.log
           test -f boot-riscv64.img
 
@@ -213,11 +217,13 @@ jobs:
 
       - name: Build x86_64 UEFI loader target
         run: |
+          set -o pipefail
           ARCH=x86_64 BOOT=uefi bash scripts/ci/build.sh \
             2>&1 | tee cargo-build-x86_64-boot.log
 
       - name: Build x86_64 UEFI ESP image
         run: |
+          set -o pipefail
           cargo xtask image --arch x86_64 --debug 2>&1 | tee build-x86_64-image.log
           test -f boot-x86_64.img
 

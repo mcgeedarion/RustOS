@@ -304,9 +304,22 @@ fn install_efi(root: &Path, opts: &BuildOpts) -> Result<()> {
     let dest_dir = esp_boot_dir(root, opts.arch);
     fs::create_dir_all(&dest_dir).context("create ESP boot directory")?;
     let dest = dest_dir.join(efi_boot_filename(opts.arch));
-    fs::copy(&src, &dest).context("copy EFI artifact into ESP")?;
+    if opts.arch == Arch::RiscV64 {
+        convert_riscv64_efi(&src, &dest)?;
+    } else {
+        fs::copy(&src, &dest).context("copy EFI artifact into ESP")?;
+    }
     log(format!("installed EFI: {}", dest.display()));
     Ok(())
+}
+
+fn convert_riscv64_efi(src: &Path, dest: &Path) -> Result<()> {
+    let objcopy = which_first(&["objcopy"]).context("objcopy not found; install binutils")?;
+    run(Command::new(objcopy)
+        .arg("--output-target=efi-app-riscv64")
+        .arg(src)
+        .arg(dest))
+    .with_context(|| format!("convert {} to {}", src.display(), dest.display()))
 }
 
 fn require_initramfs_tools(arch: Arch) -> Result<()> {
