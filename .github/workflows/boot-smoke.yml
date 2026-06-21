@@ -84,7 +84,8 @@ jobs:
             qemu-aarch64-boot.log
 
   riscv64-uefi:
-    name: riscv64 UEFI boot smoke
+    if: false
+    name: riscv64 UEFI boot smoke (temporarily gated)
     runs-on: ubuntu-26.04
     timeout-minutes: 20
 

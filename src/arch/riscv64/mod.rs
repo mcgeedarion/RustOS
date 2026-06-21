@@ -21,7 +21,11 @@ pub mod syscall;
 pub mod trampoline;
 #[cfg(not(feature = "boot_minimal"))]
 pub mod trap;
-#[cfg(any(feature = "uefi_boot", feature = "boot_minimal"))]
+#[cfg(any(
+    all(feature = "boot_minimal", not(feature = "uefi_boot")),
+    all(feature = "uefi_boot", feature = "riscv64_uefi_boot"),
+    all(not(feature = "boot_minimal"), not(feature = "uefi_boot"))
+))]
 pub mod uefi_entry;
 #[cfg(not(feature = "boot_minimal"))]
 pub mod uentry;
@@ -78,10 +82,6 @@ pub fn init(boot_info: &'static crate::init::boot_info::BootInfo) -> ! {
     crate::mm::init();
     crate::security::init();
 
-    // Mirror the x86_64 pattern (kernel_main.rs:141): gate on `gdbstub`,
-    // not the stale `debugstub` name, and call the real session init.
-    // `pub mod debug` in lib.rs is compiled only when `gdbstub` is active,
-    // so `crate::debug::init()` (which does not exist) would fail to compile.
     #[cfg(feature = "gdbstub")]
     {
         static mut GDBSTUB_SERIAL: crate::debug::gdbstub::serial::SerialPort =
