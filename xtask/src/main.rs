@@ -76,7 +76,15 @@ fn boot_str(boot: Boot) -> &'static str {
 fn validate_contract(arch: Arch, boot: Boot) -> Result<()> {
     match (arch, boot) {
         (Arch::AArch64, Boot::Uefi | Boot::Baremetal) => Ok(()),
-        (Arch::RiscV64, Boot::Uefi | Boot::Sbi) => Ok(()),
+        // riscv64 UEFI is gated: the current toolchain cannot produce a
+        // bootable BOOTRISCV64.EFI. Use --boot sbi for riscv64, or pass
+        // --features riscv64_uefi_boot to explicitly override when re-enabling.
+        (Arch::RiscV64, Boot::Uefi) => bail!(
+            "riscv64 UEFI boot is currently gated. \
+             Use `--boot sbi` for riscv64, or pass \
+             `--features riscv64_uefi_boot` to override."
+        ),
+        (Arch::RiscV64, Boot::Sbi) => Ok(()),
         (Arch::X86_64, Boot::Uefi) => Ok(()),
         _ => bail!(
             "unsupported build contract: {} --boot {}",
@@ -252,6 +260,22 @@ fn add_build_std_flags(cmd: &mut Command) {
 }
 
 fn build_kernel(root: &Path, opts: &BuildOpts) -> Result<()> {
+    // Secondary gate: reject riscv64 UEFI unless riscv64_uefi_boot is in
+    // --features. validate_contract handles the normal CLI path; this catches
+    // any internal callers that bypass it.
+    if opts.arch == Arch::RiscV64 && opts.boot == Boot::Uefi {
+        let has_gate = opts
+            .features
+            .as_deref()
+            .map(|f| f.split(',').any(|feat| feat.trim() == "riscv64_uefi_boot"))
+            .unwrap_or(false);
+        if !has_gate {
+            bail!(
+                "riscv64 UEFI boot is gated. Add `riscv64_uefi_boot` to --features to override."
+            );
+        }
+    }
+
     validate_contract(opts.arch, opts.boot)?;
 
     let mut cmd = cargo();
