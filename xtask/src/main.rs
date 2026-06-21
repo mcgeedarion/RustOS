@@ -304,50 +304,9 @@ fn install_efi(root: &Path, opts: &BuildOpts) -> Result<()> {
     let dest_dir = esp_boot_dir(root, opts.arch);
     fs::create_dir_all(&dest_dir).context("create ESP boot directory")?;
     let dest = dest_dir.join(efi_boot_filename(opts.arch));
-    if opts.arch == Arch::RiscV64 {
-        convert_riscv64_efi(&src, &dest)?;
-    } else {
-        fs::copy(&src, &dest).context("copy EFI artifact into ESP")?;
-    }
+    fs::copy(&src, &dest).context("copy EFI artifact into ESP")?;
     log(format!("installed EFI: {}", dest.display()));
     Ok(())
-}
-
-fn convert_riscv64_efi(src: &Path, dest: &Path) -> Result<()> {
-    let objcopy = which_first(&[
-        "riscv64-linux-gnu-objcopy",
-        "riscv64-unknown-elf-objcopy",
-        "llvm-objcopy",
-        "rust-objcopy",
-        "objcopy",
-    ])
-    .context("objcopy not found; install binutils-riscv64-linux-gnu or binutils")?;
-    let attempts: &[&[&str]] = &[
-        &["--output-target=efi-app-riscv64"],
-        &["--output-target=pei-riscv64-little", "--subsystem=efi-app"],
-    ];
-    let mut last_status = String::new();
-    for args in attempts {
-        let _ = fs::remove_file(dest);
-        let mut cmd = Command::new(&objcopy);
-        for arg in *args {
-            cmd.arg(*arg);
-        }
-        cmd.arg(src).arg(dest);
-        log(format!("running: {:?}", cmd));
-        let status = cmd.status().context("failed to spawn objcopy")?;
-        if status.success() {
-            return Ok(());
-        }
-        last_status = status.to_string();
-    }
-    bail!(
-        "convert {} to {} with {} failed after all target formats; last status: {}",
-        src.display(),
-        dest.display(),
-        objcopy,
-        last_status
-    )
 }
 
 fn require_initramfs_tools(arch: Arch) -> Result<()> {
