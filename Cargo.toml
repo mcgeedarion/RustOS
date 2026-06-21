@@ -78,6 +78,10 @@ gdbstub = []
 # Build as a UEFI loader/application.
 uefi_boot = []
 
+# Gate the riscv64 UEFI boot path until the toolchain can produce a bootable
+# BOOTRISCV64.EFI image for targets/riscv64-uefi-loader.json.
+riscv64_uefi_boot = []
+
 # Full debug build: GDB RSP stub + rich oops/backtrace + trace drain.
 # Use `--features debug` as the single flag for a debug kernel.
 debug = ["gdbstub", "trace"]

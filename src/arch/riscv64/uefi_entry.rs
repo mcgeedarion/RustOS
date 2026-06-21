@@ -1,5 +1,10 @@
 //! RISC-V UEFI firmware entry point.
 
+#[cfg(all(feature = "uefi_boot", not(feature = "riscv64_uefi_boot")))]
+compile_error!(
+    "RISC-V UEFI boot is temporarily gated. Enable feature `riscv64_uefi_boot` only when the toolchain can produce a bootable BOOTRISCV64.EFI image."
+);
+
 use crate::init::boot_info::{BootInfo, BootRange, EfiMemoryMapInfo};
 use core::arch::asm;
 
