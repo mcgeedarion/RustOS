@@ -49,7 +49,7 @@ cc = "1"
 # Normal development build: keep the UEFI path enabled for the repository
 # default aarch64 target, while also supporting explicit x86_64 and riscv64
 # UEFI/SBI builds through their target-specific commands.
-default = ["uefi_boot", "userspace_boot"]
+default = ["uefi_boot", "riscv64_uefi_boot", "userspace_boot"]
 
 # Compile only the firmware handoff, common BootInfo path, early console,
 # panic handler, and an architecture idle loop. This is the first-stage boot
@@ -78,8 +78,8 @@ gdbstub = []
 # Build as a UEFI loader/application.
 uefi_boot = []
 
-# Gate the riscv64 UEFI boot path until the toolchain can produce a bootable
-# BOOTRISCV64.EFI image for targets/riscv64-uefi-loader.json.
+# Explicitly opt in to the riscv64 UEFI boot path. RV64 PE/COFF is defined
+# by the UEFI specification; only RV64 is supported (RV32 has no UEFI profile).
 riscv64_uefi_boot = []
 
 # Full debug build: GDB RSP stub + rich oops/backtrace + trace drain.
