@@ -6,8 +6,8 @@
 //!   net/      — e1000e, NIC abstraction, virtio-net (PCIe + MMIO)
 //!   block/    — AHCI, NVMe, virtio-blk
 //!   platform/ — GPIO, PCIe ECAM
-//!   virtio/   — MMIO transport and split virtqueue (shared by all virtio
-//! drivers)
+//!   virtio/   — MMIO transport and split virtqueue (shared by all virtio drivers)
+//!   media/    — Camera / ISP subsystem (AMD ISP4 / amdisp4, merged Linux 7.2)
 //!
 //! Terminal semantics (line discipline, PTY, termios) live in `crate::tty`.
 //! Interrupt controllers (PLIC, CLINT) live in `crate::irq::riscv64`.
@@ -31,3 +31,8 @@ pub mod platform;
 pub use platform::pcie;
 pub mod virtio;
 pub mod virtio_blk;
+
+// Camera / ISP subsystem — AMD ISP4 (amdisp4) and MediaDevice HAL.
+// Use `crate::drivers::media::media::init_isp4(mmio_base, fw_paddr)` to
+// register the backend during kernel init (requires feature "amd-isp4").
+pub mod media;
