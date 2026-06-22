@@ -36,9 +36,6 @@ cfg-if = "1"
 log = { version = "0.4", default-features = false }
 
 # Add your kernel dependencies here
-# Examples:
-# x86_64 = "0.15"
-# uart_16550 = "0.3"
 
 [build-dependencies]
 # Used by build.rs::compile_crt() to build the freestanding C runtime stubs
@@ -47,9 +44,9 @@ cc = "1"
 
 [features]
 # Normal development build: keep the UEFI path enabled for the repository
-# default aarch64 target, while also supporting explicit x86_64 and riscv64
+# default x86_64 
 # UEFI/SBI builds through their target-specific commands.
-default = ["uefi_boot", "riscv64_uefi_boot", "userspace_boot"]
+default = ["uefi_boot", "userspace_boot"]
 
 # Compile only the firmware handoff, common BootInfo path, early console,
 # panic handler, and an architecture idle loop. This is the first-stage boot
