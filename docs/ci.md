@@ -7,6 +7,21 @@ end-to-end boot instead of parsing verbose log output.
 
 ---
 
+## Status badge
+
+Add this to your `README.md` to show live CI status for the x86\_64 UEFI
+boot smoke job:
+
+```markdown
+[![Boot Smoke – x86_64 UEFI](https://github.com/mcgeedarion/RustOS/actions/workflows/boot-smoke.yml/badge.svg?branch=main&job=x86_64-uefi)](https://github.com/mcgeedarion/RustOS/actions/workflows/boot-smoke.yml)
+```
+
+Rendered:
+
+[![Boot Smoke – x86_64 UEFI](https://github.com/mcgeedarion/RustOS/actions/workflows/boot-smoke.yml/badge.svg?branch=main)](https://github.com/mcgeedarion/RustOS/actions/workflows/boot-smoke.yml)
+
+---
+
 ## Sentinel strings
 
 | Configuration | Sentinel | Source location |
@@ -54,9 +69,9 @@ minimal path completes, just before the CPU parks in a halt loop.
 grep -q 'RUSTOS_BOOT_OK' qemu-x86_64-boot.log
 ```
 
-The `boot-smoke` workflow (``.github/workflows/boot-smoke.yml``) already
-contains an "Assert x86\_64 boot sentinel" step that performs exactly this
-check.
+The `boot-smoke` workflow (`.github/workflows/boot-smoke.yml`) contains an
+"Assert boot sentinel: RUSTOS\_BOOT\_OK" step that performs exactly this
+check as the **canonical CI gate** for the x86\_64 UEFI path.
 
 ### Matching with version awareness
 
@@ -68,11 +83,27 @@ grep -qE 'RUSTOS_BOOT_OK v[0-9]+' qemu-x86_64-boot.log
 
 ### QEMU timeout handling
 
-QEMU is launched with `timeout 30` (or 45/60 for other arches). A
-timeout exit code of `124` is treated as success at the QEMU level
-(the kernel is still running in the idle loop) but the subsequent
-`grep` step will fail if the sentinel was never emitted, correctly
-failing the job.
+QEMU is launched with `timeout 60` for x86\_64 (45 s for aarch64, 60 s
+for riscv64). A timeout exit code of `124` is treated as success at the
+QEMU level — the kernel is still running in the idle loop — but the
+subsequent `grep` step will fail if the sentinel was never emitted,
+correctly failing the job.
+
+---
+
+## Caching strategy
+
+The `boot-smoke` workflow uses three `actions/cache` layers:
+
+| Layer | Path | Cache key |
+|---|---|---|
+| Registry index + crate sources | `~/.cargo/registry` | `cargo-registry-<OS>-<Cargo.lock hash>` |
+| Git-sourced deps | `~/.cargo/git/db` | same as registry |
+| Compiled artifacts | `target/` | `cargo-target-<arch>-<OS>-<toolchain hash>-<Cargo.lock hash>` |
+
+The `target/` cache key includes both `rust-toolchain.toml` and
+`Cargo.lock`, so a nightly date bump or dependency update automatically
+invalidates the artifact cache while the registry layer remains warm.
 
 ---
 
