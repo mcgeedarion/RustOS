@@ -6,20 +6,19 @@
 //!
 //! Exit sequence:
 //!   1. robust_list_on_exit  — wake futex waiters on robust mutexes
-//!   2. clear_child_tid      — zero futex word + FUTEX_WAKE (unblocks
-//!      pthread_join)
+//!   2. clear_child_tid      — zero futex word + FUTEX_WAKE (unblocks pthread_join)
 //!   3. unregister_thread
 //!   4. altstack_clear_pid + proc_name_clear + futex_clear_pid
 //!   5. proc_fd_free         — close all open fds
 //!   6. cgroup_exit          — remove PID from cgroup, maybe free cgroup
-//!   7. free_address_space (last thread in group only)
-//!   8. group_pending_clear (last thread in group only) — drain
-//!      GROUP_PENDING[tgid]
-//!   9. ns_exit (last thread in group only) — tear down private namespaces
-//!  10. free_kstack + State -> Zombie + exit_code = encode_exit(code)
-//!  11. wake vfork_parent
-//!  12. notify_exit (wakes parent waitpid, sends group-directed SIGCHLD)
-//!  13. schedule()   — never returns
+//!   7. reparent_orphans     — adopt children to init (PID 1)
+//!   8. free_address_space (last thread in group only)
+//!   9. group_pending_clear (last thread in group only)
+//!  10. ns_exit (last thread in group only)
+//!  11. free_kstack + State -> Zombie + exit_code = encode_exit(code)
+//!  12. wake vfork_parent
+//!  13. notify_exit (wakes parent waitpid, sends SIGCHLD)
+//!  14. schedule()   — never returns
 
 extern crate alloc;
 
@@ -51,14 +50,50 @@ fn clear_child_tid(pid: usize) {
 fn is_last_live_thread(pid: usize, tgid: usize) -> bool {
     scheduler::with_procs_ro(|pl_vec| {
         !pl_vec.iter().any(|pl| {
-            pl.pid as usize != pid && pl.tgid as usize == tgid && pl.load_state() != State::Zombie
+            pl.pid as usize != pid
+                && pl.tgid as usize == tgid
+                && pl.load_state() != State::Zombie
         })
     })
 }
 
-// Called only when the last live thread in a thread group exits.
-// Tears down any private (non-INIT_NS) namespaces that have no other
-// living process using them.
+/// Reparent all children of `pid` to init (PID 1).
+///
+/// If PID 1 itself exits (shouldn't happen in a healthy system) reparent to
+/// PID 0 (the idle task / kernel), which won't collect them but prevents UAF.
+fn reparent_orphans(pid: usize) {
+    // Determine the new parent — prefer PID 1 (init), fall back to 0.
+    let init_pid: usize = if pid != 1
+        && scheduler::with_proc(1, |_| ()).is_some()
+    {
+        1
+    } else {
+        0
+    };
+
+    // Collect PIDs of direct children.
+    let children: alloc::vec::Vec<usize> = scheduler::with_procs_ro(|pl_vec| {
+        pl_vec
+            .iter()
+            .filter(|pl| {
+                scheduler::with_proc(pl.pid as usize, |p| p.ppid == pid)
+                    .unwrap_or(false)
+            })
+            .map(|pl| pl.pid as usize)
+            .collect()
+    });
+
+    for child in children {
+        scheduler::with_proc_mut(child, |p, _pl| {
+            p.ppid = init_pid;
+        });
+    }
+
+    // Wake init so it can reap any newly-adopted zombies.
+    if init_pid != 0 {
+        scheduler::wake_pid(init_pid);
+    }
+}
 
 fn ns_exit(pid: usize) {
     use crate::proc::namespace::INIT_NS;
@@ -68,8 +103,6 @@ fn ns_exit(pid: usize) {
         None => return,
     };
 
-    // Helper: returns true if any *other* live process shares the given NsId
-    // for the field identified by `getter`.
     let shared_by_other =
         |ns_id: crate::proc::namespace::NsId,
          getter: fn(&crate::proc::process::Process) -> crate::proc::namespace::NsId|
@@ -78,7 +111,9 @@ fn ns_exit(pid: usize) {
                 pl_vec.iter().any(|pl| {
                     pl.pid as usize != pid
                         && pl.load_state() != State::Zombie
-                        && scheduler::with_proc(pl.pid as usize, getter).unwrap_or(INIT_NS) == ns_id
+                        && scheduler::with_proc(pl.pid as usize, getter)
+                            .unwrap_or(INIT_NS)
+                            == ns_id
                 })
             })
         };
@@ -86,11 +121,9 @@ fn ns_exit(pid: usize) {
     if ns.net != INIT_NS && !shared_by_other(ns.net, |p| p.ns.net) {
         crate::proc::net_ns::destroy_net_ns(ns.net);
     }
-
     if ns.mnt != INIT_NS && !shared_by_other(ns.mnt, |p| p.ns.mnt) {
         crate::proc::namespace::drop_mount_ns(ns.mnt);
     }
-
     if ns.uts != INIT_NS && !shared_by_other(ns.uts, |p| p.ns.uts) {
         crate::proc::namespace::drop_uts_ns(ns.uts);
     }
@@ -130,15 +163,17 @@ pub fn do_exit(pid: usize, code: i32) {
 
     crate::fs::process_fd::proc_fd_free(pid);
 
+    // Reparent children to init *before* we tear down the address space,
+    // so that any orphaned zombies are visible to init immediately.
+    reparent_orphans(pid);
+
     let last = is_last_live_thread(pid, tgid);
     if last {
-        // Free the user address space before cgroup teardown to avoid UAF in cgroup hooks.
         let user_satp = scheduler::with_proc(pid, |p| p.user_satp).unwrap_or(0);
         free_address_space(pid, user_satp);
         crate::proc::signal::group_pending_clear(tgid);
         ns_exit(pid);
     }
-    // Move cgroup_exit after free_address_space to ensure no stale vmas are accessed.
     crate::proc::cgroup::cgroup_exit(pid);
 
     let vfork_parent = zombify(pid, code);
@@ -182,12 +217,11 @@ pub fn sys_exit_group(status: i32) -> isize {
         crate::syscall::driver::cleanup_pid(sibling);
         crate::ipc::endpoint_cleanup_pid(sibling);
         crate::fs::process_fd::proc_fd_free(sibling);
-        // Free the sibling's address space before performing cgroup exit.
+        reparent_orphans(sibling);
         let user_satp_sibling = scheduler::with_proc(sibling, |p| p.user_satp).unwrap_or(0);
         if user_satp_sibling != 0 {
             free_address_space(sibling, user_satp_sibling);
         }
-        // After freeing pages, call cgroup_exit for this sibling.
         crate::proc::cgroup::cgroup_exit(sibling);
         let vfork_parent = zombify(sibling, status);
         if vfork_parent != 0 {

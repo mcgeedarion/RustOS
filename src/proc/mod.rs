@@ -12,77 +12,33 @@ pub mod clone;
 pub mod context;
 pub mod creds;
 pub mod cwd;
-pub mod dynlink {
-    extern crate alloc;
-    use alloc::string::String;
 
-    pub fn find_interp(_elf_data: &[u8]) -> Option<String> {
-        None
-    }
+// Real dynlink module (ELF interpreter lookup / ld.so loading).
+// Previously shadowed by an inline stub; now the full implementation is used.
+pub mod dynlink;
 
-    pub fn load_interp(_interp_path: &str) -> Result<(usize, usize), isize> {
-        Err(-38)
-    }
-}
+// Real exec, exit, fork, wait implementations.
 pub mod exec;
-pub mod exit {
-    pub fn do_exit(_pid: usize, _code: i32) {}
-
-    pub fn sys_exit(status: i32) -> isize {
-        do_exit(crate::proc::scheduler::current_pid(), status);
-        0
-    }
-
-    pub fn sys_exit_group(status: i32) -> isize {
-        sys_exit(status)
-    }
-}
+pub mod exit;
 pub mod fork;
 pub mod fork_syscall;
-pub mod futex {
-    pub fn sys_futex(
-        _uaddr: usize,
-        _op: u32,
-        _val: u32,
-        _timeout: usize,
-        _uaddr2: usize,
-        _val3: u32,
-    ) -> isize {
-        -38
-    }
 
-    pub fn sys_set_robust_list(_head: usize, _len: usize) -> isize {
-        0
-    }
+// Real futex (FUTEX_WAIT/WAKE/REQUEUE, robust lists, pi-futex skeleton).
+pub mod futex;
 
-    pub fn sys_get_robust_list(_tid: usize, _headp: usize, _lenp: usize) -> isize {
-        -38
-    }
-}
 pub mod ipc;
-pub mod itimer {
-    pub fn tick() {}
-}
+
+// Real itimer implementation (ITIMER_REAL / ITIMER_VIRTUAL / ITIMER_PROF).
+pub mod itimer;
+
 pub mod namespace;
-pub mod nanosleep {
-    pub fn sys_nanosleep(_req_va: usize, _rem_va: usize) -> isize {
-        -38
-    }
 
-    pub fn sys_clock_gettime(_clockid: u32, _timespec_va: usize) -> isize {
-        -38
-    }
+// Real nanosleep / clock_gettime / sleep_ns_internal.
+pub mod nanosleep;
 
-    pub fn sleep_ns_internal(_delta_ns: u64) -> isize {
-        0
-    }
-}
-pub mod net_ns {
-    use crate::proc::namespace::NsId;
+// Real net-namespace helpers.
+pub mod net_ns;
 
-    pub fn create_net_ns(_ns_id: NsId) {}
-    pub fn destroy_net_ns(_ns_id: NsId) {}
-}
 pub mod pid;
 pub mod proc_table;
 pub use proc_table as table;
@@ -90,9 +46,14 @@ pub mod process;
 pub mod ptrace;
 pub mod rlimit;
 pub mod rusage;
+
+// Real restart-block helpers (SA_RESTART syscall replay).
+pub mod restart;
+
 pub mod scheduler;
 pub mod signal;
 
+// Session / process-group helpers.
 pub mod session {
     pub fn set_pgid(pid: usize, pgid: usize) -> isize {
         crate::proc::creds::sys_setpgid(pid as u32, pgid as u32)
@@ -115,15 +76,21 @@ pub mod session {
         crate::proc::creds::sys_getsid(pid as u32)
     }
 }
+
 pub mod task_types;
 pub use task_types as task;
 pub mod thread;
 pub mod time_ns;
-pub mod wait;
-// GUESS: file missing, no callers anywhere in tree, declaration orphaned.
-// pub mod seccomp_filter;
 
-// GUESS: callers use crate::proc::cow_fault; canonical is mm::cow_fault.
+// The real `pid_ns`, `task_group`, `sched_helpers`, `user_ns` modules.
+pub mod pid_ns;
+pub mod task_group;
+pub mod sched_helpers;
+pub mod user_ns;
+
+pub mod wait;
+
+// CoW page-fault handler re-exported from mm.
 pub use crate::mm::cow_fault;
 
 /// Returns the effective credentials of the currently-running task as a
