@@ -17,7 +17,7 @@
 //!   8. pci::ecam_init()          — ECAM base from ACPI / DTB
 //!   9. virtio_blk / block init   — storage backend
 //!  10. fs::initramfs::mount()    — initrd
-//!  11. spawn_init()              — PID 1
+//!  11. spawn_init()              — PID 1  ← BOOT_INIT_EXEC emitted here
 //!  12. smp::bring_up_secondaries()
 //!  13. idle loop
 
@@ -97,6 +97,10 @@ pub fn init(boot_info: &'static BootInfo) -> ! {
     for path in INITS {
         if spawn_user_process(path, &[path], &[]) {
             crate::serial_println!("init: PID 1 from {}", path);
+            // Emit BOOT_INIT_EXEC immediately after spawn_user_process() succeeds.
+            // This is the last kernel-observable instant before PID 1 receives
+            // its first scheduler tick into userspace.
+            crate::boot_mark!("BOOT_INIT_EXEC");
             spawned = true;
             break;
         }

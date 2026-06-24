@@ -24,7 +24,7 @@
 //!  11. mount_initramfs()             — CPIO initrd
 //!  12. mount_root()                  — ext2 or ramfs
 //!  12b. gdbstub::session::init()      — /dev/gdbstub on COM1 [cfg(gdbstub)]
-//!  13. spawn_init()                  — PID 1
+//!  13. spawn_init()                  — PID 1  ← BOOT_INIT_EXEC emitted here
 //!  14. RUSTOS_BOOT_OK sentinel        — stable CI marker (see docs/ci.md)
 //!  15. idle loop
 
@@ -149,6 +149,10 @@ pub fn init(_boot_info: &'static BootInfo) -> ! {
     for path in INITS {
         if spawn_user_process(path, &[path], &[]) {
             crate::serial_println!("init: PID 1 from {}", path);
+            // Emit BOOT_INIT_EXEC immediately after spawn_user_process() succeeds.
+            // This is the last kernel-observable instant before PID 1 receives
+            // its first scheduler tick into userspace.
+            crate::boot_mark!("BOOT_INIT_EXEC");
             spawned = true;
             break;
         }
