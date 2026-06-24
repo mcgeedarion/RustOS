@@ -1,0 +1,263 @@
+name: Boot Performance Markers
+
+# ---------------------------------------------------------------------------
+# Triggers
+# ---------------------------------------------------------------------------
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: boot-perf-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUSTFLAGS: ""
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # x86_64 UEFI — boot-perf gate
+  # ---------------------------------------------------------------------------
+  boot-perf-x86_64:
+    name: Boot perf markers (x86_64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
+          components: rust-src, llvm-tools-preview
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+
+      - name: Cache build artifacts
+        uses: actions/cache@v4
+        with:
+          path: target/
+          key: cargo-target-boot-perf-x86_64-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-target-boot-perf-x86_64-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-
+            cargo-target-boot-perf-x86_64-${{ runner.os }}-
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends \
+            clang lld llvm \
+            qemu-system-x86 \
+            ovmf \
+            mtools
+
+      - name: Build x86_64 UEFI kernel
+        run: |
+          set -o pipefail
+          cargo xtask build --arch x86_64 2>&1 | tee cargo-build-x86_64.log
+
+      - name: Assemble x86_64 UEFI ESP image
+        run: |
+          set -o pipefail
+          cargo xtask image --arch x86_64 2>&1 | tee build-x86_64-image.log
+          test -f boot-x86_64.img || { echo "ERROR: boot-x86_64.img not produced" >&2; exit 1; }
+
+      # ------------------------------------------------------------------
+      # Boot the image under QEMU, capture serial output
+      # ------------------------------------------------------------------
+      - name: Boot image in QEMU/OVMF (capture serial)
+        run: |
+          find_existing_file() {
+            for path in "$@"; do
+              [ -f "$path" ] && { echo "$path"; return 0; }
+            done
+            return 1
+          }
+
+          OVMF_CODE=$(find_existing_file \
+            /usr/share/OVMF/OVMF_CODE.fd \
+            /usr/share/OVMF/OVMF_CODE_4M.fd \
+            /usr/share/ovmf/OVMF.fd \
+            /usr/share/qemu/OVMF.fd) || {
+            echo "ERROR: OVMF firmware not found" >&2
+            exit 1
+          }
+
+          OVMF_VAR_ARGS=()
+          if OVMF_VARS_TMPL=$(find_existing_file \
+              /usr/share/OVMF/OVMF_VARS.fd \
+              /usr/share/OVMF/OVMF_VARS_4M.fd); then
+            cp "$OVMF_VARS_TMPL" /tmp/OVMF_VARS.fd
+            OVMF_VAR_ARGS=(-drive if=pflash,format=raw,file=/tmp/OVMF_VARS.fd)
+          fi
+
+          set +e
+          timeout 60 qemu-system-x86_64 \
+            -machine q35 \
+            -cpu qemu64,+xsave,+avx \
+            -m 256M \
+            -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" \
+            "${OVMF_VAR_ARGS[@]}" \
+            -drive if=virtio,format=raw,file=boot-x86_64.img \
+            -netdev user,id=net0,net=10.0.2.0/24,host=10.0.2.2,dns=10.0.2.3,dhcpstart=10.0.2.15 \
+            -device virtio-net-pci,netdev=net0,id=nic0 \
+            -serial stdio \
+            -display none \
+            -no-reboot \
+            -no-shutdown \
+            -d guest_errors,cpu_reset \
+            > qemu-x86_64-boot.log 2>&1
+          QEMU_STATUS=$?
+          set -e
+
+          echo "--- QEMU serial output ---"
+          cat qemu-x86_64-boot.log
+          echo "--- end QEMU output (exit $QEMU_STATUS) ---"
+
+          if [ "$QEMU_STATUS" -ne 0 ] && [ "$QEMU_STATUS" -ne 124 ]; then
+            echo "ERROR: QEMU exited unexpectedly with status $QEMU_STATUS" >&2
+            exit "$QEMU_STATUS"
+          fi
+
+      # ------------------------------------------------------------------
+      # Parse BOOT_MARK lines and assert all four milestones are present
+      # ------------------------------------------------------------------
+      - name: Parse boot performance markers
+        run: |
+          chmod +x scripts/ci/parse-boot-marks.sh
+          scripts/ci/parse-boot-marks.sh qemu-x86_64-boot.log
+
+      # ------------------------------------------------------------------
+      # Upload logs for post-mortem and trend tracking
+      # ------------------------------------------------------------------
+      - name: Upload boot-perf logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: boot-perf-x86_64
+          path: |
+            cargo-build-x86_64.log
+            build-x86_64-image.log
+            qemu-x86_64-boot.log
+
+  # ---------------------------------------------------------------------------
+  # aarch64 UEFI — boot-perf gate
+  # ---------------------------------------------------------------------------
+  boot-perf-aarch64:
+    name: Boot perf markers (aarch64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
+          components: rust-src, llvm-tools-preview
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+
+      - name: Cache build artifacts
+        uses: actions/cache@v4
+        with:
+          path: target/
+          key: cargo-target-boot-perf-aarch64-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-target-boot-perf-aarch64-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-
+            cargo-target-boot-perf-aarch64-${{ runner.os }}-
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends \
+            clang lld llvm \
+            qemu-system-arm \
+            qemu-system-data \
+            qemu-efi-aarch64 \
+            ipxe-qemu \
+            mtools
+
+      - name: Build aarch64 UEFI ESP image
+        run: |
+          set -o pipefail
+          cargo xtask image --arch aarch64 --debug --features boot_minimal \
+            2>&1 | tee build-aarch64-image.log
+          test -f boot-aarch64.img || { echo "ERROR: boot-aarch64.img not produced" >&2; exit 1; }
+
+      - name: Boot image in QEMU/EDK2 (capture serial)
+        run: |
+          FW_CODE=/usr/share/AAVMF/AAVMF_CODE.fd
+          [ -f "$FW_CODE" ] || FW_CODE=/usr/share/qemu-efi-aarch64/QEMU_EFI.fd
+          test -f "$FW_CODE" || { echo "ERROR: AArch64 UEFI firmware not found" >&2; exit 1; }
+
+          if [ -f /usr/share/AAVMF/AAVMF_VARS.fd ]; then
+            cp /usr/share/AAVMF/AAVMF_VARS.fd /tmp/AAVMF_VARS.fd
+          else
+            dd if=/dev/zero of=/tmp/AAVMF_VARS.fd bs=1M count=64 2>/dev/null
+          fi
+
+          set +e
+          timeout 45 qemu-system-aarch64 \
+            -machine virt \
+            -cpu cortex-a57 \
+            -m 256M \
+            -drive if=pflash,unit=0,format=raw,readonly=on,file="$FW_CODE" \
+            -drive if=pflash,unit=1,format=raw,file=/tmp/AAVMF_VARS.fd \
+            -drive if=none,id=esp,format=raw,file=boot-aarch64.img \
+            -device virtio-blk-device,drive=esp \
+            -serial stdio -display none -no-reboot -no-shutdown \
+            -d guest_errors,cpu_reset \
+            > qemu-aarch64-boot.log 2>&1
+          QEMU_STATUS=$?
+          set -e
+
+          echo "--- QEMU serial output ---"
+          cat qemu-aarch64-boot.log
+          echo "--- end QEMU output (exit $QEMU_STATUS) ---"
+
+          if [ "$QEMU_STATUS" -ne 0 ] && [ "$QEMU_STATUS" -ne 124 ]; then
+            echo "ERROR: QEMU exited unexpectedly with status $QEMU_STATUS" >&2
+            exit "$QEMU_STATUS"
+          fi
+
+      - name: Parse boot performance markers
+        run: |
+          chmod +x scripts/ci/parse-boot-marks.sh
+          scripts/ci/parse-boot-marks.sh qemu-aarch64-boot.log
+
+      - name: Upload boot-perf logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: boot-perf-aarch64
+          path: |
+            build-aarch64-image.log
+            qemu-aarch64-boot.log
