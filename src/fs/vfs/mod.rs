@@ -1,5 +1,7 @@
 //! Virtual filesystem core.
 
+extern crate alloc;
+
 pub mod fd;
 pub mod ops;
 pub mod uring;
@@ -7,6 +9,40 @@ pub mod uring;
 // Preserve the historical `crate::fs::vfs::*` facade after moving the raw
 // descriptor implementation into `fd.rs`.
 pub use fd::*;
+
+use crate::fs::vfs::symlink::{FsOps, ResolveError};
+
+/// Thin adapter that implements `symlink::FsOps` through `vfs_ops`.
+struct VfsMountOps;
+
+impl FsOps for VfsMountOps {
+    fn exists(&self, path: &str) -> bool {
+        crate::fs::vfs::ops::stat(path).is_ok()
+    }
+    fn is_dir(&self, path: &str) -> bool {
+        crate::fs::vfs::ops::stat(path)
+            .map(|s| s.is_dir)
+            .unwrap_or(false)
+    }
+    fn is_symlink(&self, path: &str) -> bool {
+        crate::fs::vfs::ops::lstat(path)
+            .map(|s| (s.mode & 0o170000) == 0o120000)
+            .unwrap_or(false)
+    }
+    fn readlink_raw(&self, path: &str) -> Result<alloc::string::String, ResolveError> {
+        crate::fs::vfs::ops::readlink(path).map_err(|_| ResolveError::Io)
+    }
+}
+
+/// Resolve `path` through symlinks before passing it to a backend.
+///
+/// `flags` carries the open(2) flags; only `O_NOFOLLOW` is inspected
+/// (bit `0x0002_0000`).  Returns the canonical absolute path or a
+/// POSIX errno on error (`ELOOP = -40`, `ENOENT = -2`, …).
+pub fn resolve_path(path: &str, flags: u32) -> Result<alloc::string::String, isize> {
+    crate::fs::vfs::symlink::resolve(&VfsMountOps, path, flags)
+        .map_err(isize::from)
+}
 
 /// Compatibility helper for older callers that create and populate a file in
 /// one step.

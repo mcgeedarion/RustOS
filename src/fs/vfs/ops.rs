@@ -311,19 +311,39 @@ pub fn create(path: &str) -> Result<(), isize> {
     result
 }
 
-pub fn link(existing: &str, new: &str) -> Result<(), isize> {
-    let h_e = mount::resolve(existing)?;
-    let h_n = mount::resolve(new)?;
+pub fn link(existing: &str, new_path: &str) -> Result<(), isize> {
+    use crate::fs::vfs::link::{link_preflight, LinkArgs};
+
+    // Resolve symlinks in the source (follow them — we link to the target inode).
+    // The destination must not yet exist; we pass it as-is to the backend.
+    let src = crate::fs::vfs::resolve_path(existing, 0)?;
+
+    let h_e = mount::resolve(&src)?;
+    let h_n = mount::resolve(new_path)?;
     if h_e.fstype != h_n.fstype {
-        return Err(-18);
+        return Err(-18); // EXDEV
     }
     if h_e.is_readonly() {
-        return Err(-30);
+        return Err(-30); // EROFS
     }
+
+    let src_stat = stat(&src)?;
+    let dst_exists = stat(new_path).is_ok();
+
+    link_preflight(LinkArgs {
+        src_dev:    0,
+        dst_dev:    0,
+        src_exists: true,
+        src_mode:   src_stat.mode,
+        src_nlink:  src_stat.nlink,
+        dst_exists,
+        readonly:   h_e.is_readonly(),
+    })?;
+
     let result = match h_e.fstype {
-        FsType::Btrfs => crate::fs::btrfs::btrfs_link(existing, new),
-        FsType::Tmpfs => crate::fs::tmpfs::tmpfs_link(existing, new),
-        FsType::Ext2 => crate::fs::ext2::sys_link(existing, new).map(|_| ()),
+        FsType::Btrfs => crate::fs::btrfs::btrfs_link(&src, new_path),
+        FsType::Tmpfs => crate::fs::tmpfs::tmpfs_link(&src, new_path),
+        FsType::Ext2 => crate::fs::ext2::sys_link(&src, new_path).map(|_| ()),
         FsType::Ext4 => Err(-30),
         FsType::Overlayfs => {
             let om = overlay_mount(&h_e)?;
@@ -332,8 +352,8 @@ pub fn link(existing: &str, new: &str) -> Result<(), isize> {
         _ => Err(-38),
     };
     if result.is_ok() {
-        dcache::invalidate(existing);
-        dcache::invalidate(new);
+        dcache::invalidate(&src);
+        dcache::invalidate(new_path);
     }
     result
 }
@@ -399,21 +419,53 @@ pub fn rmdir(path: &str) -> Result<(), isize> {
 }
 
 pub fn unlink(path: &str) -> Result<(), isize> {
-    let h = mount::resolve(path)?;
+    use crate::fs::vfs::unlink::{unlink_preflight, UnlinkTarget};
+    use crate::fs::vfs::inode_ref::InodeKey;
+    use crate::fs::vfs::perm::InodePerm;
+    // O_NOFOLLOW: resolve symlinks in parent components only; the
+    // final component is the name being removed — do NOT follow it.
+    use crate::fs::vfs::open_check::flags::O_NOFOLLOW;
+
+    let resolved = crate::fs::vfs::resolve_path(path, O_NOFOLLOW)?;
+
+    let h = mount::resolve(&resolved)?;
     if h.is_readonly() {
         return Err(-30);
     }
+
+    // Stat target and its parent directory.
+    let target_stat = stat(&resolved)?;
+    let parent = parent_path(&resolved);
+    let parent_stat = stat(&parent)?;
+
+    let creds = crate::proc::current_creds();
+    let target = UnlinkTarget {
+        key:         InodeKey { dev: 0, ino: target_stat.ino },
+        target_mode: target_stat.mode,
+        target_uid:  target_stat.uid,
+        parent_perm: InodePerm {
+            uid:  parent_stat.uid,
+            gid:  parent_stat.gid,
+            mode: parent_stat.mode,
+        },
+        readonly:    h.is_readonly(),
+        nlink:       target_stat.nlink,
+    };
+
+    // DAC + sticky-bit + deferred-free decision.
+    unlink_preflight(creds, target)?;
+
     let result = match h.fstype {
         FsType::Btrfs => crate::fs::btrfs::btrfs_unlink(&h.subpath),
-        FsType::Ext2 => crate::fs::ext2::sys_unlink(path).map(|_| ()),
+        FsType::Ext2 => crate::fs::ext2::sys_unlink(&resolved).map(|_| ()),
         FsType::Ext4 => Err(-30),
         FsType::Fat32 => {
-            let mp = mount_point_for(&h.subpath, path);
+            let mp = mount_point_for(&h.subpath, &resolved);
             let mut mounts = crate::fs::fat32::FAT_MOUNTS.lock();
             let fs = mounts.get_mut(&mp).ok_or(-2isize)?;
             fs.unlink(&h.subpath)
         },
-        FsType::Tmpfs => crate::fs::tmpfs::tmpfs_unlink(path),
+        FsType::Tmpfs => crate::fs::tmpfs::tmpfs_unlink(&resolved),
         FsType::Overlayfs => {
             let om = overlay_mount(&h)?;
             crate::fs::overlayfs::unlink(&om, &h.subpath)
@@ -421,24 +473,59 @@ pub fn unlink(path: &str) -> Result<(), isize> {
         _ => Err(-1),
     };
     if result.is_ok() {
-        dcache::invalidate(path);
+        dcache::invalidate(&resolved);
     }
     result
 }
 
 pub fn rename(old: &str, new: &str) -> Result<(), isize> {
-    let h_o = mount::resolve(old)?;
-    let h_n = mount::resolve(new)?;
+    use crate::fs::vfs::rename::{rename_preflight, RenameArgs};
+    use crate::fs::vfs::open_check::flags::O_NOFOLLOW;
+
+    // Resolve symlinks in parent components; the final component is the
+    // name being renamed — do NOT follow it.
+    let old_r = crate::fs::vfs::resolve_path(old, O_NOFOLLOW)?;
+    let new_r = crate::fs::vfs::resolve_path(new, O_NOFOLLOW)?;
+
+    let h_o = mount::resolve(&old_r)?;
+    let h_n = mount::resolve(&new_r)?;
     if h_o.fstype != h_n.fstype {
-        return Err(-18);
+        return Err(-18); // EXDEV
     }
     if h_o.is_readonly() {
-        return Err(-30);
+        return Err(-30); // EROFS
     }
+
+    let old_stat = stat(&old_r)?;
+    let new_stat_r = stat(&new_r);
+    let new_exists    = new_stat_r.is_ok();
+    let new_mode      = new_stat_r.as_ref().map(|s| s.mode).unwrap_or(0);
+    let new_dir_empty = if new_exists
+        && new_stat_r.as_ref().map(|s| s.is_dir).unwrap_or(false)
+    {
+        readdir(&new_r)
+            .map(|es| es.iter().all(|e| e.name == "." || e.name == ".."))
+            .unwrap_or(true)
+    } else {
+        true
+    };
+
+    rename_preflight(RenameArgs {
+        old_path:      &old_r,
+        new_path:      &new_r,
+        old_dev:       0,
+        new_dev:       0,
+        old_mode:      old_stat.mode,
+        new_exists,
+        new_mode,
+        new_dir_empty,
+        readonly:      h_o.is_readonly(),
+    })?;
+
     let result = match h_o.fstype {
-        FsType::Btrfs => crate::fs::btrfs::btrfs_rename(old, new),
-        FsType::Tmpfs => crate::fs::tmpfs::tmpfs_rename(old, new),
-        FsType::Ext2 => crate::fs::ext2::sys_rename(old, new).map(|_| ()),
+        FsType::Btrfs => crate::fs::btrfs::btrfs_rename(&old_r, &new_r),
+        FsType::Tmpfs => crate::fs::tmpfs::tmpfs_rename(&old_r, &new_r),
+        FsType::Ext2 => crate::fs::ext2::sys_rename(&old_r, &new_r).map(|_| ()),
         FsType::Ext4 => Err(-30),
         FsType::Overlayfs => {
             let om = overlay_mount(&h_o)?;
@@ -447,8 +534,8 @@ pub fn rename(old: &str, new: &str) -> Result<(), isize> {
         _ => Err(-38),
     };
     if result.is_ok() {
-        dcache::invalidate(old);
-        dcache::invalidate(new);
+        dcache::invalidate(&old_r);
+        dcache::invalidate(&new_r);
     }
     result
 }
@@ -914,6 +1001,15 @@ fn mount_point_for(subpath: &str, full_path: &str) -> String {
         "/".to_string()
     } else {
         trimmed
+    }
+}
+
+/// Returns the parent directory of an absolute path.
+/// `/a/b/c` → `/a/b`; `/foo` → `/`; `/` → `/`.
+fn parent_path(path: &str) -> String {
+    match path.rfind('/') {
+        Some(0) | None => "/".to_string(),
+        Some(i)        => path[..i].to_string(),
     }
 }
 

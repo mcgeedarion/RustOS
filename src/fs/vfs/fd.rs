@@ -68,7 +68,72 @@ fn lsm_check_existing(path: &str, flags: u32) -> Result<(), isize> {
     Ok(())
 }
 
+/// Increment the inode open-counter for the file at `path` (best-effort).
+/// Called after the fd is installed so that deferred-unlink can track
+/// whether any open descriptions still reference the inode.
+fn inc_open_for_path(path: &str) {
+    use crate::fs::vfs::inode_ref::{inc_open, InodeKey};
+    if let Ok(s) = crate::fs::vfs_ops::stat(path) {
+        inc_open(InodeKey { dev: 0, ino: s.ino });
+    }
+}
+
+/// Decrement the inode open-counter and, if the counter reaches zero while
+/// the inode is already marked unlinked, remove the backing file.
+/// Returns `true` if the inode should now be freed by the backend.
+fn dec_open_for_path(path: &str) -> bool {
+    use crate::fs::vfs::inode_ref::{dec_open, InodeKey};
+    match crate::fs::vfs_ops::stat(path) {
+        Ok(s) => dec_open(InodeKey { dev: 0, ino: s.ino }),
+        Err(_) => false,
+    }
+}
+
 pub fn open_raw(path: &str, flags: u32) -> Result<usize, isize> {
+    // ── 1. Symlink resolution ────────────────────────────────────────
+    let resolved = crate::fs::vfs::resolve_path(path, flags)?;
+    let path: &str = &resolved;
+
+    // ── 2. DAC pre-flight ────────────────────────────────────────────
+    {
+        use crate::fs::vfs::open_check::{open_preflight, InodeInfo};
+        use crate::fs::vfs::perm::InodePerm;
+        use crate::fs::vfs::open_check::flags as oflags;
+
+        let (info, exists) = match crate::fs::vfs_ops::stat(path) {
+            Ok(s) => {
+                let readonly = crate::fs::mount::resolve(path)
+                    .map(|h| h.is_readonly())
+                    .unwrap_or(false);
+                let info = InodeInfo {
+                    exists:   true,
+                    mode:     s.mode,
+                    perm:     InodePerm { uid: s.uid, gid: s.gid, mode: s.mode },
+                    readonly,
+                };
+                (info, true)
+            },
+            Err(-2) => {
+                let readonly = crate::fs::mount::resolve(path)
+                    .map(|h| h.is_readonly())
+                    .unwrap_or(false);
+                let info = InodeInfo {
+                    exists:   false,
+                    mode:     0,
+                    perm:     InodePerm { uid: 0, gid: 0, mode: 0 },
+                    readonly,
+                };
+                (info, false)
+            },
+            Err(e) => return Err(e),
+        };
+
+        let creds = crate::proc::current_creds();
+        open_preflight(path, flags, creds, info)?;
+        let _ = exists; // used by the LSM path below
+    }
+
+    // ── 3. LSM hook (existing path or creation) ──────────────────────
     match lsm_check_existing(path, flags) {
         Ok(()) => {},
         Err(-2) if flags & O_CREAT != 0 => {
@@ -80,6 +145,7 @@ pub fn open_raw(path: &str, flags: u32) -> Result<usize, isize> {
         Err(e) => return Err(e),
     }
 
+    // ── 4. Allocate fd ───────────────────────────────────────────────
     let fd = alloc_raw_fd().ok_or(-24isize)?;
     RAW_FDS.lock().insert(
         fd,
@@ -89,6 +155,12 @@ pub fn open_raw(path: &str, flags: u32) -> Result<usize, isize> {
             flags,
         },
     );
+
+    // ── 5. Track open count ──────────────────────────────────────────
+    if !path.is_empty() {
+        inc_open_for_path(path);
+    }
+
     Ok(fd)
 }
 
@@ -107,10 +179,21 @@ pub fn open_anon(flags: u32) -> Result<usize, isize> {
 }
 
 pub fn close_raw(fd: usize) -> isize {
-    if RAW_FDS.lock().remove(&fd).is_some() {
-        0
-    } else {
-        -9
+    let removed = RAW_FDS.lock().remove(&fd);
+    match removed {
+        None => -9, // EBADF
+        Some(r) => {
+            // Decrement open-count; if the file was unlinked and this was
+            // the last reference, ask the backend to free the inode data.
+            if !r.path.is_empty() {
+                let should_free = dec_open_for_path(&r.path);
+                if should_free {
+                    // Best-effort deferred removal — ignore any error.
+                    let _ = crate::fs::vfs_ops::unlink(&r.path);
+                }
+            }
+            0
+        },
     }
 }
 
@@ -201,6 +284,10 @@ pub fn dup_as_raw(old_fd: usize, new_fd: usize) -> isize {
         Some(r) => r,
         None => return -9,
     };
+    // The dup'd fd shares the same inode — increment the open counter.
+    if !raw.path.is_empty() {
+        inc_open_for_path(&raw.path);
+    }
     RAW_FDS.lock().insert(new_fd, raw);
     new_fd as isize
 }
@@ -210,6 +297,10 @@ pub fn dup_from_raw(fd: usize, min_fd: usize) -> isize {
         Some(r) => r,
         None => return -9,
     };
+    // Increment before inserting so the count is always correct.
+    if !raw.path.is_empty() {
+        inc_open_for_path(&raw.path);
+    }
     let mut fds = RAW_FDS.lock();
     let new_fd =
         (min_fd.max(RAW_FD_BASE)..RAW_FD_END).find(|candidate| !fds.contains_key(candidate));

@@ -125,3 +125,19 @@ pub mod wait;
 
 // GUESS: callers use crate::proc::cow_fault; canonical is mm::cow_fault.
 pub use crate::mm::cow_fault;
+
+/// Returns the effective credentials of the currently-running task as a
+/// `perm::Creds` value ready for VFS DAC checks.
+///
+/// Falls back to root (`uid/gid/euid/egid = 0`) on any scheduler miss so
+/// that kernel-internal paths (init, IRQ context) always succeed.
+pub fn current_creds() -> crate::fs::vfs::perm::Creds {
+    let pid = crate::proc::scheduler::current_pid();
+    crate::proc::scheduler::with_proc(pid, |p| crate::fs::vfs::perm::Creds {
+        uid:  p.uid,
+        gid:  p.gid,
+        euid: p.euid,
+        egid: p.egid,
+    })
+    .unwrap_or(crate::fs::vfs::perm::Creds { uid: 0, gid: 0, euid: 0, egid: 0 })
+}
