@@ -25,7 +25,8 @@
 //!  12. mount_root()                  — ext2 or ramfs
 //!  12b. gdbstub::session::init()      — /dev/gdbstub on COM1 [cfg(gdbstub)]
 //!  13. spawn_init()                  — PID 1
-//!  14. idle loop
+//!  14. RUSTOS_BOOT_OK sentinel        — stable CI marker (see docs/ci.md)
+//!  15. idle loop
 
 use crate::arch::x86_64::{
     apic::{apic_init, calibrate_lapic_timer},
@@ -155,6 +156,13 @@ pub fn init(_boot_info: &'static BootInfo) -> ! {
     if !spawned {
         crate::serial_println!("init: no init binary found — idle");
     }
+
+    // -----------------------------------------------------------------------
+    // CI boot sentinel — printed exactly once, just before the idle loop.
+    // Format is stable; do not change without bumping the version token.
+    // See docs/ci.md for the full contract.
+    // -----------------------------------------------------------------------
+    crate::serial_println!("RUSTOS_BOOT_OK v1");
 
     crate::serial_println!("kernel_main: idle");
     loop {

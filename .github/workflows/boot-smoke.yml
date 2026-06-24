@@ -263,6 +263,11 @@ jobs:
         run: |
           grep -q 'RustOS \[PRIMARY\] x86_64 booting via UEFI' qemu-x86_64-boot.log
 
+      # Stable sentinel check — see docs/ci.md for the full contract.
+      - name: Assert x86_64 boot sentinel (RUSTOS_BOOT_OK)
+        run: |
+          grep -q 'RUSTOS_BOOT_OK' qemu-x86_64-boot.log
+
       - name: Upload x86_64 boot logs
         if: always()
         uses: actions/upload-artifact@v4
