@@ -127,8 +127,17 @@ pub trait UserspaceBootArch {
 /// enqueued, or the kernel panics with a diagnostic message.
 pub fn enter<A: UserspaceBootArch>(boot_info: &'static BootInfo) -> ! {
     A::early_console_init();
+
+    // ── Milestone 1: kernel entry ────────────────────────────────────────────
+    crate::boot_mark!("BOOT_ENTRY");
+
     crate::serial_println!("rustos: userspace_boot milestone — arch={}", A::NAME);
     let _ = boot_info; // reserved for future use (memory map, ACPI tables, …)
+
+    // ── Milestone 2: MMU/paging enabled ─────────────────────────────────────
+    // The arch stub enables the MMU before calling enter(); we record it
+    // here as the first common-path observation after virtual memory is live.
+    crate::boot_mark!("BOOT_MMU_ON");
 
     // ── Step 1: parse the CPIO archive and populate the VFS ramfs tree ──────
     //
@@ -136,6 +145,9 @@ pub fn enter<A: UserspaceBootArch>(boot_info: &'static BootInfo) -> ! {
     // through the VFS so that PID 1 and its children can open them with
     // normal syscalls.
     crate::fs::initramfs::mount_initramfs();
+
+    // ── Milestone 3: initramfs fully parsed and mapped ───────────────────────
+    crate::boot_mark!("BOOT_INITRAMFS_LOADED");
 
     // ── Step 2: locate /init in the raw archive bytes ───────────────────────
     //
@@ -197,6 +209,14 @@ pub fn enter<A: UserspaceBootArch>(boot_info: &'static BootInfo) -> ! {
     }
 
     crate::serial_println!("init: PID 1 created from /init");
+
+    // ── Milestone 4: /init first instruction (execve called) ─────────────────
+    // spawn_user_process_from_bytes has enqueued the PID 1 thread; the next
+    // scheduler tick will deliver execution to /init's entry point.  We record
+    // the marker here — immediately before parking the boot CPU — as the
+    // closest observable proxy for "execve returned / first userspace tick".
+    crate::boot_mark!("BOOT_INIT_EXEC");
+
     crate::serial_println!("FULL_OS_USERSPACE_OK");
 
     // ── Step 4: become the idle thread ──────────────────────────────────────

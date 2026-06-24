@@ -59,8 +59,10 @@ extern crate alloc;
 //   debug       — Debugging infrastructure  [cfg(gdbstub | debug | trace)]
 //   kernel      — Core kernel utilities (panic, rand, uaccess, utils)
 //   kmtest      — Kernel test harness  [cfg(feature = "kmtest")]
+//   boot_perf   — Boot performance markers (boot_mark! macro)
 
 pub mod arch;
+pub mod boot_perf;
 pub mod console;
 pub mod init;
 pub mod kernel;

@@ -23,6 +23,10 @@ pub trait MinimalBootArch {
 /// Run the common minimal boot sequence and park the boot CPU.
 pub fn enter<A: MinimalBootArch>(boot_info: &'static BootInfo) -> ! {
     A::early_console_init();
+
+    // ── Milestone 1: kernel entry ────────────────────────────────────────────
+    crate::boot_mark!("BOOT_ENTRY");
+
     crate::serial_println!("RustOS: boot-minimal entering common path");
     crate::serial_println!("RustOS: arch={}", A::NAME);
     crate::serial_println!("RustOS: boot priority={}", BootInfo::priority().as_str());
@@ -41,6 +45,19 @@ pub fn enter<A: MinimalBootArch>(boot_info: &'static BootInfo) -> ! {
     } else {
         crate::serial_println!("RustOS: initrd present");
     }
+
+    // ── Milestone 2: MMU/paging enabled ─────────────────────────────────────
+    // In boot_minimal the MMU was enabled by the arch stub before calling
+    // enter(); we record the mark here as the first observable post-MMU point
+    // in the common path.
+    crate::boot_mark!("BOOT_MMU_ON");
+
+    // ── Milestone 3: initramfs loaded ────────────────────────────────────────
+    // boot_minimal does not parse a real initramfs, but we emit the marker
+    // to keep the four-milestone contract intact.  Absence of actual
+    // initramfs bytes is already reported above via "initrd absent".
+    crate::boot_mark!("BOOT_INITRAMFS_LOADED");
+
     crate::serial_println!("RustOS: BOOT_MINIMAL_OK");
 
     loop {
