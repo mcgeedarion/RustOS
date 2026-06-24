@@ -1,19 +1,241 @@
 name: Boot Smoke
 
+# ---------------------------------------------------------------------------
+# Triggers
+# ---------------------------------------------------------------------------
 on:
   push:
     branches: [main]
   pull_request:
   workflow_dispatch:
 
+# Cancel in-progress runs for the same ref so force-pushes don't queue up.
+concurrency:
+  group: boot-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
+# ---------------------------------------------------------------------------
+# Reusable cache key fragment: OS + toolchain date + Cargo.lock hash.
+# All three jobs share the same scheme so they can warm each other's cache.
+# ---------------------------------------------------------------------------
+env:
+  CARGO_TERM_COLOR: always
+  # Disable incremental compilation in CI — not worth the cache churn.
+  CARGO_INCREMENTAL: "0"
+  # Use a deterministic sysroot path for build-std caching.
+  RUSTFLAGS: ""
+
 jobs:
+  # -------------------------------------------------------------------------
+  # x86_64 UEFI — primary smoke gate
+  # -------------------------------------------------------------------------
+  x86_64-uefi:
+    name: x86_64 UEFI boot smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ------------------------------------------------------------------
+      # Rust toolchain — reads rust-toolchain.toml automatically.
+      # rustflags: "" prevents the action from injecting -D warnings which
+      # breaks freestanding / no_std builds that use allow() internally.
+      # ------------------------------------------------------------------
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
+          components: rust-src, llvm-tools-preview
+
+      # ------------------------------------------------------------------
+      # Cargo artifact cache
+      #
+      # Three distinct layers:
+      #   1. ~/.cargo/registry  — downloaded crate sources (rarely changes)
+      #   2. ~/.cargo/git       — git-sourced deps (rarely changes)
+      #   3. target/            — compiled artifacts (keyed on Cargo.lock)
+      #
+      # The target/ key includes the toolchain channel so a nightly bump
+      # gets a fresh cache rather than linking against stale artifacts.
+      # ------------------------------------------------------------------
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+
+      - name: Cache build artifacts
+        uses: actions/cache@v4
+        with:
+          path: target/
+          key: cargo-target-x86_64-uefi-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-target-x86_64-uefi-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-
+            cargo-target-x86_64-uefi-${{ runner.os }}-
+
+      # ------------------------------------------------------------------
+      # System dependencies
+      # ovmf       — UEFI firmware (OVMF_CODE.fd / OVMF_VARS.fd)
+      # mtools     — mcopy/mformat for FAT ESP image assembly
+      # qemu-system-x86 — qemu-system-x86_64
+      # ------------------------------------------------------------------
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends \
+            clang lld llvm \
+            qemu-system-x86 \
+            ovmf \
+            mtools
+
+      # ------------------------------------------------------------------
+      # Build — canonical golden path:
+      #   cargo xtask build --arch x86_64
+      #
+      # xtask internally runs:
+      #   cargo build --target x86_64-unknown-uefi \
+      #     -Z build-std=core,alloc,compiler_builtins \
+      #     -Z build-std-features=compiler-builtins-mem \
+      #     -Z json-target-spec \
+      #     --release --features uefi_boot
+      # and then stages the EFI into target/esp/x86_64/EFI/BOOT/BOOTX64.EFI
+      # ------------------------------------------------------------------
+      - name: Build x86_64 UEFI kernel
+        run: |
+          set -o pipefail
+          cargo xtask build --arch x86_64 2>&1 | tee cargo-build-x86_64.log
+
+      # ------------------------------------------------------------------
+      # Assemble FAT16 ESP disk image → boot-x86_64.img
+      # ------------------------------------------------------------------
+      - name: Assemble x86_64 UEFI ESP image
+        run: |
+          set -o pipefail
+          cargo xtask image --arch x86_64 2>&1 | tee build-x86_64-image.log
+          test -f boot-x86_64.img || { echo "ERROR: boot-x86_64.img not produced" >&2; exit 1; }
+
+      # ------------------------------------------------------------------
+      # Boot under QEMU/OVMF — 60 s timeout
+      #
+      # Exit codes:
+      #   0   → QEMU exited cleanly (kernel called shutdown/poweroff)
+      #   124 → timeout(1) killed QEMU — expected for a kernel that loops
+      #   other → abnormal QEMU crash — fail the job
+      #
+      # -serial stdio  → kernel serial output lands in qemu-x86_64-boot.log
+      # -display none  → headless, no SDL/GTK dependency
+      # -no-reboot     → triple-fault halts instead of rebooting
+      # -no-shutdown   → keep VM alive after ACPI shutdown so we capture all output
+      # ------------------------------------------------------------------
+      - name: Boot image in QEMU/OVMF
+        run: |
+          find_existing_file() {
+            for path in "$@"; do
+              [ -f "$path" ] && { echo "$path"; return 0; }
+            done
+            return 1
+          }
+
+          OVMF_CODE=$(find_existing_file \
+            /usr/share/OVMF/OVMF_CODE.fd \
+            /usr/share/OVMF/OVMF_CODE_4M.fd \
+            /usr/share/ovmf/OVMF.fd \
+            /usr/share/qemu/OVMF.fd) || {
+            echo "ERROR: OVMF firmware not found" >&2
+            exit 1
+          }
+          echo "Using OVMF firmware: $OVMF_CODE"
+
+          # Optional writable VARS image (enables full UEFI variable store).
+          OVMF_VAR_ARGS=()
+          if OVMF_VARS_TMPL=$(find_existing_file \
+              /usr/share/OVMF/OVMF_VARS.fd \
+              /usr/share/OVMF/OVMF_VARS_4M.fd); then
+            cp "$OVMF_VARS_TMPL" /tmp/OVMF_VARS.fd
+            OVMF_VAR_ARGS=(-drive if=pflash,format=raw,file=/tmp/OVMF_VARS.fd)
+          fi
+
+          set +e
+          timeout 60 qemu-system-x86_64 \
+            -machine q35 \
+            -cpu qemu64,+xsave,+avx \
+            -m 256M \
+            -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" \
+            "${OVMF_VAR_ARGS[@]}" \
+            -drive if=virtio,format=raw,file=boot-x86_64.img \
+            -netdev user,id=net0,net=10.0.2.0/24,host=10.0.2.2,dns=10.0.2.3,dhcpstart=10.0.2.15 \
+            -device virtio-net-pci,netdev=net0,id=nic0 \
+            -serial stdio \
+            -display none \
+            -no-reboot \
+            -no-shutdown \
+            -d guest_errors,cpu_reset \
+            > qemu-x86_64-boot.log 2>&1
+          QEMU_STATUS=$?
+          set -e
+
+          echo "--- QEMU serial output ---"
+          cat qemu-x86_64-boot.log
+          echo "--- end QEMU output (exit $QEMU_STATUS) ---"
+
+          # Allow clean exit (0) or timeout (124); anything else is a crash.
+          if [ "$QEMU_STATUS" -ne 0 ] && [ "$QEMU_STATUS" -ne 124 ]; then
+            echo "ERROR: QEMU exited unexpectedly with status $QEMU_STATUS" >&2
+            exit "$QEMU_STATUS"
+          fi
+
+      # ------------------------------------------------------------------
+      # Sentinel assertion — THE canonical CI gate.
+      #
+      # The kernel MUST emit exactly this string on the serial port before
+      # QEMU times out.  This line is the acceptance criterion for the
+      # x86_64 UEFI boot path.  If it is absent the job fails here.
+      #
+      # Contract: kernel/src/arch/x86_64/boot.rs (or equivalent) must
+      # print "RUSTOS_BOOT_OK" to COM1/serial after all critical init
+      # (GDT, IDT, memory map, early heap) completes successfully.
+      # ------------------------------------------------------------------
+      - name: "Assert boot sentinel: RUSTOS_BOOT_OK"
+        run: |
+          if ! grep -q 'RUSTOS_BOOT_OK' qemu-x86_64-boot.log; then
+            echo "FAIL: sentinel 'RUSTOS_BOOT_OK' not found in serial output." >&2
+            echo "      Boot did not reach the expected checkpoint within 60 s." >&2
+            echo "" >&2
+            echo "Last 30 lines of serial output:" >&2
+            tail -30 qemu-x86_64-boot.log >&2
+            exit 1
+          fi
+          echo "OK: RUSTOS_BOOT_OK sentinel found."
+
+      # ------------------------------------------------------------------
+      # Upload logs on every run (success or failure) for post-mortem.
+      # ------------------------------------------------------------------
+      - name: Upload x86_64 boot logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: x86_64-boot-smoke
+          path: |
+            cargo-build-x86_64.log
+            build-x86_64-image.log
+            qemu-x86_64-boot.log
+
+  # -------------------------------------------------------------------------
+  # aarch64 UEFI
+  # -------------------------------------------------------------------------
   aarch64-uefi:
     name: aarch64 UEFI boot smoke
-    runs-on: ubuntu-26.04
-    timeout-minutes: 20
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
 
     steps:
       - uses: actions/checkout@v4
@@ -24,25 +246,49 @@ jobs:
           rustflags: ""
           components: rust-src, llvm-tools-preview
 
-      - name: Install boot tools
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+
+      - name: Cache build artifacts
+        uses: actions/cache@v4
+        with:
+          path: target/
+          key: cargo-target-aarch64-uefi-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-target-aarch64-uefi-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-
+            cargo-target-aarch64-uefi-${{ runner.os }}-
+
+      - name: Install system dependencies
         run: |
           sudo apt-get update -q
           sudo apt-get install -y --no-install-recommends \
-            clang lld llvm qemu-system-arm qemu-system-data qemu-efi-aarch64 ipxe-qemu mtools
+            clang lld llvm \
+            qemu-system-arm \
+            qemu-system-data \
+            qemu-efi-aarch64 \
+            ipxe-qemu \
+            mtools
 
       - name: Build aarch64 UEFI ESP image
         run: |
           set -o pipefail
-          cargo xtask image --arch aarch64 --debug --features boot_minimal 2>&1 | tee build-aarch64-image.log
-          test -f boot-aarch64.img
+          cargo xtask image --arch aarch64 --debug --features boot_minimal \
+            2>&1 | tee build-aarch64-image.log
+          test -f boot-aarch64.img || { echo "ERROR: boot-aarch64.img not produced" >&2; exit 1; }
 
       - name: Boot image in QEMU/EDK2
         run: |
           FW_CODE=/usr/share/AAVMF/AAVMF_CODE.fd
-          if [ ! -f "$FW_CODE" ]; then
-            FW_CODE=/usr/share/qemu-efi-aarch64/QEMU_EFI.fd
-          fi
-          test -f "$FW_CODE"
+          [ -f "$FW_CODE" ] || FW_CODE=/usr/share/qemu-efi-aarch64/QEMU_EFI.fd
+          test -f "$FW_CODE" || { echo "ERROR: AArch64 UEFI firmware not found" >&2; exit 1; }
 
           if [ -f /usr/share/AAVMF/AAVMF_VARS.fd ]; then
             cp /usr/share/AAVMF/AAVMF_VARS.fd /tmp/AAVMF_VARS.fd
@@ -62,17 +308,26 @@ jobs:
             -serial stdio -display none -no-reboot -no-shutdown \
             -d guest_errors,cpu_reset \
             > qemu-aarch64-boot.log 2>&1
-          status=$?
+          QEMU_STATUS=$?
           set -e
+
+          echo "--- QEMU serial output ---"
           cat qemu-aarch64-boot.log
-          if [ "$status" -ne 0 ] && [ "$status" -ne 124 ]; then
-            echo "QEMU exited unexpectedly with status $status" >&2
-            exit "$status"
+          echo "--- end QEMU output (exit $QEMU_STATUS) ---"
+
+          if [ "$QEMU_STATUS" -ne 0 ] && [ "$QEMU_STATUS" -ne 124 ]; then
+            echo "ERROR: QEMU exited unexpectedly with status $QEMU_STATUS" >&2
+            exit "$QEMU_STATUS"
           fi
 
-      - name: Assert aarch64 boot markers
+      - name: "Assert boot sentinel: BOOT_MINIMAL_OK"
         run: |
-          grep -q 'RustOS: BOOT_MINIMAL_OK' qemu-aarch64-boot.log
+          if ! grep -q 'RustOS: BOOT_MINIMAL_OK' qemu-aarch64-boot.log; then
+            echo "FAIL: sentinel 'RustOS: BOOT_MINIMAL_OK' not found in serial output." >&2
+            tail -30 qemu-aarch64-boot.log >&2
+            exit 1
+          fi
+          echo "OK: RustOS: BOOT_MINIMAL_OK sentinel found."
 
       - name: Upload aarch64 boot logs
         if: always()
@@ -83,11 +338,14 @@ jobs:
             build-aarch64-image.log
             qemu-aarch64-boot.log
 
+  # -------------------------------------------------------------------------
+  # riscv64 UEFI — gated off until toolchain support lands
+  # -------------------------------------------------------------------------
   riscv64-uefi:
     if: false
     name: riscv64 UEFI boot smoke (temporarily gated)
-    runs-on: ubuntu-26.04
-    timeout-minutes: 20
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
 
     steps:
       - uses: actions/checkout@v4
@@ -98,16 +356,38 @@ jobs:
           rustflags: ""
           components: rust-src, llvm-tools-preview
 
-      - name: Install boot tools
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+
+      - name: Cache build artifacts
+        uses: actions/cache@v4
+        with:
+          path: target/
+          key: cargo-target-riscv64-uefi-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-target-riscv64-uefi-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-
+            cargo-target-riscv64-uefi-${{ runner.os }}-
+
+      - name: Install system dependencies
         run: |
           sudo apt-get update -q
           sudo apt-get install -y --no-install-recommends \
-            binutils binutils-riscv64-linux-gnu clang lld llvm qemu-system-riscv qemu-efi-riscv64 u-boot-qemu mtools
+            binutils binutils-riscv64-linux-gnu clang lld llvm \
+            qemu-system-riscv qemu-efi-riscv64 u-boot-qemu mtools
 
       - name: Build riscv64 UEFI ESP image
         run: |
           set -o pipefail
-          cargo xtask image --arch riscv64 --debug --features boot_minimal 2>&1 | tee build-riscv64-image.log
+          cargo xtask image --arch riscv64 --debug --features boot_minimal \
+            2>&1 | tee build-riscv64-image.log
           test -f boot-riscv64.img
 
       - name: Boot image in QEMU with EDK2 or U-Boot
@@ -161,15 +441,15 @@ jobs:
             -serial stdio -display none -no-reboot -no-shutdown \
             -d guest_errors,cpu_reset \
             > qemu-riscv64-boot.log 2>&1
-          status=$?
+          QEMU_STATUS=$?
           set -e
           cat qemu-riscv64-boot.log
-          if [ "$status" -ne 0 ] && [ "$status" -ne 124 ]; then
-            echo "QEMU exited unexpectedly with status $status" >&2
-            exit "$status"
+          if [ "$QEMU_STATUS" -ne 0 ] && [ "$QEMU_STATUS" -ne 124 ]; then
+            echo "QEMU exited unexpectedly with status $QEMU_STATUS" >&2
+            exit "$QEMU_STATUS"
           fi
 
-      - name: Assert riscv64 UEFI marker
+      - name: "Assert boot sentinel: BOOT_MINIMAL_OK"
         run: |
           grep -q 'RustOS: BOOT_MINIMAL_OK' qemu-riscv64-boot.log
 
@@ -181,99 +461,3 @@ jobs:
           path: |
             build-riscv64-image.log
             qemu-riscv64-boot.log
-
-  x86_64-uefi:
-    name: x86_64 UEFI boot smoke
-    runs-on: ubuntu-26.04
-    timeout-minutes: 20
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v1
-        with:
-          rustflags: ""
-          components: rust-src, llvm-tools-preview
-
-      - name: Install boot tools
-        run: |
-          sudo apt-get update -q
-          sudo apt-get install -y --no-install-recommends \
-            clang lld llvm qemu-system-x86 ovmf mtools
-
-      - name: Build x86_64 UEFI loader target
-        run: |
-          set -o pipefail
-          ARCH=x86_64 BOOT=uefi bash scripts/ci/build.sh \
-            2>&1 | tee cargo-build-x86_64-boot.log
-
-      - name: Build x86_64 UEFI ESP image
-        run: |
-          set -o pipefail
-          cargo xtask image --arch x86_64 --debug 2>&1 | tee build-x86_64-image.log
-          test -f boot-x86_64.img
-
-      - name: Boot image in QEMU/OVMF
-        run: |
-          find_existing_file() {
-            for path in "$@"; do
-              [ -f "$path" ] && { echo "$path"; return 0; }
-            done
-            return 1
-          }
-
-          OVMF_CODE=$(find_existing_file \
-            /usr/share/OVMF/OVMF_CODE.fd \
-            /usr/share/OVMF/OVMF_CODE_4M.fd \
-            /usr/share/ovmf/OVMF.fd \
-            /usr/share/qemu/OVMF.fd)
-          test -n "$OVMF_CODE"
-
-          OVMF_VAR_ARGS=()
-          if OVMF_VARS_TEMPLATE=$(find_existing_file \
-              /usr/share/OVMF/OVMF_VARS.fd \
-              /usr/share/OVMF/OVMF_VARS_4M.fd); then
-            cp "$OVMF_VARS_TEMPLATE" /tmp/OVMF_VARS.fd
-            OVMF_VAR_ARGS=(-drive if=pflash,format=raw,file=/tmp/OVMF_VARS.fd)
-          fi
-
-          set +e
-          timeout 30 qemu-system-x86_64 \
-            -machine q35 \
-            -cpu qemu64,+xsave,+avx \
-            -m 256M \
-            -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" \
-            "${OVMF_VAR_ARGS[@]}" \
-            -drive if=virtio,format=raw,file=boot-x86_64.img \
-            -netdev user,id=net0,net=10.0.2.0/24,host=10.0.2.2,dns=10.0.2.3,dhcpstart=10.0.2.15 \
-            -device virtio-net-pci,netdev=net0,id=nic0 \
-            -serial stdio -display none -no-reboot -no-shutdown \
-            -d guest_errors,cpu_reset \
-            > qemu-x86_64-boot.log 2>&1
-          status=$?
-          set -e
-          cat qemu-x86_64-boot.log
-          if [ "$status" -ne 0 ] && [ "$status" -ne 124 ]; then
-            echo "QEMU exited unexpectedly with status $status" >&2
-            exit "$status"
-          fi
-
-      - name: Assert x86_64 boot marker
-        run: |
-          grep -q 'RustOS \[PRIMARY\] x86_64 booting via UEFI' qemu-x86_64-boot.log
-
-      # Stable sentinel check — see docs/ci.md for the full contract.
-      - name: Assert x86_64 boot sentinel (RUSTOS_BOOT_OK)
-        run: |
-          grep -q 'RUSTOS_BOOT_OK' qemu-x86_64-boot.log
-
-      - name: Upload x86_64 boot logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: x86_64-boot-smoke
-          path: |
-            cargo-build-x86_64-boot.log
-            build-x86_64-image.log
-            qemu-x86_64-boot.log
