@@ -7,6 +7,16 @@
 //!
 //! Canonical ESP staging path:
 //!   target/esp/<arch>/EFI/BOOT/BOOT*.EFI
+//!
+//! Golden-path developer on-ramp (Phase 1):
+//!   cargo xtask run --arch x86_64
+//!
+//! That single command:
+//!   1. Builds the kernel (x86_64-unknown-uefi, --features uefi_boot)
+//!   2. Stages the EFI binary into target/esp/x86_64/EFI/BOOT/BOOTX64.EFI
+//!   3. Assembles a FAT16 ESP disk image at boot-x86_64.img
+//!   4. Auto-downloads OVMF_CODE.fd into .ovmf/ if no system firmware found
+//!   5. Launches qemu-system-x86_64 with serial output on stdout
 
 use anyhow::{anyhow, bail, Context, Result};
 use std::{
@@ -17,6 +27,25 @@ use std::{
 
 const OS_RELEASE_CONTENT: &[u8] =
     b"NAME=RustOS\nID=rustos\nVERSION=0.1.0\nPRETTY_NAME=\"RustOS 0.1.0\"\n";
+
+/// Fedora mirror for a known-good OVMF build. Only fetched when no system
+/// OVMF is present and OVMF_CODE is not set in the environment.
+/// The file is cached at .ovmf/OVMF_CODE.fd after the first download.
+const OVMF_DOWNLOAD_URL: &str =
+    "https://dl.fedoraproject.org/pub/fedora/linux/releases/40/Everything/x86_64/os/Packages/e/\
+     edk2-ovmf-20231122-6.fc40.noarch.rpm";
+
+/// Well-known system paths where distros install OVMF.
+const OVMF_SYSTEM_CANDIDATES: &[&str] = &[
+    "/usr/share/OVMF/OVMF_CODE.fd",
+    "/usr/share/OVMF/OVMF_CODE_4M.fd",
+    "/usr/share/ovmf/OVMF.fd",
+    "/usr/share/qemu/OVMF.fd",
+    "/usr/share/edk2/x64/OVMF_CODE.fd",
+    "/usr/share/edk2-ovmf/OVMF_CODE.fd",
+    "/opt/homebrew/share/qemu/edk2-x86_64-code.fd", // macOS Homebrew
+    "/usr/local/share/qemu/edk2-x86_64-code.fd",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Arch {
@@ -429,6 +458,430 @@ fn image(root: &Path, opts: &BuildOpts) -> Result<()> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// OVMF firmware resolution
+// ---------------------------------------------------------------------------
+
+/// Returns a path to an OVMF_CODE.fd suitable for qemu-system-x86_64.
+///
+/// Resolution order:
+///   1. `OVMF_CODE` environment variable (user override, highest priority)
+///   2. Well-known system install paths (distro packages)
+///   3. `.ovmf/OVMF_CODE.fd` inside the workspace (previously auto-downloaded)
+///   4. Auto-download from Fedora mirrors into `.ovmf/OVMF_CODE.fd`
+///
+/// The download requires either `curl` or `wget` plus `rpm2cpio` and `cpio`
+/// on PATH. If none of those are available the function returns an actionable
+/// error message with manual install instructions.
+fn resolve_ovmf(root: &Path) -> Result<PathBuf> {
+    // 1. Explicit env override.
+    if let Ok(val) = env::var("OVMF_CODE") {
+        let p = PathBuf::from(&val);
+        if p.exists() {
+            log(format!("OVMF: using OVMF_CODE env override: {}", p.display()));
+            return Ok(p);
+        }
+        bail!(
+            "OVMF_CODE={val} is set but the file does not exist. \
+             Unset OVMF_CODE or point it at a real OVMF_CODE.fd."
+        );
+    }
+
+    // 2. System candidates.
+    for candidate in OVMF_SYSTEM_CANDIDATES {
+        let p = Path::new(candidate);
+        if p.exists() {
+            log(format!("OVMF: found system firmware: {}", p.display()));
+            return Ok(p.to_path_buf());
+        }
+    }
+
+    // 3. Cached download.
+    let cache_path = root.join(".ovmf/OVMF_CODE.fd");
+    if cache_path.exists() {
+        log(format!("OVMF: using cached firmware: {}", cache_path.display()));
+        return Ok(cache_path);
+    }
+
+    // 4. Auto-download.
+    log("OVMF: no system firmware found — attempting auto-download from Fedora mirrors");
+    log(format!("OVMF: source: {OVMF_DOWNLOAD_URL}"));
+    log("OVMF: (set OVMF_CODE=/path/to/OVMF_CODE.fd to skip this step)");
+
+    let ovmf_dir = root.join(".ovmf");
+    fs::create_dir_all(&ovmf_dir).context("create .ovmf cache directory")?;
+
+    let rpm_path = ovmf_dir.join("edk2-ovmf.rpm");
+
+    // Download the RPM.
+    if which_first(&["curl"]).is_some() {
+        run(Command::new("curl")
+            .args(["-fSL", "--retry", "3", "-o"])
+            .arg(&rpm_path)
+            .arg(OVMF_DOWNLOAD_URL))?;
+    } else if which_first(&["wget"]).is_some() {
+        run(Command::new("wget")
+            .args(["-q", "-O"])
+            .arg(&rpm_path)
+            .arg(OVMF_DOWNLOAD_URL))?;
+    } else {
+        bail!(
+            "OVMF firmware not found and neither curl nor wget is available for auto-download.\n\
+             \n\
+             Install OVMF manually, then either:\n\
+             • Set OVMF_CODE=/path/to/OVMF_CODE.fd, or\n\
+             • Copy the file to .ovmf/OVMF_CODE.fd in the workspace root.\n\
+             \n\
+             Distro packages:\n\
+             • Debian/Ubuntu: sudo apt install ovmf\n\
+             • Fedora/RHEL:   sudo dnf install edk2-ovmf\n\
+             • Arch:          sudo pacman -S edk2-ovmf\n\
+             • macOS:         brew install qemu  # bundles edk2-x86_64-code.fd"
+        );
+    }
+
+    // Extract OVMF_CODE.fd from the RPM using rpm2cpio + cpio.
+    // The RPM contains usr/share/edk2/x64/OVMF_CODE.fd (Fedora layout).
+    if which_first(&["rpm2cpio"]).is_none() || which_first(&["cpio"]).is_none() {
+        // Fallback: if we happen to have rpm installed we can try `rpm -i`.
+        // Otherwise give a clear error.
+        bail!(
+            "Downloaded OVMF RPM to {} but rpm2cpio/cpio are not available to extract it.\n\
+             \n\
+             Extract manually:\n\
+             • rpm2cpio {} | cpio -idmv\n\
+             • Then: cp usr/share/edk2/x64/OVMF_CODE.fd .ovmf/OVMF_CODE.fd\n\
+             \n\
+             Or install OVMF via your distro package manager (see above).",
+            rpm_path.display(),
+            rpm_path.display()
+        );
+    }
+
+    // rpm2cpio <rpm> | cpio -idm --no-absolute-filenames
+    // Run inside ovmf_dir so extracted paths land there.
+    let rpm2cpio_out = Command::new("rpm2cpio")
+        .arg(&rpm_path)
+        .output()
+        .context("rpm2cpio failed")?;
+    if !rpm2cpio_out.status.success() {
+        bail!("rpm2cpio exited with {}", rpm2cpio_out.status);
+    }
+    run(Command::new("cpio")
+        .current_dir(&ovmf_dir)
+        .args(["-idm", "--no-absolute-filenames", "--quiet"])
+        .stdin(std::process::Stdio::piped())
+        // We'll do this as two steps: write rpm2cpio stdout to cpio stdin.
+        // Simplest portable approach: write to a temp file then pipe.
+        // We already have the bytes in memory from .output() above.
+        .stdin({
+            use std::io::Write;
+            let mut child_in = Command::new("cpio")
+                .current_dir(&ovmf_dir)
+                .args(["-idm", "--no-absolute-filenames", "--quiet"])
+                .stdin(std::process::Stdio::piped())
+                .spawn()
+                .context("spawn cpio")?;
+            child_in
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(&rpm2cpio_out.stdout)
+                .context("write to cpio stdin")?;
+            let status = child_in.wait().context("wait cpio")?;
+            if !status.success() {
+                bail!("cpio exited with {status}");
+            }
+            // Return a dummy Stdio — we've already run cpio above.
+            std::process::Stdio::null()
+        }))?;
+
+    // Locate the extracted OVMF_CODE.fd (Fedora layout).
+    let extracted = ovmf_dir.join("usr/share/edk2/x64/OVMF_CODE.fd");
+    if !extracted.exists() {
+        bail!(
+            "Extracted RPM but could not find usr/share/edk2/x64/OVMF_CODE.fd under {}.\n\
+             Please copy your OVMF_CODE.fd to .ovmf/OVMF_CODE.fd manually.",
+            ovmf_dir.display()
+        );
+    }
+    fs::copy(&extracted, &cache_path).context("copy extracted OVMF_CODE.fd to .ovmf/")?;
+    // Clean up the extracted tree but keep the cache file.
+    let _ = fs::remove_dir_all(ovmf_dir.join("usr"));
+    let _ = fs::remove_file(&rpm_path);
+
+    log(format!("OVMF: cached at {}", cache_path.display()));
+    Ok(cache_path)
+}
+
+// ---------------------------------------------------------------------------
+// `run` subcommand — golden-path developer on-ramp
+// ---------------------------------------------------------------------------
+
+/// Build the kernel + ESP image and boot it in QEMU in one command.
+///
+/// ```text
+/// cargo xtask run --arch x86_64
+/// cargo xtask run --arch x86_64 --debug
+/// cargo xtask run --arch x86_64 --features boot_minimal
+/// ```
+///
+/// Serial output is forwarded to stdout. Press Ctrl-A X to quit QEMU.
+fn run_qemu(root: &Path, opts: &BuildOpts) -> Result<()> {
+    validate_contract(opts.arch, opts.boot)?;
+
+    if opts.boot != Boot::Uefi {
+        bail!(
+            "`cargo xtask run` only supports UEFI boot. \
+             For riscv64 SBI use `cargo xtask build --arch riscv64 --boot sbi` \
+             and invoke QEMU manually."
+        );
+    }
+
+    // Step 1 — build kernel + assemble FAT image.
+    log(format!(
+        "==> Step 1/3: building {} {} kernel",
+        arch_str(opts.arch),
+        boot_str(opts.boot)
+    ));
+    image(root, opts)?;
+
+    let img_path = root.join(image_name(opts.arch));
+    if !img_path.exists() {
+        bail!("disk image not found after build: {}", img_path.display());
+    }
+
+    match opts.arch {
+        Arch::X86_64 => run_qemu_x86_64(root, &img_path),
+        Arch::AArch64 => run_qemu_aarch64(root, &img_path),
+        Arch::RiscV64 => bail!(
+            "riscv64 UEFI QEMU launch is not yet wired into `cargo xtask run`; \
+             use scripts/ci/run_qemu.sh directly."
+        ),
+    }
+}
+
+fn run_qemu_x86_64(root: &Path, img_path: &Path) -> Result<()> {
+    let qemu = env::var("QEMU").unwrap_or_else(|_| "qemu-system-x86_64".into());
+    if which_first(&[&qemu]).is_none() {
+        bail!(
+            "`{qemu}` not found on PATH.\n\
+             Install with:\n\
+             • Debian/Ubuntu: sudo apt install qemu-system-x86\n\
+             • Fedora/RHEL:   sudo dnf install qemu-system-x86\n\
+             • Arch:          sudo pacman -S qemu-system-x86\n\
+             • macOS:         brew install qemu\n\
+             Or set the QEMU env var to the full path."
+        );
+    }
+
+    // Step 2 — resolve OVMF firmware.
+    log("==> Step 2/3: resolving OVMF firmware");
+    let ovmf_code = resolve_ovmf(root)?;
+
+    // Step 3 — launch QEMU.
+    log("==> Step 3/3: launching QEMU (serial → stdout; Ctrl-A X to quit)");
+    log(format!("    image:    {}", img_path.display()));
+    log(format!("    firmware: {}", ovmf_code.display()));
+
+    let mut cmd = Command::new(&qemu);
+    cmd
+        // Machine + CPU.
+        .args(["-machine", "q35"])
+        .args(["-cpu", "qemu64"])
+        .args(["-m", "256M"])
+        // OVMF firmware (read-only pflash).
+        .arg("-drive")
+        .arg(format!(
+            "if=pflash,format=raw,readonly=on,file={}",
+            ovmf_code.display()
+        ))
+        // Boot disk.
+        .arg("-drive")
+        .arg(format!("format=raw,file={},if=virtio", img_path.display()))
+        // Serial on stdout, no graphical window.
+        .args(["-serial", "stdio"])
+        .args(["-display", "none"])
+        // Don't loop on triple-fault; keep the VM up after kernel halt.
+        .args(["-no-reboot"])
+        .args(["-no-shutdown"]);
+
+    log(format!("running: {cmd:?}"));
+    // exec-replace on Unix so QEMU owns the terminal directly.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let err = cmd.exec();
+        bail!("failed to exec {qemu}: {err}");
+    }
+    #[cfg(not(unix))]
+    {
+        run(&mut cmd)
+    }
+}
+
+fn run_qemu_aarch64(root: &Path, img_path: &Path) -> Result<()> {
+    let qemu = env::var("QEMU").unwrap_or_else(|_| "qemu-system-aarch64".into());
+    if which_first(&[&qemu]).is_none() {
+        bail!("`{qemu}` not found on PATH. Install qemu-system-aarch64.");
+    }
+
+    // Resolve AArch64 UEFI firmware.
+    log("==> Step 2/3: resolving AArch64 UEFI firmware");
+    let fw = resolve_aavmf(root)?;
+
+    log("==> Step 3/3: launching QEMU AArch64 (serial → stdout; Ctrl-A X to quit)");
+    let mut cmd = Command::new(&qemu);
+    cmd.args(["-machine", "virt"])
+        .args(["-cpu", "cortex-a57"])
+        .args(["-m", "512M"])
+        .args(["-bios"])
+        .arg(&fw)
+        .arg("-drive")
+        .arg(format!("if=none,id=esp,format=raw,file={}", img_path.display()))
+        .args(["-device", "virtio-blk-device,drive=esp"])
+        .args(["-serial", "stdio"])
+        .args(["-display", "none"])
+        .args(["-no-reboot"])
+        .args(["-no-shutdown"]);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let err = cmd.exec();
+        bail!("failed to exec {qemu}: {err}");
+    }
+    #[cfg(not(unix))]
+    {
+        run(&mut cmd)
+    }
+}
+
+fn resolve_aavmf(root: &Path) -> Result<PathBuf> {
+    if let Ok(val) = env::var("QEMU_EFI") {
+        let p = PathBuf::from(&val);
+        if p.exists() {
+            return Ok(p);
+        }
+        bail!("QEMU_EFI={val} is set but the file does not exist.");
+    }
+    let candidates = [
+        "/usr/share/AAVMF/AAVMF_CODE.fd",
+        "/usr/share/AAVMF/AAVMF32_CODE.fd",
+        "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
+        "/usr/share/edk2/aarch64/QEMU_EFI.fd",
+        "/opt/homebrew/share/qemu/edk2-aarch64-code.fd",
+        "/usr/local/share/qemu/edk2-aarch64-code.fd",
+    ];
+    let cache = root.join(".ovmf/AAVMF_CODE.fd");
+    for c in &candidates {
+        let p = Path::new(c);
+        if p.exists() {
+            return Ok(p.to_path_buf());
+        }
+    }
+    if cache.exists() {
+        return Ok(cache);
+    }
+    bail!(
+        "AArch64 UEFI firmware not found.\n\
+         Install with:\n\
+         • Debian/Ubuntu: sudo apt install qemu-efi-aarch64\n\
+         • Fedora/RHEL:   sudo dnf install edk2-aarch64\n\
+         • macOS:         brew install qemu\n\
+         Or set QEMU_EFI=/path/to/QEMU_EFI.fd"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// `smoke` subcommand (unchanged logic, now uses inline QEMU invocation)
+// ---------------------------------------------------------------------------
+
+fn smoke(root: &Path) -> Result<()> {
+    let script = root.join("scripts/ci/run_qemu.sh");
+    if !script.exists() {
+        bail!("QEMU runner not found at {}", script.display());
+    }
+    run(Command::new(&script)
+        .current_dir(root)
+        .env("ARCH", "x86_64")
+        .arg("--boot")
+        .arg("uefi")
+        .arg("--smoke"))
+}
+
+// ---------------------------------------------------------------------------
+// Help
+// ---------------------------------------------------------------------------
+
+fn print_help() {
+    println!(
+        "cargo xtask <subcommand> [options]
+
+Subcommands:
+  run           Build kernel + image and boot in QEMU   ← golden path
+  build         Compile the kernel only
+  image         Build a FAT ESP disk image for UEFI
+  mkinitramfs   Build userspace and pack initramfs.cpio
+  smoke         Run x86_64 UEFI under QEMU (CI smoke test)
+  help          Show this help
+
+Golden-path one-liner:
+  cargo xtask run --arch x86_64
+
+Options (apply to run / build / image):
+  --arch <aarch64|riscv64|x86_64>   target architecture (default: x86_64)
+  --boot <uefi|sbi|baremetal>       boot protocol      (default: uefi)
+  --features <feat1,feat2,...>       extra Cargo features
+  --debug                            debug build (no --release)
+  --initrd                           also build + pack initramfs
+
+Environment variables:
+  OVMF_CODE     Path to OVMF_CODE.fd (x86_64 UEFI firmware)
+  QEMU_EFI      Path to QEMU_EFI.fd  (AArch64 UEFI firmware)
+  QEMU          QEMU binary to use   (default: qemu-system-<arch>)
+  CARGO         Cargo binary to use  (default: cargo)
+
+See docs/getting-started.md for the full developer on-ramp."
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Entry point
+// ---------------------------------------------------------------------------
+
+fn main() {
+    let mut args = env::args().skip(1);
+    let subcommand = args.next().unwrap_or_default();
+    let rest: Vec<String> = args.collect();
+    let root = workspace_root();
+    let result = match subcommand.as_str() {
+        "run" => run_qemu(&root, &parse_build_args(&rest)),
+        "build" => build_kernel(&root, &parse_build_args(&rest)),
+        "mkinitramfs" => {
+            let opts = parse_build_args(&rest);
+            mkinitramfs(&root, opts.arch)
+        },
+        "image" => image(&root, &parse_build_args(&rest)),
+        "smoke" => smoke(&root),
+        "help" | "--help" | "-h" | "" => {
+            print_help();
+            Ok(())
+        },
+        other => Err(anyhow!(
+            "unknown subcommand: {other:?}. Try `cargo xtask help`."
+        )),
+    };
+    if let Err(error) = result {
+        eprintln!("[xtask] ERROR: {error:#}");
+        exit(1);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FAT16 ESP writer (unchanged)
+// ---------------------------------------------------------------------------
+
 fn write_fat16_esp(img_path: &Path, efi_path: &Path, efi_name: &str) -> Result<()> {
     const BYTES_PER_SECTOR: usize = 512;
     const TOTAL_SECTORS: usize = 8192; // 4 MiB.
@@ -712,62 +1165,4 @@ fn write_dir_entry(
     entry[26..28].copy_from_slice(&first_cluster.to_le_bytes());
     entry[28..32].copy_from_slice(&size.to_le_bytes());
     Ok(())
-}
-
-fn smoke(root: &Path) -> Result<()> {
-    let script = root.join("scripts/ci/run_qemu.sh");
-    if !script.exists() {
-        bail!("QEMU runner not found at {}", script.display());
-    }
-    run(Command::new(&script)
-        .current_dir(root)
-        .env("ARCH", "x86_64")
-        .arg("--boot")
-        .arg("uefi")
-        .arg("--smoke"))
-}
-
-fn print_help() {
-    println!(
-        "cargo xtask <subcommand> [options]\n\n\
-Subcommands:\n\
-  build         Compile the kernel\n\
-  mkinitramfs   Build userspace and pack initramfs.cpio\n\
-  image         Build a FAT ESP disk image for UEFI\n\
-  smoke         Run x86_64 UEFI under QEMU\n\
-  help          Show this help\n\n\
-Build options:\n\
-  --arch <aarch64|riscv64|x86_64>\n\
-  --boot <uefi|sbi|baremetal>\n\
-  --features <features>\n\
-  --debug\n\
-  --initrd"
-    );
-}
-
-fn main() {
-    let mut args = env::args().skip(1);
-    let subcommand = args.next().unwrap_or_default();
-    let rest: Vec<String> = args.collect();
-    let root = workspace_root();
-    let result = match subcommand.as_str() {
-        "build" => build_kernel(&root, &parse_build_args(&rest)),
-        "mkinitramfs" => {
-            let opts = parse_build_args(&rest);
-            mkinitramfs(&root, opts.arch)
-        },
-        "image" => image(&root, &parse_build_args(&rest)),
-        "smoke" => smoke(&root),
-        "help" | "--help" | "-h" | "" => {
-            print_help();
-            Ok(())
-        },
-        other => Err(anyhow!(
-            "unknown subcommand: {other:?}. Try `cargo xtask help`."
-        )),
-    };
-    if let Err(error) = result {
-        eprintln!("[xtask] ERROR: {error:#}");
-        exit(1);
-    }
 }
