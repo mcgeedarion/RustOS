@@ -44,7 +44,7 @@ cc = "1"
 
 [features]
 # Normal development build: keep the UEFI path enabled for the repository
-# default x86_64 
+# default x86_64
 # UEFI/SBI builds through their target-specific commands.
 default = ["uefi_boot", "userspace_boot"]
 
@@ -109,6 +109,23 @@ kmtest = []
 # when this feature is absent.
 # ---------------------------------------------------------------------------
 fault-inject = []
+
+# ---------------------------------------------------------------------------
+# Syscall profiling / tracing (Phase 5 — Performance and polish)
+#
+# Enables per-syscall atomic invocation counters and cumulative hardware-cycle
+# timing (TSC on x86_64, mcycle on RISC-V, PMCCNTR_EL0 on AArch64).
+#
+# Profiling data is exposed via /proc/syscall_stats and can be dumped to the
+# debug serial port on demand via dump_syscall_stats().
+#
+# OFF BY DEFAULT — zero overhead (all hooks are #[inline(always)] no-ops)
+# when this feature is absent. Never enable in benchmarked release builds
+# unless you intend to collect profile data.
+#
+#   cargo build --features "syscall-trace,userspace_boot" --target <target>
+# ---------------------------------------------------------------------------
+syscall-trace = []
 
 [profile.release]
 opt-level = 3

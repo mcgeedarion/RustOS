@@ -52,6 +52,7 @@ pub mod dispatcher_context;
 pub mod driver;
 pub mod errno;
 pub mod nr;
+pub mod profile;
 pub mod routers;
 pub mod scheme;
 pub mod signal_nr;
@@ -62,6 +63,7 @@ pub mod kmtest;
 use dispatcher_context::SyscallContext;
 use errno::{efault, einval, emsgsize, enosys};
 use nr::{SYS_EXIT, SYS_EXIT_GROUP};
+use profile::{syscall_profile_enter, syscall_profile_exit};
 use signal_nr::SIGSYS;
 
 include!("p0_gaps.rs");
@@ -319,11 +321,13 @@ pub fn dispatch(nr: usize, a: usize, b: usize, c: usize, d: usize, e: usize, f: 
 /// `dispatch()` is the legacy shim (passes 0 for RIP).
 ///
 /// Structure:
-///   1. trace entry        — record syscall enter event (debug builds only)
-///   2. seccomp pre-check  — may kill, trap, or override the return code
-///   3. subsystem routers  — each returns `Some(retval)` or `None`
-///   4. trace exit         — record syscall exit event with return value
-///   5. catch-all          — returns ENOSYS for any unrecognised NR
+///   1. profile enter      — atomic counter increment + TSC capture (syscall-trace only)
+///   2. trace entry        — record syscall enter event (debug builds only)
+///   3. seccomp pre-check  — may kill, trap, or override the return code
+///   4. subsystem routers  — each returns `Some(retval)` or `None`
+///   5. profile exit       — record TSC delta (syscall-trace only)
+///   6. trace exit         — record syscall exit event with return value
+///   7. catch-all          — returns ENOSYS for any unrecognised NR
 ///
 /// All actual syscall logic lives in the five routers in `routers.rs`.
 /// Adding a match arm here is a bug; add it to the appropriate router.
@@ -337,6 +341,12 @@ pub fn dispatch_with_rip(
     f: usize,
     saved_rip: u64,
 ) -> isize {
+    // -----------------------------------------------------------------------
+    // Phase 5: syscall profiling — zero overhead when syscall-trace is off
+    // (syscall_profile_enter is an #[inline(always)] no-op in that case).
+    // -----------------------------------------------------------------------
+    let __profile_token = syscall_profile_enter(nr);
+
     #[cfg(feature = "debug")]
     {
         use crate::debug::trace::{emit, TraceEvent, TraceKind};
@@ -353,6 +363,7 @@ pub fn dispatch_with_rip(
         crate::security::seccomp::SeccompVerdict::Allow => {},
         crate::security::seccomp::SeccompVerdict::Errno(code) => {
             if !is_exit {
+                syscall_profile_exit(nr, __profile_token);
                 return -(code as isize);
             }
         },
@@ -360,6 +371,7 @@ pub fn dispatch_with_rip(
             let pid = crate::proc::scheduler::current_pid();
             crate::proc::signal::send_signal(pid, SIGSYS);
             if !is_exit {
+                syscall_profile_exit(nr, __profile_token);
                 return -1;
             }
         },
@@ -391,6 +403,9 @@ pub fn dispatch_with_rip(
     } else {
         ret = enosys();
     }
+
+    // Record elapsed cycles for this syscall.
+    syscall_profile_exit(nr, __profile_token);
 
     #[cfg(feature = "debug")]
     {
