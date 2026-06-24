@@ -1,0 +1,23 @@
+[package]
+name = "rustos-init"
+version = "0.1.0"
+edition = "2021"
+
+# This crate is intentionally outside the kernel workspace — it targets
+# a Linux userspace ABI (x86_64-unknown-linux-musl or x86_64-user.json)
+# while the kernel workspace targets bare-metal / UEFI.
+# Build via: cargo xtask build-init   OR   cargo build (from this dir)
+
+[[bin]]
+name = "init"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = "z"        # minimise binary size
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+
+[profile.dev]
+panic = "abort"

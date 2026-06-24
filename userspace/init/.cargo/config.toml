@@ -1,0 +1,18 @@
+# Build configuration for the rustos-init standalone crate.
+# Targets the x86_64 musl libc ABI which produces a fully static ELF
+# without any dynamic linker dependency. The kernel loads this binary
+# directly via its ELF loader.
+
+[build]
+target = "x86_64-unknown-linux-musl"
+
+[target.x86_64-unknown-linux-musl]
+rustflags = [
+    # No red-zone: the kernel does not currently preserve it on context switch.
+    "-C", "target-feature=+crt-static",
+    "-C", "link-arg=-static",
+    "-C", "link-arg=-nostartfiles",
+    # Use lld for reliable static linking in cross environments.
+    "-C", "linker=rust-lld",
+    "-C", "linker-flavor=gnu-lld",
+]
