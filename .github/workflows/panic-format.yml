@@ -21,6 +21,9 @@
 
 name: panic-format
 
+permissions:
+  contents: read
+
 on:
   push:
     branches: [ main, 'phase3/**' ]
