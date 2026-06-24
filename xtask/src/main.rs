@@ -17,6 +17,15 @@
 //!   3. Assembles a FAT16 ESP disk image at boot-x86_64.img
 //!   4. Auto-downloads OVMF_CODE.fd into .ovmf/ if no system firmware found
 //!   5. Launches qemu-system-x86_64 with serial output on stdout
+//!
+//! Phase 2 userspace on-ramp:
+//!   cargo xtask build-init
+//!
+//! That command:
+//!   1. Adds the x86_64-unknown-linux-musl rustup target if absent
+//!   2. Compiles userspace/init (pure no-libc Rust) as a static ELF
+//!   3. Stages the binary as /init in a minimal initramfs tree
+//!   4. Packs initramfs.cpio (newc format) at the workspace root
 
 use anyhow::{anyhow, bail, Context, Result};
 use std::{
@@ -459,6 +468,100 @@ fn image(root: &Path, opts: &BuildOpts) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
+// `build-init` subcommand  (Phase 2: Make userspace real)
+// ---------------------------------------------------------------------------
+
+/// Build the no-libc Rust /init binary and pack it into initramfs.cpio.
+///
+/// Steps:
+///   1. `rustup target add x86_64-unknown-linux-musl`  (idempotent)
+///   2. `cargo build --release` inside userspace/init/
+///      The crate's own .cargo/config.toml sets the target + rustflags.
+///   3. Stage a minimal initramfs tree under target/initramfs-rust-init/
+///   4. Pack to initramfs.cpio (newc) at the workspace root.
+///
+/// The resulting CPIO archive can be passed to QEMU with:
+///   -initrd initramfs.cpio
+///
+/// Acceptance criteria (scanned from QEMU serial output):
+///   [init] Hello from userspace!
+///   SMOKE OK: userspace_init
+///   [init] TEST PASS: userspace_init
+fn build_init(root: &Path, debug: bool) -> Result<()> {
+    let init_crate = root.join("userspace/init");
+    if !init_crate.exists() {
+        bail!("userspace/init not found at {}", init_crate.display());
+    }
+
+    // 1. Ensure the musl target is installed.
+    log("==> Step 1/4: ensuring x86_64-unknown-linux-musl rustup target");
+    let _ = Command::new("rustup")
+        .args(["target", "add", "x86_64-unknown-linux-musl"])
+        .status(); // non-fatal if rustup absent; cargo will error clearly
+
+    // 2. Build the init crate.
+    log("==> Step 2/4: building userspace/init (no-libc Rust, static musl)");
+    let mut cmd = cargo();
+    cmd.current_dir(&init_crate)
+        .args(["build", "--target", "x86_64-unknown-linux-musl"]);
+    if !debug {
+        cmd.arg("--release");
+    }
+    run(&mut cmd)?;
+
+    let profile_dir = if debug { "debug" } else { "release" };
+    let init_bin = init_crate
+        .join("target/x86_64-unknown-linux-musl")
+        .join(profile_dir)
+        .join("init");
+    if !init_bin.exists() {
+        bail!("init binary not found after build: {}", init_bin.display());
+    }
+    log(format!("built init binary: {}", init_bin.display()));
+
+    // 3. Stage a minimal initramfs directory tree.
+    log("==> Step 3/4: staging initramfs tree");
+    let staging = root.join("target/initramfs-rust-init");
+    if staging.exists() {
+        fs::remove_dir_all(&staging).context("remove old rust-init staging dir")?;
+    }
+    for dir in ["", "bin", "dev", "proc", "sys", "tmp", "etc", "run"] {
+        fs::create_dir_all(staging.join(dir)).context("create initramfs subdir")?;
+    }
+    // Copy the binary as /init (mode 0755).
+    let dest_init = staging.join("init");
+    fs::copy(&init_bin, &dest_init).context("copy init binary into staging")?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&dest_init, fs::Permissions::from_mode(0o755))
+            .context("chmod +x init")?;
+    }
+    fs::write(staging.join("etc/os-release"), OS_RELEASE_CONTENT)
+        .context("write etc/os-release")?;
+
+    // 4. Pack into newc CPIO archive.
+    log("==> Step 4/4: packing initramfs.cpio (newc)");
+    require_tool(&["cpio"], "apt install cpio");
+    let cpio_out = root.join("initramfs.cpio");
+    run(Command::new("sh").current_dir(&staging).args([
+        "-c",
+        &format!(
+            "find . | sort | cpio --create --format=newc --quiet > {}",
+            cpio_out.display()
+        ),
+    ]))?;
+
+    log(format!("initramfs ready: {}", cpio_out.display()));
+    log("Pass to QEMU with:  -initrd initramfs.cpio  -append \"console=ttyS0\"");
+    log("Expected serial output:");
+    log("  [init] Hello from userspace!");
+    log("  SMOKE OK: userspace_init");
+    log("  [init] TEST PASS: userspace_init");
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // OVMF firmware resolution
 // ---------------------------------------------------------------------------
 
@@ -822,12 +925,21 @@ Subcommands:
   run           Build kernel + image and boot in QEMU   ← golden path
   build         Compile the kernel only
   image         Build a FAT ESP disk image for UEFI
-  mkinitramfs   Build userspace and pack initramfs.cpio
+  mkinitramfs   Build userspace (C/musl) and pack initramfs.cpio
+  build-init    Build no-libc Rust /init + pack initramfs.cpio  ← Phase 2
   smoke         Run x86_64 UEFI under QEMU (CI smoke test)
   help          Show this help
 
-Golden-path one-liner:
+Golden-path one-liner (Phase 1):
   cargo xtask run --arch x86_64
+
+Phase 2 userspace validation:
+  cargo xtask build-init
+  # Then add -initrd initramfs.cpio to your QEMU invocation
+  # Expected serial output:
+  #   [init] Hello from userspace!
+  #   SMOKE OK: userspace_init
+  #   [init] TEST PASS: userspace_init
 
 Options (apply to run / build / image):
   --arch <aarch64|riscv64|x86_64>   target architecture (default: x86_64)
@@ -835,6 +947,9 @@ Options (apply to run / build / image):
   --features <feat1,feat2,...>       extra Cargo features
   --debug                            debug build (no --release)
   --initrd                           also build + pack initramfs
+
+build-init options:
+  --debug                            debug build of /init
 
 Environment variables:
   OVMF_CODE     Path to OVMF_CODE.fd (x86_64 UEFI firmware)
@@ -861,6 +976,11 @@ fn main() {
         "mkinitramfs" => {
             let opts = parse_build_args(&rest);
             mkinitramfs(&root, opts.arch)
+        },
+        "build-init" => {
+            // Parse only --debug from rest; ignore other flags.
+            let debug = rest.iter().any(|a| a == "--debug");
+            build_init(&root, debug)
         },
         "image" => image(&root, &parse_build_args(&rest)),
         "smoke" => smoke(&root),
