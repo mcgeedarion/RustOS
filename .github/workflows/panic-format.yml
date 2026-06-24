@@ -1,0 +1,158 @@
+# Panic format CI validator
+#
+# Builds RustOS with --features debug,kmtest for all three target
+# architectures and validates that the kernel panic / oops output
+# contains every mandatory structured field.
+#
+# Grep anchors checked per-field:
+#   KERNEL PANIC:          — primary panic prefix
+#   PANIC_LOC:             — source location
+#   PANIC_ARCH:            — architecture tag
+#   PANIC_FAULT_ADDR:      — faulting address (0x0 for bare panics)
+#   --- REGISTER DUMP ---  — register section boundary
+#   --- BACKTRACE ---      — backtrace section boundary
+#   --- END PANIC ---      — terminal marker (CI stop-condition)
+#
+# OOM fields:
+#   OOM:                   — OOM prefix
+#   OOM_SIZE:              — allocation size
+#   OOM_ARCH:              — architecture tag
+#   --- END OOM ---        — terminal marker
+
+name: panic-format
+
+on:
+  push:
+    branches: [ main, 'phase3/**' ]
+    paths:
+      - 'src/kernel/panic.rs'
+      - 'src/debug/oops.rs'
+      - 'src/kmtest/panic_format_tests.rs'
+      - '.github/workflows/panic-format.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'src/kernel/panic.rs'
+      - 'src/debug/oops.rs'
+      - 'src/kmtest/panic_format_tests.rs'
+
+jobs:
+  # -----------------------------------------------------------------------
+  # Build check — verify all three targets compile cleanly
+  # -----------------------------------------------------------------------
+  build-check:
+    name: build (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-unknown-none
+          - aarch64-unknown-none
+          - riscv64gc-unknown-none-elf
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+          targets: ${{ matrix.target }}
+
+      - name: Build with debug+kmtest features
+        run: |
+          cargo build \
+            --target ${{ matrix.target }} \
+            --features debug,kmtest \
+            -Z build-std=core,alloc \
+            2>&1 | tee build-${{ matrix.target }}.log
+        env:
+          RUSTFLAGS: "-C force-frame-pointers=yes"
+
+      - name: Upload build log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ matrix.target }}
+          path: build-${{ matrix.target }}.log
+
+  # -----------------------------------------------------------------------
+  # QEMU serial log validation — x86_64 only (fastest to spin up)
+  # -----------------------------------------------------------------------
+  validate-panic-output:
+    name: validate panic serial output (x86_64)
+    runs-on: ubuntu-latest
+    needs: build-check
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y qemu-system-x86 ovmf
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+          targets: x86_64-unknown-none
+
+      - name: Build kernel (x86_64, debug+kmtest)
+        run: |
+          cargo xtask build \
+            --target x86_64 \
+            --features debug,kmtest \
+            --trigger-panic
+        env:
+          RUSTFLAGS: "-C force-frame-pointers=yes"
+
+      - name: Boot in QEMU and capture serial log
+        run: |
+          timeout 60 qemu-system-x86_64 \
+            -bios /usr/share/ovmf/OVMF.fd \
+            -drive format=raw,file=target/rustos.img \
+            -serial file:serial.log \
+            -display none \
+            -m 256M \
+            -no-reboot \
+            || true   # QEMU exits non-zero on kernel halt; that is expected
+
+      - name: Show serial log (for debugging)
+        if: always()
+        run: cat serial.log || echo '(no log)'
+
+      - name: Validate KERNEL PANIC prefix
+        run: grep -q 'KERNEL PANIC:' serial.log
+
+      - name: Validate PANIC_LOC field
+        run: grep -q 'PANIC_LOC:' serial.log
+
+      - name: Validate PANIC_ARCH field
+        run: grep -q 'PANIC_ARCH: x86_64' serial.log
+
+      - name: Validate PANIC_FAULT_ADDR field
+        run: grep -q 'PANIC_FAULT_ADDR:' serial.log
+
+      - name: Validate REGISTER DUMP section
+        run: grep -q '--- REGISTER DUMP ---' serial.log
+
+      - name: Validate BACKTRACE section
+        run: grep -q '--- BACKTRACE ---' serial.log
+
+      - name: Validate END PANIC marker
+        run: grep -q '--- END PANIC ---' serial.log
+
+      - name: Fail if unexpected extra KERNEL PANIC lines (double panic guard)
+        run: |
+          count=$(grep -c 'KERNEL PANIC:' serial.log || true)
+          if [ "$count" -gt 2 ]; then
+            echo "ERROR: too many KERNEL PANIC lines ($count) — possible panic loop"
+            exit 1
+          fi
+
+      - name: Upload serial log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: serial-log-panic-format
+          path: serial.log

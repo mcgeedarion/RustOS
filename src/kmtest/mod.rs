@@ -13,6 +13,7 @@
 pub mod fs;
 pub mod ipc;
 pub mod mm;
+pub mod panic_format_tests;
 pub mod proc;
 pub mod sync;
 
@@ -24,4 +25,5 @@ pub fn init() {
     fs::register();
     sync::register();
     ipc::register();
+    panic_format_tests::register();
 }
