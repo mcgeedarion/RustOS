@@ -92,6 +92,24 @@ trace = []
 # Optional in-kernel test harness.
 kmtest = []
 
+# ---------------------------------------------------------------------------
+# Fault injection framework (Phase 3 — Stabilize core kernel behavior)
+#
+# Enables compile-time-gated fault injection into critical subsystems:
+#   - PMM: simulate OOM / contiguous-alloc failure
+#   - VMM: simulate map failure / region-reservation failure
+#   - Syscall paths: simulate resource exhaustion (EAGAIN) and EMFILE
+#
+# NEVER enable in release/production builds. Combine with `kmtest` to
+# run the automated test suite:
+#
+#   cargo build --features "fault-inject,kmtest" --target <target>
+#
+# The entire framework (statics, hooks, test cases) compiles to nothing
+# when this feature is absent.
+# ---------------------------------------------------------------------------
+fault-inject = []
+
 [profile.release]
 opt-level = 3
 lto = true
