@@ -1,6 +1,6 @@
 # Panic format CI validator
 #
-# Builds RustOS with --features debug,kmtest for all three target
+# Builds RustOS with --features debug,kmtest for all supported target
 # architectures and validates that the kernel panic / oops output
 # contains every mandatory structured field.
 #
@@ -41,7 +41,7 @@ on:
 
 jobs:
   # -----------------------------------------------------------------------
-  # Build check — verify all three targets compile cleanly
+  # Build check — verify all supported targets compile cleanly
   # -----------------------------------------------------------------------
   build-check:
     name: build (${{ matrix.target }})
@@ -52,7 +52,6 @@ jobs:
         target:
           - x86_64-unknown-none
           - aarch64-unknown-none
-          - riscv64gc-unknown-none-elf
     steps:
       - uses: actions/checkout@v4
 

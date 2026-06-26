@@ -203,5 +203,4 @@ jobs:
             build-x86_64-image-release-boot.log
             qemu-x86_64-boot-release-boot.log
 
-  # aarch64 and riscv64 jobs left as-is for now; they continue to use the
-  # boot_minimal debug image and BOOT_MINIMAL_OK sentinel.
+  # aarch64 job continues to use the boot_minimal debug image and BOOT_MINIMAL_OK sentinel.
