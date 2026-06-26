@@ -46,10 +46,6 @@ jobs:
         include:
           - arch: aarch64
             boot: uefi
-          - arch: riscv64
-            boot: uefi
-          - arch: riscv64
-            boot: sbi
           - arch: x86_64
             boot: uefi
     steps:
@@ -57,7 +53,7 @@ jobs:
       - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y llvm lld musl-tools cpio mtools gcc-riscv64-unknown-elf
+          sudo apt-get install -y llvm lld musl-tools cpio mtools
       - name: Build ${{ matrix.arch }} ${{ matrix.boot }}
         run: cargo xtask build --arch ${{ matrix.arch }} --boot ${{ matrix.boot }}
 
