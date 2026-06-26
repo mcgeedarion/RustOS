@@ -1,1 +1,14 @@
-__CARGO_CONFIG__
+[alias]
+xtask = "run --target x86_64-unknown-linux-gnu -p xtask --"
+
+# ============================================================
+# Default build target: AArch64 UEFI (fastest bring-up path).
+#
+# Override on the command line:
+#   cargo xtask build --arch x86_64
+#   cargo xtask build --arch aarch64
+#
+# Supported architectures: aarch64, x86_64
+# ============================================================
+[build]
+target = "targets/aarch64-uefi-loader.json"
