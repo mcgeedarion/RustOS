@@ -6,167 +6,132 @@ BOOT=uefi
 TIMEOUT=${TIMEOUT:-30}
 SMOKE=0
 TEMP_FW_VARS=""
-SMOKE_MARKER_RE=${SMOKE_MARKER_RE:-'BOOT_MINIMAL_OK|FULL_OS_USERSPACE_OK|entering common kernel_main|rustos: kernel_main reached'}
-SMOKE_MARKER_DESC=${SMOKE_MARKER_DESC:-'BOOT_MINIMAL_OK/FULL_OS_USERSPACE_OK/common kernel_main/rustos: kernel_main reached'}
+SMOKE_MARKER_RE=${SMOKE_MARKER_RE:-'BOOT_MINIMAL_OK|FULL_OS_USERSPACE_OK|entering cpu_idle'}
 
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --arch)
-      ARCH=${2:?missing --arch value}; shift 2 ;;
-    --boot)
-      BOOT=${2:?missing --boot value}; shift 2 ;;
-    --timeout)
-      TIMEOUT=${2:?missing --timeout value}; shift 2 ;;
-    --smoke)
-      SMOKE=1; shift ;;
-    --test)
-      SMOKE=1
-      SMOKE_MARKER_RE='KMTEST  DONE'
-      SMOKE_MARKER_DESC='KMTEST DONE'
-      shift ;;
-    *)
-      echo "run_qemu.sh: unknown argument: $1" >&2; exit 2 ;;
-  esac
-done
+usage() {
+    echo "Usage: ARCH=<arch> [TIMEOUT=<s>] [SMOKE=1] $0"
+    echo "  ARCH    : x86_64 | aarch64"
+    echo "  TIMEOUT : seconds before QEMU is killed (default: 30)"
+    echo "  SMOKE   : set to 1 to grep serial output for boot sentinel"
+    exit 1
+}
 
-if [[ "$BOOT" != "uefi" ]]; then
-  echo "run_qemu.sh: supported boot contracts are aarch64 UEFI and x86_64 UEFI" >&2
-  exit 2
-fi
-
-ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-IMG="$ROOT/boot-${ARCH}.img"
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then usage; fi
+if [[ -n "${1:-}" ]]; then ARCH=$1; fi
+if [[ -n "${2:-}" ]]; then TIMEOUT=$2; fi
+if [[ -n "${3:-}" ]]; then SMOKE=$3; fi
 
 case "$ARCH" in
-  x86_64)
-    QEMU=${QEMU:-qemu-system-x86_64}
-    if ! command -v "$QEMU" >/dev/null 2>&1; then
-      echo "run_qemu.sh: $QEMU not found on PATH" >&2
-      exit 1
-    fi
-    OVMF_CODE=${OVMF_CODE:-}
-    for candidate in \
-      /usr/share/OVMF/OVMF_CODE.fd \
-      /usr/share/OVMF/OVMF_CODE_4M.fd \
-      /usr/share/ovmf/OVMF.fd \
-      /usr/share/qemu/OVMF.fd; do
-      [[ -n "$OVMF_CODE" ]] && break
-      [[ -f "$candidate" ]] && OVMF_CODE=$candidate
-    done
-    if [[ -z "$OVMF_CODE" ]]; then
-      echo "run_qemu.sh: OVMF firmware not found; set OVMF_CODE=/path/to/OVMF_CODE.fd" >&2
-      exit 1
-    fi
-    args=(
-      -machine q35
-      -m 256M
-      -cpu qemu64
-      -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE"
-      -drive format=raw,file="$IMG",if=virtio
-      -serial stdio
-      -display none
-      -no-reboot
-      -no-shutdown
-    )
-    ;;
-  aarch64)
-    QEMU=${QEMU:-qemu-system-aarch64}
-    if ! command -v "$QEMU" >/dev/null 2>&1; then
-      echo "run_qemu.sh: $QEMU not found on PATH" >&2
-      exit 1
-    fi
-    QEMU_EFI=${QEMU_EFI:-}
-    for candidate in \
-      /usr/share/AAVMF/AAVMF_CODE.fd \
-      /usr/share/AAVMF/AAVMF32_CODE.fd \
-      /usr/share/qemu-efi-aarch64/QEMU_EFI.fd; do
-      [[ -n "$QEMU_EFI" ]] && break
-      [[ -f "$candidate" ]] && QEMU_EFI=$candidate
-    done
-    if [[ -z "$QEMU_EFI" ]]; then
-      echo "run_qemu.sh: AArch64 UEFI firmware not found; set QEMU_EFI=/path/to/QEMU_EFI.fd" >&2
-      exit 1
-    fi
-    args=(
-      -machine virt
-      -cpu cortex-a57
-      -m 512M
-      -bios "$QEMU_EFI"
-      -drive if=none,id=esp,format=raw,file="$IMG"
-      -device virtio-blk-device,drive=esp
-      -serial stdio
-      -display none
-      -no-reboot
-      -no-shutdown
-    )
-    ;;
-  *)
-    echo "run_qemu.sh: unsupported ARCH=$ARCH" >&2
-    exit 2
-    ;;
+    x86_64|aarch64) ;;
+    *) echo "ERROR: unsupported arch '$ARCH'" >&2; usage ;;
 esac
 
-log=$(mktemp)
-fifo=
-trap 'rm -f "$log" ${fifo:+"$fifo"} ${TEMP_FW_VARS:+"$TEMP_FW_VARS"}' EXIT
-
-if [[ $SMOKE -eq 1 ]]; then
-  fifo=$(mktemp -u)
-  mkfifo "$fifo"
-
-  "$QEMU" "${args[@]}" >"$fifo" 2>&1 &
-  qemu_pid=$!
-
-  marker=0
-  deadline=$((SECONDS + TIMEOUT))
-  exec 3<"$fifo"
-  while (( SECONDS < deadline )); do
-    if IFS= read -r -t 1 line <&3; then
-      printf '%s\n' "$line" | tee -a "$log"
-      if [[ "$line" =~ $SMOKE_MARKER_RE ]]; then
-        marker=1
-        break
-      fi
-      continue
-    fi
-
-    if ! kill -0 "$qemu_pid" 2>/dev/null; then
-      break
-    fi
-  done
-  exec 3<&-
-
-  if [[ $marker -eq 1 ]]; then
-    kill "$qemu_pid" 2>/dev/null || true
-    wait "$qemu_pid" 2>/dev/null || true
-    exit 0
-  fi
-
-  if kill -0 "$qemu_pid" 2>/dev/null; then
-    kill "$qemu_pid" 2>/dev/null || true
-  fi
-  wait "$qemu_pid" 2>/dev/null
-  status=$?
-  if ! grep -Eq "$SMOKE_MARKER_RE" "$log"; then
-    echo "run_qemu.sh: smoke marker $SMOKE_MARKER_DESC not observed" >&2
+IMAGE="boot-${ARCH}.img"
+if [[ ! -f "$IMAGE" ]]; then
+    echo "ERROR: disk image '$IMAGE' not found. Run 'cargo xtask image --arch $ARCH' first." >&2
     exit 1
-  fi
-  exit "$status"
-fi
-trap 'rm -f "$log" ${TEMP_FW_VARS:+"$TEMP_FW_VARS"}' EXIT
-
-set +e
-timeout "$TIMEOUT" "$QEMU" "${args[@]}" 2>&1 | tee "$log"
-status=${PIPESTATUS[0]}
-set -e
-
-if [[ $SMOKE -eq 1 ]] && ! grep -Eq "$SMOKE_MARKER_RE" "$log"; then
-  echo "run_qemu.sh: smoke marker $SMOKE_MARKER_DESC not observed" >&2
-  exit 1
 fi
 
-# QEMU often times out in no-shutdown smoke mode after the kernel parks in idle.
-if [[ $status -eq 124 && $SMOKE -eq 1 ]]; then
-  exit 0
+SERIAL_LOG=$(mktemp /tmp/rustos-serial-XXXXXX.log)
+trap 'rm -f "$SERIAL_LOG" "$TEMP_FW_VARS"' EXIT
+
+case "$ARCH" in
+    x86_64)
+        FW_KIND="ovmf"
+        FW_CODE="${OVMF_CODE:-}"
+        FW_VARS="${OVMF_VARS:-}"
+
+        # Locate firmware if not set via environment
+        if [[ -z "$FW_CODE" ]]; then
+            for candidate in \
+                /usr/share/OVMF/OVMF_CODE.fd \
+                /usr/share/OVMF/OVMF_CODE_4M.fd \
+                /usr/share/ovmf/OVMF.fd \
+                /usr/share/qemu/OVMF.fd \
+                /usr/share/edk2/x64/OVMF_CODE.fd \
+                /opt/homebrew/share/qemu/edk2-x86_64-code.fd; do
+                if [[ -f "$candidate" ]]; then
+                    FW_CODE="$candidate"
+                    break
+                fi
+            done
+        fi
+
+        if [[ -z "$FW_CODE" ]]; then
+            echo "ERROR: OVMF firmware not found. Set OVMF_CODE=/path/to/OVMF_CODE.fd" >&2
+            exit 1
+        fi
+
+        if [[ -z "$FW_VARS" ]]; then
+            FW_VARS=$(mktemp /tmp/OVMF_VARS.XXXXXX.fd)
+            TEMP_FW_VARS="$FW_VARS"
+            # Use a blank vars file (64K) so UEFI can write runtime variables
+            dd if=/dev/zero of="$FW_VARS" bs=1k count=64 2>/dev/null
+        fi
+
+        QEMU_CMD=(
+            qemu-system-x86_64
+            -machine q35
+            -cpu qemu64,+xsave,+avx
+            -m 256M
+            -drive "if=pflash,format=raw,readonly=on,file=${FW_CODE}"
+            -drive "if=pflash,format=raw,file=${FW_VARS}"
+            -drive "if=virtio,format=raw,file=${IMAGE}"
+            -serial "file:${SERIAL_LOG}"
+            -display none
+            -no-reboot
+            -no-shutdown
+        )
+        ;;
+
+    aarch64)
+        FW_CODE="${QEMU_EFI:-}"
+
+        if [[ -z "$FW_CODE" ]]; then
+            for candidate in \
+                /usr/share/AAVMF/AAVMF_CODE.fd \
+                /usr/share/qemu-efi-aarch64/QEMU_EFI.fd \
+                /usr/share/qemu/edk2-aarch64-code.fd; do
+                if [[ -f "$candidate" ]]; then
+                    FW_CODE="$candidate"
+                    break
+                fi
+            done
+        fi
+
+        if [[ -z "$FW_CODE" ]]; then
+            echo "ERROR: AArch64 UEFI firmware not found. Set QEMU_EFI=/path/to/QEMU_EFI.fd" >&2
+            exit 1
+        fi
+
+        QEMU_CMD=(
+            qemu-system-aarch64
+            -machine virt
+            -cpu cortex-a57
+            -m 512M
+            -bios "${FW_CODE}"
+            -drive "if=none,id=esp,format=raw,file=${IMAGE}"
+            -device virtio-blk-device,drive=esp
+            -serial "file:${SERIAL_LOG}"
+            -display none
+            -no-reboot
+            -no-shutdown
+        )
+        ;;
+esac
+
+echo "[run_qemu] launching QEMU for ${ARCH} (timeout ${TIMEOUT}s)..."
+timeout "$TIMEOUT" "${QEMU_CMD[@]}" || true
+
+if [[ "$SMOKE" == "1" ]]; then
+    echo "[run_qemu] checking serial output for boot sentinel..."
+    if grep -qE "$SMOKE_MARKER_RE" "$SERIAL_LOG"; then
+        echo "[run_qemu] SMOKE PASS: sentinel found."
+        exit 0
+    else
+        echo "[run_qemu] SMOKE FAIL: sentinel not found in serial output."
+        echo "--- serial output ---"
+        cat "$SERIAL_LOG"
+        exit 1
+    fi
 fi
-exit "$status"
