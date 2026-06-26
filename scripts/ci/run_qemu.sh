@@ -29,25 +29,13 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ "$BOOT" != "uefi" && !( "$ARCH" == "riscv64" && "$BOOT" == "sbi" ) ]]; then
-  echo "run_qemu.sh: supported boot contracts are x86_64/aarch64/riscv64 UEFI and riscv64 SBI" >&2
+if [[ "$BOOT" != "uefi" ]]; then
+  echo "run_qemu.sh: supported boot contracts are aarch64 UEFI and x86_64 UEFI" >&2
   exit 2
 fi
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 IMG="$ROOT/boot-${ARCH}.img"
-KERNEL="$ROOT/target/riscv64-kernel/debug/rustos"
-
-if [[ "$BOOT" == "uefi" && ! -f "$IMG" ]]; then
-  echo "run_qemu.sh: image not found: $IMG" >&2
-  echo "run_qemu.sh: build it with: cargo xtask image --arch $ARCH --boot uefi --debug --features boot_minimal" >&2
-  exit 1
-fi
-if [[ "$ARCH:$BOOT" == "riscv64:sbi" && ! -f "$KERNEL" ]]; then
-  echo "run_qemu.sh: kernel not found: $KERNEL" >&2
-  echo "run_qemu.sh: build it with: cargo xtask build --arch riscv64 --boot sbi --debug --features boot_minimal" >&2
-  exit 1
-fi
 
 case "$ARCH" in
   x86_64)
@@ -111,83 +99,6 @@ case "$ARCH" in
       -no-reboot
       -no-shutdown
     )
-    ;;
-  riscv64)
-    QEMU=${QEMU:-qemu-system-riscv64}
-    if ! command -v "$QEMU" >/dev/null 2>&1; then
-      echo "run_qemu.sh: $QEMU not found on PATH" >&2
-      exit 1
-    fi
-    if [[ "$BOOT" == "uefi" ]]; then
-      find_existing_file() {
-        for path in "$@"; do
-          [[ -f "$path" ]] && { echo "$path"; return 0; }
-        done
-        return 1
-      }
-
-      FW_KIND=""
-      FW_CODE="${RISCV_UEFI_CODE:-}"
-      FW_VARS="${RISCV_UEFI_VARS:-}"
-      if [[ -n "$FW_CODE" ]]; then
-        if [[ ! -f "$FW_CODE" ]]; then
-          echo "run_qemu.sh: RISCV_UEFI_CODE not found: $FW_CODE" >&2
-          exit 1
-        fi
-        FW_KIND="${RISCV_UEFI_KIND:-edk2}"
-      elif FW_CODE=$(find_existing_file \
-          /usr/share/qemu-efi-riscv64/RISCV_VIRT_CODE.fd \
-          /usr/share/edk2/riscv64/RISCV_VIRT_CODE.fd \
-          /usr/share/qemu/edk2-riscv-code.fd \
-          /usr/share/qemu/edk2-riscv64-code.fd); then
-        FW_KIND="edk2"
-      elif FW_CODE=$(find_existing_file \
-          /usr/lib/u-boot/qemu-riscv64_smode/uboot.elf \
-          /usr/lib/u-boot/qemu-riscv64/uboot.elf \
-          /usr/share/u-boot/qemu-riscv64_smode/uboot.elf \
-          /usr/share/u-boot/qemu-riscv64/uboot.elf); then
-        FW_KIND="uboot"
-      else
-        echo "run_qemu.sh: RISC-V UEFI firmware not found; install qemu-efi-riscv64 or u-boot-qemu, or set RISCV_UEFI_CODE" >&2
-        exit 1
-      fi
-
-      args=(
-        -machine virt
-        -cpu rv64
-        -m 512M
-      )
-      if [[ "$FW_KIND" == "edk2" ]]; then
-        if [[ -z "$FW_VARS" ]]; then
-          FW_VARS=$(mktemp /tmp/RISCV_VIRT_VARS.XXXXXX.fd)
-          TEMP_FW_VARS="$FW_VARS"
-          dd if=/dev/zero of="$FW_VARS" bs=1M count=32 2>/dev/null
-        fi
-        args+=(
-          -drive "if=pflash,unit=0,format=raw,file=${FW_CODE},readonly=on"
-          -drive "if=pflash,unit=1,format=raw,file=${FW_VARS}"
-        )
-      else
-        args+=(-bios "$FW_CODE")
-      fi
-      args+=(
-        -drive if=virtio,format=raw,file="$IMG"
-        -serial stdio
-        -display none
-        -no-reboot
-        -no-shutdown
-      )
-    else
-      args=(
-        -machine virt
-        -m 512M
-        -kernel "$KERNEL"
-        -serial stdio
-        -display none
-        -no-reboot
-        -no-shutdown
-      )
-    fi
     ;;
   *)
     echo "run_qemu.sh: unsupported ARCH=$ARCH" >&2
