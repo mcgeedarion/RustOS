@@ -55,7 +55,7 @@ default = ["uefi_boot"]
 
 # Compile only the firmware handoff, common BootInfo path, early console,
 # panic handler, and an architecture idle loop. This is the first-stage boot
-# target used to keep x86_64/aarch64/riscv64 bring-up paths aligned before
+# target used to keep x86_64/aarch64 bring-up paths aligned before
 # re-enabling the full kernel services.
 boot_minimal = []
 
@@ -84,9 +84,6 @@ gdbstub = []
 # Build as a UEFI loader/application.
 uefi_boot = []
 
-# Explicitly opt in to the riscv64 UEFI boot path. RV64 PE/COFF is defined
-# by the UEFI specification; only RV64 is supported (RV32 has no UEFI profile).
-riscv64_uefi_boot = []
 
 # Full debug build: GDB RSP stub + rich oops/backtrace + trace drain.
 # Use `--features debug` as the single flag for a debug kernel.
@@ -123,7 +120,7 @@ fault-inject = []
 # Syscall profiling / tracing (Phase 5 — Performance and polish)
 #
 # Enables per-syscall atomic invocation counters and cumulative hardware-cycle
-# timing (TSC on x86_64, mcycle on RISC-V, PMCCNTR_EL0 on AArch64).
+# timing (TSC on x86_64, PMCCNTR_EL0 on AArch64).
 #
 # Profiling data is exposed via /proc/syscall_stats and can be dumped to the
 # debug serial port on demand via dump_syscall_stats().
