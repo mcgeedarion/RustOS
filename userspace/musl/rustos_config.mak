@@ -2,33 +2,69 @@
 #
 # Overrides the sysdep layer so musl issues syscalls the way RustOS expects:
 #
-#   x86_64:  syscall instruction, number in rax, args in rdi,rsi,rdx,r10,r8,r9
-#            errno returned as negative value in rax
-#   aarch64: svc #0 instruction, number in x8, args in x0-x5
-#            errno returned as negative value in x0
+#   x86_64:  syscall instruction, number in rax, args in rdi rsi rdx r10 r8 r9
+#            errno returned as negative value in rax (no errno global for
+#            static musl; per-thread errno lives at fs:0x00 in the TCB)
 #
-# Additionally pins the sysroot and disables features that require
-# kernel support RustOS has not yet implemented.
+#   riscv64: ecall instruction, number in a7, args in a0..a5
+#            errno returned as negative value in a0
+#
+# The kernel side (src/syscall/mod.rs) already follows Linux ABI exactly,
+# so no kernel changes are required — only the musl sysdep glue is patched.
 
-# ── syscall ABI ────────────────────────────────────────────────────────────────
+# Configuration Validation: Ensure required environment variables are defined
+ifndef SYSROOT
+$(error SYSROOT must be defined)
+endif
 
-# Use the architecture-specific assembly syscall wrappers we ship under
-# arch/<arch>/syscall_shim.s rather than musl's generic C fallback.
-SYSCALL_STYLE := asm
+ifndef ARCH
+$(error ARCH must be defined)
+endif
 
-# ── sysroot path ───────────────────────────────────────────────────────────────
+# Normalize SYSROOT path to absolute path
+SYSROOT := $(realpath $(SYSROOT))
 
-# Point at our pre-built sysroot so headers resolve correctly.
-SYSROOT := $(CURDIR)/userspace/musl/sysroot
+# Common compiler flags applied to all architectures
+COMMON_CFLAGS  := -ffreestanding \
+                  -nostdinc \
+                  -isystem $(SYSROOT)/$(ARCH)/include \
+                  -D__rustos__=1 \
+                  -DMUSL_VDSO_CLOCK=1
 
-# ── disabled features ──────────────────────────────────────────────────────────
+# Architecture-specific configuration
+ifeq ($(ARCH),x86_64)
+  SYSDEP_ARCH    := x86_64
+  # Note: x86_64 requires assembly implementations of longjmp; 
+  # riscv64 uses C implementations instead
+  SYSDEP_FILES   := syscall.s setjmp.s longjmp.s clone.s
+  EXTRA_CFLAGS   := -mno-red-zone -mcmodel=small
+else ifeq ($(ARCH),riscv64)
+  SYSDEP_ARCH    := riscv64
+  # Note: riscv64 implements longjmp as C code, x86_64 requires assembly
+  SYSDEP_FILES   := syscall.s setjmp.s clone.s
+  EXTRA_CFLAGS   := -march=rv64gc -mabi=lp64d
+else
+  $(error Unsupported ARCH=$(ARCH))
+endif
 
-# No kernel-side inotify support yet.
-HAVE_INOTIFY := 0
+# musl build variables consumed by the upstream Makefile.
+AR             := llvm-ar
+RANLIB         := llvm-ranlib
+CFLAGS         += $(EXTRA_CFLAGS) $(COMMON_CFLAGS)
 
-# No in-kernel POSIX message queue support.
-HAVE_POSIX_MQ := 0
+# Optional: Enable verbose output for debugging builds
+ifdef VERBOSE
+$(info Building musl for $(ARCH) at $(SYSROOT))
+$(info SYSDEP_FILES: $(SYSDEP_FILES))
+$(info CFLAGS: $(CFLAGS))
+endif
 
-# Note: x86_64 requires assembly implementations of longjmp;
-#       aarch64 uses C implementations instead.
-SYSDEP_FILES   := syscall.s setjmp.s longjmp.s clone.s
+# Install step: copy static archive and headers.
+install:
+	$(MAKE)
+	mkdir -p $(SYSROOT)/$(ARCH)/lib
+	cp lib/libc.a $(SYSROOT)/$(ARCH)/lib/libc.a
+	ln -sf libc.a $(SYSROOT)/$(ARCH)/lib/libmusl.a
+	$(MAKE) install-headers DESTDIR=$(SYSROOT)/$(ARCH)
+
+.PHONY: install
