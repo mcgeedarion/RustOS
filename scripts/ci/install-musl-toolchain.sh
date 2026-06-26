@@ -8,7 +8,7 @@
 #   1. apt install  (Debian/Ubuntu CI runners)
 #   2. Build musl from source into PREFIX (default: /opt/musl/<arch>)
 #
-# Supported ARCH values: aarch64  riscv64  x86_64
+# Supported ARCH values: aarch64  x86_64
 #
 # Environment variables (all optional):
 #   ARCH          Target arch (default: aarch64)
@@ -36,11 +36,6 @@ case "$ARCH" in
     CC_BIN="aarch64-linux-musl-gcc"
     APT_PKG="gcc-aarch64-linux-gnu"
     ;;
-  riscv64)
-    TRIPLET="riscv64-linux-musl"
-    CC_BIN="riscv64-linux-musl-gcc"
-    APT_PKG="gcc-riscv64-linux-gnu"
-    ;;
   x86_64)
     TRIPLET="x86_64-linux-musl"
     CC_BIN="musl-gcc"
@@ -54,7 +49,7 @@ esac
 
 PREFIX="${PREFIX:-/opt/musl/${ARCH}}"
 
-# ── Already present? ─────────────────────────────────────────────────────────
+# ── Already present? ────────────────────────────────────────────────────────────────────────────────
 
 if command -v "$CC_BIN" >/dev/null 2>&1; then
   echo "[toolchain] ${CC_BIN} already on PATH — nothing to do."
@@ -70,12 +65,12 @@ fi
 
 echo "[toolchain] ${CC_BIN} not found — attempting install for ARCH=${ARCH}."
 
-# ── Strategy 1: apt ──────────────────────────────────────────────────────────
+# ── Strategy 1: apt ────────────────────────────────────────────────────────────────────────────────────
 
 if command -v apt-get >/dev/null 2>&1; then
   echo "[toolchain] Trying apt-get install ${APT_PKG} ..."
   if sudo apt-get install -y --no-install-recommends "${APT_PKG}" 2>/dev/null; then
-    # For aarch64/riscv64 the apt package gives us a glibc cross-compiler, not
+    # For aarch64 the apt package gives us a glibc cross-compiler, not
     # a musl one.  We still need to build musl itself; the cross-gcc is enough
     # to bootstrap it.
     if [[ "$ARCH" == "x86_64" ]]; then
@@ -90,7 +85,7 @@ if command -v apt-get >/dev/null 2>&1; then
   fi
 fi
 
-# ── Strategy 2: build musl from source ──────────────────────────────────────
+# ── Strategy 2: build musl from source ────────────────────────────────────────────────────────────
 #
 # We build a minimal musl-cross-make toolchain:
 #   musl-cross-make: https://github.com/richfelker/musl-cross-make
