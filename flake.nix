@@ -16,14 +16,14 @@
         rustToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
 
         # ── OVMF firmware (UEFI) ───────────────────────────────────────
-        #   x86_64  → pkgs.OVMF (ships CODE + VARS)
         #   AArch64 → pkgs.AAVMF
+        #   x86_64  → pkgs.OVMF (ships CODE + VARS)
         ovmfX64    = pkgs.OVMF.override   { arches = [ "X64" ];      };
         ovmfAarch64 = pkgs.AAVMF.override  { arches = [ "AARCH64" ];  };
 
         getOvmfFirmware = arch: {
-          x86_64  = { code = "${ovmfX64}/FV/OVMF_CODE.fd";     vars = "${ovmfX64}/FV/OVMF_VARS.fd"; };
           aarch64 = { code = "${ovmfAarch64}/FV/AAVMF_CODE.fd"; vars = "${ovmfAarch64}/FV/AAVMF_VARS.fd"; };
+          x86_64  = { code = "${ovmfX64}/FV/OVMF_CODE.fd";     vars = "${ovmfX64}/FV/OVMF_VARS.fd"; };
         }.${arch};
 
         # ── Native deps ────────────────────────────────────────────────
@@ -75,10 +75,10 @@
             echo "╠══════════════════════════════════════════════════╣"
             echo "║  Supported architectures: aarch64, x86_64        ║"
             echo "╠══════════════════════════════════════════════════╣"
-            echo "║  Quick commands:                                  ║"
-            echo "║    cargo xtask run --arch x86_64                  ║"
-            echo "║    cargo xtask run --arch aarch64                 ║"
-            echo "║    cargo xtask image --arch x86_64                ║"
+            echo "║  Quick commands:                                 ║"
+            echo "║    cargo xtask run --arch aarch64                ║"
+            echo "║    cargo xtask run --arch x86_64                 ║"
+            echo "║    cargo xtask image --arch x86_64               ║"
             echo "╚══════════════════════════════════════════════════╝"
             echo ""
           '';
