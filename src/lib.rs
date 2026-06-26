@@ -27,7 +27,8 @@
 #![warn(clippy::match_same_arms)]
 #![warn(clippy::large_enum_variant)]
 
-#[cfg(not(feature = "userspace_boot"))]
+// Always pull in alloc — userspace_boot.rs needs it for the bump allocator's
+// GlobalAlloc impl, and the full kernel needs it for collections everywhere.
 extern crate alloc;
 
 // Organised by kernel layer (outermost = most dependent on others):
@@ -72,6 +73,56 @@ pub mod boot_minimal;
 
 #[cfg(feature = "userspace_boot")]
 pub mod userspace_boot;
+
+// ---------------------------------------------------------------------------
+// Stub modules compiled in under userspace_boot.
+//
+// src/userspace_boot.rs calls into crate::fs::initramfs and crate::proc::exec
+// but the real subsystems are gated out (they depend on the full mm/driver
+// stack which is still API-inconsistent — see Cargo.toml comment).  These
+// thin shims make the crate compile under the default feature set without
+// touching the ~310-error legacy path.
+//
+// Replace with `pub use` of the real modules once fs/proc are un-gated
+// (Phase 3).
+// ---------------------------------------------------------------------------
+
+/// Filesystem shim — no-op initramfs mount stub.
+///
+/// Replaces `pub mod fs` from the full kernel when only `userspace_boot` is
+/// active.  The real VFS/ext2/initramfs stack is compiled in only when
+/// neither `boot_minimal` nor `userspace_boot` is set (see gates below).
+#[cfg(feature = "userspace_boot")]
+pub mod fs {
+    pub mod initramfs {
+        /// No-op stub.  The CPIO archive is accessed directly through
+        /// `crate::init::initramfs::load()` + `InitramfsHandle::file()`;
+        /// a full VFS mount is not required for the userspace_boot milestone.
+        pub fn mount_initramfs() {}
+    }
+}
+
+/// Process-management shim — no-op exec stub.
+///
+/// Replaces `pub mod proc` from the full kernel when only `userspace_boot` is
+/// active.  Returns `false` (spawn failed) so the caller panics with an
+/// actionable message rather than silently continuing.
+#[cfg(feature = "userspace_boot")]
+pub mod proc {
+    pub mod exec {
+        /// Stub implementation.  Always returns `false` so `userspace_boot::enter`
+        /// emits a clear panic message.  Wire up the real PCB/scheduler path
+        /// in Phase 3 when `proc` is un-gated.
+        pub fn spawn_user_process_from_bytes(
+            _path: &str,
+            _elf: &[u8],
+            _argv: &[&str],
+            _envp: &[&str],
+        ) -> bool {
+            false
+        }
+    }
+}
 
 #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod block;

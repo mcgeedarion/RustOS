@@ -43,10 +43,15 @@ log = { version = "0.4", default-features = false }
 cc = "1"
 
 [features]
-# Normal development build: keep the UEFI path enabled for the repository
-# default x86_64
-# UEFI/SBI builds through their target-specific commands.
-default = ["uefi_boot", "userspace_boot"]
+# ---------------------------------------------------------------------------
+# Default: only the UEFI firmware handoff path is active for plain
+# `cargo check` / `cargo xtask build --arch x86_64` runs.
+#
+# `userspace_boot` must be opted in explicitly via --features userspace_boot
+# so that the stub fs/proc shims (and the bump allocator) are clearly
+# intentional rather than accidentally compiled into every build.
+# ---------------------------------------------------------------------------
+default = ["uefi_boot"]
 
 # Compile only the firmware handoff, common BootInfo path, early console,
 # panic handler, and an architecture idle loop. This is the first-stage boot
@@ -58,6 +63,10 @@ boot_minimal = []
 # subsystems that are still API-inconsistent. This path keeps the firmware
 # handoff, common BootInfo path, early console, and a userspace handoff marker
 # enabled as the default "boot to userspace" milestone.
+#
+# NOTE: crate::fs and crate::proc are provided as thin stubs (no-op /
+# returns-false) while the real mm/fs/proc stack is still being stabilised.
+# See src/lib.rs for the stub definitions and the Phase 3 replacement plan.
 userspace_boot = []
 
 # Evdev / virtio-input subsystem.
