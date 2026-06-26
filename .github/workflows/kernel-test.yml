@@ -5,11 +5,10 @@
 #
 #   arch      boot mode   cargo target
 #   aarch64   uefi        targets/aarch64-uefi-loader.json
-#   riscv64   uefi        targets/riscv64-uefi-loader.json
 #   x86_64    uefi        x86_64-unknown-uefi (built-in)
 #
 # Plain local `cargo build` targets the repository-default aarch64 UEFI loader
-# via .cargo/config.toml. RISC-V and x86_64 UEFI are built explicitly through
+# via .cargo/config.toml. x86_64 UEFI is built explicitly through
 # `cargo xtask image --arch <arch>` or `ARCH=<arch> ./scripts/ci/run_qemu.sh`.
 
 name: Kernel Test (reusable)
@@ -18,7 +17,7 @@ on:
   workflow_call:
     inputs:
       arch:
-        description: "Target architecture: aarch64 | riscv64 | x86_64"
+        description: "Target architecture: aarch64 | x86_64"
         required: true
         type: string
 
@@ -69,10 +68,6 @@ jobs:
               echo "BOOT=uefi" >> "$GITHUB_ENV"
               echo "TARGET_SHORT=aarch64-uefi-loader" >> "$GITHUB_ENV"
               ;;
-            riscv64)
-              echo "BOOT=uefi" >> "$GITHUB_ENV"
-              echo "TARGET_SHORT=riscv64-uefi-loader" >> "$GITHUB_ENV"
-              ;;
             x86_64)
               echo "BOOT=uefi" >> "$GITHUB_ENV"
               echo "TARGET_SHORT=x86_64-unknown-uefi" >> "$GITHUB_ENV"
@@ -94,9 +89,6 @@ jobs:
           case "${{ inputs.arch }}" in
             aarch64)
               sudo apt-get install -y --no-install-recommends qemu-system-arm qemu-system-data qemu-efi-aarch64 ipxe-qemu mtools
-              ;;
-            riscv64)
-              sudo apt-get install -y --no-install-recommends binutils-riscv64-linux-gnu qemu-system-riscv qemu-efi-riscv64 u-boot-qemu mtools
               ;;
             x86_64)
               sudo apt-get install -y --no-install-recommends qemu-system-x86 ovmf mtools musl-tools
@@ -156,76 +148,6 @@ jobs:
           status=$?
           set -e
           cat "qemu-aarch64.log" | tee logs/aarch64/serial.log
-          if [ "$status" -ne 0 ] && [ "$status" -ne 124 ]; then
-            echo "QEMU exited unexpectedly with status $status" >&2
-            exit "$status"
-          fi
-
-      - name: Build riscv64 UEFI ESP image
-        if: inputs.run_smoke && inputs.arch == 'riscv64'
-        run: |
-          set -o pipefail
-          cargo xtask image --arch riscv64 --debug --features boot_minimal \
-            2>&1 | tee "build-riscv64-image.log"
-          test -f boot-riscv64.img
-
-      - name: QEMU smoke test (riscv64 UEFI)
-        if: inputs.run_smoke && inputs.arch == 'riscv64'
-        run: |
-          mkdir -p logs/riscv64
-
-          find_existing_file() {
-            for path in "$@"; do
-              [ -f "$path" ] && { echo "$path"; return 0; }
-            done
-            return 1
-          }
-
-          FW_KIND=""
-          FW_CODE=""
-          FW_VARS=""
-          if FW_CODE=$(find_existing_file \
-              /usr/share/qemu-efi-riscv64/RISCV_VIRT_CODE.fd \
-              /usr/share/edk2/riscv64/RISCV_VIRT_CODE.fd \
-              /usr/share/qemu/edk2-riscv-code.fd \
-              /usr/share/qemu/edk2-riscv64-code.fd); then
-            FW_KIND="edk2"
-            FW_VARS=/tmp/RISCV_VIRT_VARS.fd
-            dd if=/dev/zero of="$FW_VARS" bs=1M count=32 2>/dev/null
-          elif FW_CODE=$(find_existing_file \
-              /usr/lib/u-boot/qemu-riscv64_smode/uboot.elf \
-              /usr/lib/u-boot/qemu-riscv64/uboot.elf \
-              /usr/share/u-boot/qemu-riscv64_smode/uboot.elf \
-              /usr/share/u-boot/qemu-riscv64/uboot.elf); then
-            FW_KIND="uboot"
-          else
-            echo "RISC-V UEFI firmware not found" >&2
-            exit 1
-          fi
-
-          QEMU_FW_ARGS=()
-          if [ "$FW_KIND" = "edk2" ]; then
-            QEMU_FW_ARGS+=(
-              -drive "if=pflash,unit=0,format=raw,file=${FW_CODE},readonly=on"
-              -drive "if=pflash,unit=1,format=raw,file=${FW_VARS}"
-            )
-          else
-            QEMU_FW_ARGS+=(-bios "$FW_CODE")
-          fi
-
-          set +e
-          timeout 60 qemu-system-riscv64 \
-            -machine virt \
-            -cpu rv64 \
-            -m 256M \
-            "${QEMU_FW_ARGS[@]}" \
-            -drive if=virtio,format=raw,file=boot-riscv64.img \
-            -serial stdio -display none -no-reboot -no-shutdown \
-            -d guest_errors,cpu_reset \
-            > "qemu-riscv64.log" 2>&1
-          status=$?
-          set -e
-          cat "qemu-riscv64.log" | tee logs/riscv64/serial.log
           if [ "$status" -ne 0 ] && [ "$status" -ne 124 ]; then
             echo "QEMU exited unexpectedly with status $status" >&2
             exit "$status"
@@ -294,11 +216,8 @@ jobs:
             aarch64)
               grep -q 'RustOS: BOOT_MINIMAL_OK' "$LOG"
               ;;
-            riscv64)
-              grep -q 'RustOS: BOOT_MINIMAL_OK' "$LOG"
-              ;;
             x86_64)
-              grep -q 'RustOS \\[PRIMARY\\] x86_64 booting via UEFI' "$LOG"
+              grep -q 'RustOS \[PRIMARY\] x86_64 booting via UEFI' "$LOG"
               ;;
           esac
 
