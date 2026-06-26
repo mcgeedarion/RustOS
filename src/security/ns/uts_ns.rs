@@ -4,48 +4,99 @@
 //!
 //!   clone(CLONE_NEWUTS) / unshare(CLONE_NEWUTS)
 //!   sethostname(2) / gethostname(2)
-//!
-//! A `UtsNamespace` stores the five `utsname` fields that vary per-namespace.
-//! The initial namespace (`INIT_UTS_NS`) is initialised at boot from
-//! compile-time constants and the detected CPU architecture string.
+//!   setdomainname(2) / getdomainname(2)
+//!   uname(2) — reads from the calling process's UtsNs
 
-use alloc::string::String;
-use alloc::sync::Arc;
-use crate::sync::spinlock::SpinLock;
+extern crate alloc;
+use crate::security::ns::alloc_ns_id;
+use alloc::{string::String, sync::Arc};
+use spin::Mutex;
 
-#[derive(Clone, Debug)]
-pub struct UtsNamespace {
-    pub sysname:    String,    // always "RustOS"
-    pub nodename:   String,    // hostname
-    pub release:    String,    // kernel release string
-    pub version:    String,    // build timestamp / extra info
-    pub machine:    String,    // "x86_64" | "aarch64"
-    pub domainname: String,    // NIS domainname
+/// Maximum length of hostname / domainname (matches Linux HOST_NAME_MAX = 64).
+pub const HOST_NAME_MAX: usize = 64;
+
+/// The utsname fields exposed to userspace via `uname(2)`.
+#[derive(Clone)]
+pub struct Utsname {
+    pub sysname: String,    // "Linux"
+    pub nodename: String,   // hostname
+    pub release: String,    // kernel version string
+    pub version: String,    // build timestamp / extra info
+    pub machine: String,    // "x86_64" | "riscv64"
+    pub domainname: String, // NIS domainname
 }
 
-impl UtsNamespace {
-    pub fn new_init() -> Self {
-        UtsNamespace {
-            sysname:    String::from("RustOS"),
-            nodename:   String::from("rustos"),
-            release:    String::from(env!("CARGO_PKG_VERSION")),
-            version:    String::from("#1 SMP"),
-            machine:    String::from({
-                #[cfg(target_arch = "x86_64")]  { "x86_64" }
-                #[cfg(target_arch = "aarch64")] { "aarch64" }
-                #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))] { "unknown" }
+impl Utsname {
+    fn default_init() -> Self {
+        Utsname {
+            sysname: String::from("Linux"),
+            nodename: String::from("rustos"),
+            release: String::from("6.1.0-rustos"),
+            version: String::from("#1 SMP 2026"),
+            machine: String::from(if cfg!(target_arch = "x86_64") {
+                "x86_64"
+            } else {
+                "riscv64"
             }),
             domainname: String::from("(none)"),
         }
     }
 }
 
-pub type UtsNsRef = Arc<SpinLock<UtsNamespace>>;
-
-pub fn new_init_ns() -> UtsNsRef {
-    Arc::new(SpinLock::new(UtsNamespace::new_init()))
+pub struct UtsNs {
+    pub id: u64,
+    inner: Mutex<Utsname>,
 }
 
-pub fn clone_ns(src: &UtsNsRef) -> UtsNsRef {
-    Arc::new(SpinLock::new(src.lock().clone()))
+impl UtsNs {
+    pub fn new_init() -> Self {
+        UtsNs {
+            id: alloc_ns_id(),
+            inner: Mutex::new(Utsname::default_init()),
+        }
+    }
+
+    pub fn copy_of(parent: &Arc<UtsNs>) -> Self {
+        let u = parent.inner.lock().clone();
+        UtsNs {
+            id: alloc_ns_id(),
+            inner: Mutex::new(u),
+        }
+    }
+
+    /// Set hostname.  Returns EINVAL if `name` exceeds HOST_NAME_MAX.
+    pub fn set_hostname(&self, name: &str) -> Result<(), isize> {
+        if name.len() > HOST_NAME_MAX {
+            return Err(-22);
+        }
+        self.inner.lock().nodename = String::from(name);
+        Ok(())
+    }
+
+    pub fn hostname(&self) -> String {
+        self.inner.lock().nodename.clone()
+    }
+
+    pub fn set_domainname(&self, name: &str) -> Result<(), isize> {
+        if name.len() > HOST_NAME_MAX {
+            return Err(-22);
+        }
+        self.inner.lock().domainname = String::from(name);
+        Ok(())
+    }
+
+    pub fn domainname(&self) -> String {
+        self.inner.lock().domainname.clone()
+    }
+
+    /// Fill a caller-provided `Utsname` snapshot (for uname(2)).
+    pub fn uname(&self) -> Utsname {
+        self.inner.lock().clone()
+    }
+
+    /// Override the kernel release string (useful for containers to report
+    /// a different kernel version than the host).
+    pub fn set_release(&self, release: &str) {
+        self.inner.lock().release = String::from(release);
+    }
 }

@@ -4,6 +4,7 @@
 # -nostdlib binaries, OR as a thin object file.
 #
 # Variables (override from the parent Makefile or command line):
+#   ARCH       — x86_64 (default) or riscv64
 #   CC         — compiler (default: musl-gcc for the static shim)
 #   SYSROOT    — path to musl sysroot (optional; not needed for shim-only builds)
 #   V          — verbose output (0=quiet, 1=verbose; default: 0)
@@ -41,6 +42,8 @@ CFLAGS     := -std=c11 -ffreestanding -nostdlib \
 
 ifeq ($(ARCH),x86_64)
 CFLAGS     += -mno-red-zone -mcmodel=small
+else ifeq ($(ARCH),riscv64)
+CFLAGS     += -march=rv64gc -mabi=lp64d
 else
 $(error Unsupported ARCH=$(ARCH))
 endif
@@ -101,7 +104,7 @@ install: $(LIB)
 help:
 	@echo "=== libshim Makefile ==="
 	@echo ""
-	@echo "Usage: make [ARCH=x86_64] [CC=compiler] [V=0|1]"
+	@echo "Usage: make [ARCH=x86_64|riscv64] [CC=compiler] [V=0|1]"
 	@echo ""
 	@echo "Targets:"
 	@echo "  all     - Build $(LIB) (default)"
@@ -110,7 +113,7 @@ help:
 	@echo "  help    - Display this help message"
 	@echo ""
 	@echo "Variables:"
-	@echo "  ARCH    - Target architecture (x86_64) [$(ARCH)]"
+	@echo "  ARCH    - Target architecture (x86_64, riscv64) [$(ARCH)]"
 	@echo "  CC      - C compiler [$(CC)]"
 	@echo "  AR      - Archive tool [$(AR)]"
 	@echo "  RANLIB  - Archive index tool [$(RANLIB)]"
@@ -119,8 +122,13 @@ help:
 	@echo ""
 	@echo "Examples:"
 	@echo "  make                          # Build for x86_64"
+	@echo "  make ARCH=riscv64             # Build for riscv64"
 	@echo "  make V=1                      # Verbose build"
 	@echo "  make install PREFIX=$$HOME    # Install to home directory"
 	@echo ""
+
+# ============================================================================
+# Dependencies
+# ============================================================================
 
 -include $(DEPS)

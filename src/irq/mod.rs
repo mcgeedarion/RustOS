@@ -1,13 +1,16 @@
 //! IRQ / interrupt-controller subsystem.
 //!
 //! Organised by architecture so a future x86_64 APIC driver can live here
-//! alongside other controllers without polluting `src/drivers/`.
+//! alongside the RISC-V controllers without polluting `src/drivers/`.
+//!
+//! These are **not** drivers — they are fundamental platform machinery that
+//! the trap handler depends on during the earliest stages of kernel init.
 //!
 //! ## Modules
-//!   x86_64  — APIC (external IRQs) + APIC timer
-//!   aarch64 — GIC (external IRQs) + timer
+//!   riscv64  — RISC-V PLIC (external IRQs) + CLINT (timer / IPI)
+
+#[cfg(target_arch = "riscv64")]
+pub mod riscv64;
 
 #[cfg(target_arch = "aarch64")]
 pub mod aarch64;
-#[cfg(target_arch = "x86_64")]
-pub mod x86_64;
