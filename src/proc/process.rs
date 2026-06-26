@@ -1,1 +1,1 @@
-__PROCESS_RS__
+cat /tmp/cleaned_process.rs
