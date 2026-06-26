@@ -60,7 +60,7 @@ check_command() {
 
 validate_architecture() {
     case "$ARCH" in
-        x86_64|aarch64|riscv64|arm|i386)
+        x86_64|aarch64|arm|i386)
             return 0
             ;;
         *)
