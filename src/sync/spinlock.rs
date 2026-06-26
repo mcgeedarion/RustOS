@@ -5,31 +5,25 @@
 //!   `SpinLock<T>`         — plain spinlock; use when the lock is NEVER
 //!                           acquired from interrupt context on the same CPU.
 //!
-//!   `IrqSpinLock<T>`      — IRQ-saving spinlock; use when the lock may be
-//!                           acquired from both normal (process/task) context
-//!                           AND from interrupt handlers on the same CPU.
-//!                           `lock_irqsave()` disables local interrupts before
-//!                           spinning, and the guard re-enables them on drop.
+//!   `IrqSpinLock<T>`      — IRQ-saving spinlock; disables local interrupts
+//!                           while the lock is held so that ISRs on the same
+//!                           CPU cannot dead-lock against their own holder.
 //!
-//! ## Adaptive spin strategy
-//!
-//! On modern x86 `pause` carries a ~140-cycle delay (Alder Lake / Zen 4).
-//! For short critical sections the lock holder often releases before those
-//! 140 cycles elapse, so we would waste time waiting for `pause` to finish.
-//!
-//! The optimised spin loop therefore does a short tight spin (4 iterations
-//! of `core::hint::spin_loop()`, which is a zero-cycle hint on most arches
-//! or a very short pause on others) before falling into the heavier pause
-//! loop.  This recovers the fast-path latency for uncontended or briefly-
-//! contended locks while still reducing bus traffic under high contention.
+//! Both types implement `Deref`/`DerefMut` on the guard, so they drop in as
+//! replacements for `spin::Mutex` / `std::sync::Mutex` in most code.
 
 use core::cell::UnsafeCell;
+use core::ops::{Deref, DerefMut};
 use core::sync::atomic::{AtomicU32, Ordering};
 
+// ---------------------------------------------------------------------------
+// Plain SpinLock
+// ---------------------------------------------------------------------------
+
 pub struct SpinLock<T> {
-    next_ticket: AtomicU32,
-    now_serving: AtomicU32,
-    data: UnsafeCell<T>,
+    ticket: AtomicU32,
+    serving: AtomicU32,
+    inner: UnsafeCell<T>,
 }
 
 unsafe impl<T: Send> Send for SpinLock<T> {}
@@ -38,64 +32,38 @@ unsafe impl<T: Send> Sync for SpinLock<T> {}
 impl<T> SpinLock<T> {
     pub const fn new(val: T) -> Self {
         SpinLock {
-            next_ticket: AtomicU32::new(0),
-            now_serving: AtomicU32::new(0),
-            data: UnsafeCell::new(val),
+            ticket: AtomicU32::new(0),
+            serving: AtomicU32::new(0),
+            inner: UnsafeCell::new(val),
         }
     }
 
-    /// Acquire the lock, returning a guard that releases it on drop.
-    /// **Do not use this from interrupt handlers** — use `IrqSpinLock` instead.
-    #[inline]
     pub fn lock(&self) -> SpinLockGuard<'_, T> {
-        let ticket = self.next_ticket.fetch_add(1, Ordering::Relaxed);
-
-        // Try a short burst first.  If the lock is uncontended or the holder
-        // is in a very short critical section, we may get it here without
-        // ever paying the ~140-cycle `pause` penalty.
-        for _ in 0..4 {
-            if self.now_serving.load(Ordering::Acquire) == ticket {
-                return SpinLockGuard { lock: self };
-            }
-            core::hint::spin_loop();
-        }
-
-        // Contention is real.  Switch to `pause` to reduce memory-bus
-        // traffic and yield bandwidth to the lock holder.
-        while self.now_serving.load(Ordering::Acquire) != ticket {
-            #[cfg(target_arch = "x86_64")]
-            unsafe {
-                core::arch::asm!("pause", options(nostack, preserves_flags));
-            }
-            #[cfg(target_arch = "riscv64")]
-            unsafe {
-                core::arch::asm!("nop", options(nostack));
-            }
+        let my_ticket = self.ticket.fetch_add(1, Ordering::Relaxed);
+        while self.serving.load(Ordering::Acquire) != my_ticket {
             core::hint::spin_loop();
         }
         SpinLockGuard { lock: self }
     }
 
-    /// Try to acquire without blocking.  Returns `None` on contention.
-    #[inline]
+    /// Try to acquire the lock without spinning. Returns `None` if busy.
     pub fn try_lock(&self) -> Option<SpinLockGuard<'_, T>> {
-        let serving = self.now_serving.load(Ordering::Acquire);
-        let next = self.next_ticket.load(Ordering::Relaxed);
-        if serving == next {
-            if self
-                .next_ticket
-                .compare_exchange(next, next + 1, Ordering::AcqRel, Ordering::Relaxed)
-                .is_ok()
-            {
+        let serving = self.serving.load(Ordering::Acquire);
+        let ticket = self.ticket.load(Ordering::Relaxed);
+        if serving == ticket {
+            let got = self.ticket.compare_exchange(
+                ticket, ticket + 1, Ordering::Acquire, Ordering::Relaxed,
+            );
+            if got.is_ok() {
                 return Some(SpinLockGuard { lock: self });
             }
         }
         None
     }
 
-    #[inline]
+    /// Check if the lock is currently held (racy, for debug/stats only).
     pub fn is_locked(&self) -> bool {
-        self.now_serving.load(Ordering::Relaxed) != self.next_ticket.load(Ordering::Relaxed)
+        self.ticket.load(Ordering::Relaxed) != self.serving.load(Ordering::Relaxed)
     }
 }
 
@@ -103,26 +71,26 @@ pub struct SpinLockGuard<'a, T> {
     lock: &'a SpinLock<T>,
 }
 
-impl<'a, T> core::ops::Deref for SpinLockGuard<'a, T> {
+impl<T> Deref for SpinLockGuard<'_, T> {
     type Target = T;
-    fn deref(&self) -> &T {
-        unsafe { &*self.lock.data.get() }
-    }
+    fn deref(&self) -> &T { unsafe { &*self.lock.inner.get() } }
 }
 
-impl<'a, T> core::ops::DerefMut for SpinLockGuard<'a, T> {
-    fn deref_mut(&mut self) -> &mut T {
-        unsafe { &mut *self.lock.data.get() }
-    }
+impl<T> DerefMut for SpinLockGuard<'_, T> {
+    fn deref_mut(&mut self) -> &mut T { unsafe { &mut *self.lock.inner.get() } }
 }
 
-impl<'a, T> Drop for SpinLockGuard<'a, T> {
-    #[inline]
+impl<T> Drop for SpinLockGuard<'_, T> {
     fn drop(&mut self) {
-        self.lock.now_serving.fetch_add(1, Ordering::Release);
+        self.lock.serving.fetch_add(1, Ordering::Release);
     }
 }
 
+// ---------------------------------------------------------------------------
+// IrqSpinLock
+// ---------------------------------------------------------------------------
+
+/// Saves the IRQ-enable state on lock, restores it on drop.
 pub struct IrqSpinLock<T> {
     inner: SpinLock<T>,
 }
@@ -132,109 +100,92 @@ unsafe impl<T: Send> Sync for IrqSpinLock<T> {}
 
 impl<T> IrqSpinLock<T> {
     pub const fn new(val: T) -> Self {
-        IrqSpinLock {
-            inner: SpinLock::new(val),
-        }
+        IrqSpinLock { inner: SpinLock::new(val) }
     }
 
-    #[inline]
-    pub fn lock_irqsave(&self) -> IrqSpinLockGuard<'_, T> {
-        let irq_was_enabled = irq_flags_and_disable();
+    pub fn lock(&self) -> IrqSpinLockGuard<'_, T> {
+        let flags = irq_save_disable();
         let guard = self.inner.lock();
-        core::mem::forget(guard);
-        IrqSpinLockGuard {
-            lock: self,
-            irq_was_enabled,
-        }
-    }
-
-    #[inline]
-    pub fn try_lock_irqsave(&self) -> Option<IrqSpinLockGuard<'_, T>> {
-        let irq_was_enabled = irq_flags_and_disable();
-        match self.inner.try_lock() {
-            Some(guard) => {
-                core::mem::forget(guard);
-                Some(IrqSpinLockGuard {
-                    lock: self,
-                    irq_was_enabled,
-                })
-            },
-            None => {
-                if irq_was_enabled {
-                    irq_enable();
-                }
-                None
-            },
-        }
+        IrqSpinLockGuard { guard, flags }
     }
 }
 
 pub struct IrqSpinLockGuard<'a, T> {
-    lock: &'a IrqSpinLock<T>,
-    irq_was_enabled: bool,
+    guard: SpinLockGuard<'a, T>,
+    flags: IrqFlags,
 }
 
-impl<'a, T> core::ops::Deref for IrqSpinLockGuard<'a, T> {
+impl<T> Deref for IrqSpinLockGuard<'_, T> {
     type Target = T;
-    fn deref(&self) -> &T {
-        unsafe { &*self.lock.inner.data.get() }
-    }
+    fn deref(&self) -> &T { &self.guard }
 }
 
-impl<'a, T> core::ops::DerefMut for IrqSpinLockGuard<'a, T> {
-    fn deref_mut(&mut self) -> &mut T {
-        unsafe { &mut *self.lock.inner.data.get() }
-    }
+impl<T> DerefMut for IrqSpinLockGuard<'_, T> {
+    fn deref_mut(&mut self) -> &mut T { &mut self.guard }
 }
 
-impl<'a, T> Drop for IrqSpinLockGuard<'a, T> {
-    #[inline]
+impl<T> Drop for IrqSpinLockGuard<'_, T> {
     fn drop(&mut self) {
-        self.lock.inner.now_serving.fetch_add(1, Ordering::Release);
-        if self.irq_was_enabled {
-            irq_enable();
-        }
+        // guard drops first, releasing the spinlock before re-enabling IRQs.
+        irq_restore(self.flags);
     }
 }
 
-#[inline]
-fn irq_flags_and_disable() -> bool {
+// ---------------------------------------------------------------------------
+// IRQ save/restore helpers (architecture-specific)
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy)]
+pub struct IrqFlags(u64);
+
+#[inline(always)]
+fn irq_save_disable() -> IrqFlags {
     #[cfg(target_arch = "x86_64")]
     unsafe {
-        let flags: usize;
+        let flags: u64;
         core::arch::asm!(
             "pushfq",
-            "pop {f}",
+            "pop {flags}",
             "cli",
-            f = out(reg) flags,
-            options(nostack, preserves_flags)
+            flags = out(reg) flags,
+            options(nomem, preserves_flags)
         );
-        flags & (1 << 9) != 0
+        IrqFlags(flags)
     }
-    #[cfg(target_arch = "riscv64")]
+    #[cfg(target_arch = "aarch64")]
     unsafe {
-        let sstatus: usize;
+        let daif: u64;
         core::arch::asm!(
-            "csrrci {ss}, sstatus, 2",
-            ss = out(reg) sstatus,
-            options(nostack)
+            "mrs {daif}, daif",
+            "msr daifset, #0xf",
+            daif = out(reg) daif,
+            options(nomem, nostack)
         );
-        sstatus & (1 << 1) != 0
+        IrqFlags(daif)
     }
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "riscv64")))]
-    {
-        false
-    }
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    compile_error!("IrqSpinLock: unsupported target architecture")
 }
 
-#[inline]
-fn irq_enable() {
+#[inline(always)]
+fn irq_restore(flags: IrqFlags) {
     #[cfg(target_arch = "x86_64")]
     unsafe {
-        core::arch::asm!("sti", options(nostack, preserves_flags));
+        core::arch::asm!(
+            "push {flags}",
+            "popfq",
+            flags = in(reg) flags.0,
+            options(nomem, preserves_flags)
+        );
     }
-    #[cfg(target_arch = "riscv64")]
+    #[cfg(target_arch = "aarch64")]
     unsafe {
-        core::arch::asm!("csrsi sstatus, 2", options(nostack));
+        core::arch::asm!(
+            "msr daif, {daif}",
+            daif = in(reg) flags.0,
+            options(nomem, nostack)
+        );
     }
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    compile_error!("IrqSpinLock: unsupported target architecture")
 }

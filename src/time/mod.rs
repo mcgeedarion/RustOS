@@ -3,7 +3,7 @@
 //! ## Architecture
 //!
 //! ```
-//! Clocksource (TSC / HPET / CLINT mtime)
+//! Clocksource (TSC / HPET / ARM Generic Timer)
 //!        │  raw nanosecond counter
 //!        ▼
 //! time::clock  ── CLOCK_MONOTONIC  (monotone, never steps)
@@ -21,12 +21,11 @@
 //!
 //! ## Clocksource priority
 //!
-//! On x86_64: TSC (if invariant) > HPET > APIC timer.
-//! On RISC-V:  CLINT `mtime` register (always invariant).
+//! On x86_64:  TSC (if invariant) > HPET > APIC timer.
+//! On AArch64: ARM generic timer (always invariant).
 //!
 //! The selected clocksource is recorded in `CLOCKSOURCE` at boot.
 
-pub mod clint;
 pub mod clock;
 pub mod hpet;
 pub mod timer;
@@ -41,7 +40,7 @@ use spin::Mutex;
 pub enum ClockSource {
     Tsc,
     Hpet,
-    ClintMtime,
+    ArmGenericTimer,
     ApicTimer,
 }
 
@@ -67,10 +66,7 @@ pub struct Timespec {
 }
 
 impl Timespec {
-    pub const ZERO: Self = Timespec {
-        tv_sec: 0,
-        tv_nsec: 0,
-    };
+    pub const ZERO: Self = Timespec { tv_sec: 0, tv_nsec: 0 };
 
     pub fn from_ns(ns: u64) -> Self {
         Timespec {
@@ -89,11 +85,7 @@ impl Timespec {
 
     pub fn sub_ns(&self, ns: u64) -> Self {
         let total = self.to_ns();
-        if ns >= total {
-            Self::ZERO
-        } else {
-            Self::from_ns(total - ns)
-        }
+        if ns >= total { Self::ZERO } else { Self::from_ns(total - ns) }
     }
 
     /// Normalise: bring tv_nsec into [0, 1_000_000_000).
@@ -114,7 +106,7 @@ impl Timespec {
     }
 }
 
-/// `struct timeval` — used by `gettimeofday(2)` and select(2).
+/// `struct timeval` — used by `gettimeofday(2)` and `select(2)`.
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug)]
 pub struct Timeval {
@@ -124,39 +116,23 @@ pub struct Timeval {
 
 impl Timeval {
     pub fn from_timespec(ts: Timespec) -> Self {
-        Timeval {
-            tv_sec: ts.tv_sec,
-            tv_usec: ts.tv_nsec / 1000,
-        }
+        Timeval { tv_sec: ts.tv_sec, tv_usec: ts.tv_nsec / 1000 }
     }
     pub fn to_timespec(&self) -> Timespec {
-        Timespec {
-            tv_sec: self.tv_sec,
-            tv_nsec: self.tv_usec * 1000,
-        }
+        Timespec { tv_sec: self.tv_sec, tv_nsec: self.tv_usec * 1000 }
     }
 }
 
-// Global monotonic nanosecond counter
-// Incremented by the tick handler; read by all clock_gettime paths.
-
 /// Nanoseconds since boot (CLOCK_MONOTONIC base).
-/// Updated atomically from the timer interrupt; read lock-free via
-/// the `read_monotonic_ns()` function below.
 static MONO_NS: AtomicU64 = AtomicU64::new(0);
-
 /// Nanoseconds since boot including suspend time (CLOCK_BOOTTIME).
 static BOOT_NS: AtomicU64 = AtomicU64::new(0);
-
-/// Wall-clock offset from MONO_NS in nanoseconds (may be negative).
-/// CLOCK_REALTIME = MONO_NS + REALTIME_OFFSET.
+/// Wall-clock offset from MONO_NS in nanoseconds.
 static REALTIME_OFFSET_NS: AtomicI64 = AtomicI64::new(0);
-
 /// Leap second offset in seconds added to CLOCK_REALTIME for CLOCK_TAI.
-static TAI_OFFSET_S: AtomicI64 = AtomicI64::new(37); // current TAI-UTC as of 2024
+static TAI_OFFSET_S: AtomicI64 = AtomicI64::new(37);
 
-/// Called from the tick interrupt handler (APIC / CLINT) every tick.
-/// `elapsed_ns` is the number of nanoseconds since the last call.
+/// Called from the tick interrupt handler (APIC / ARM timer) every tick.
 pub fn tick_advance(elapsed_ns: u64) {
     MONO_NS.fetch_add(elapsed_ns, Ordering::Relaxed);
     BOOT_NS.fetch_add(elapsed_ns, Ordering::Relaxed);
@@ -164,48 +140,26 @@ pub fn tick_advance(elapsed_ns: u64) {
 }
 
 /// Called when the system resumes from S3 sleep.
-/// `suspend_ns` is the estimated time the system spent suspended.
 pub fn suspend_resume(suspend_ns: u64) {
-    // BOOT_NS includes suspend; MONO_NS does not.
     BOOT_NS.fetch_add(suspend_ns, Ordering::Relaxed);
 }
 
-/// Read the monotonic nanosecond counter.
-/// On TSC-equipped systems this is refined by `tsc::read_ns()`.
 pub fn read_monotonic_ns() -> u64 {
     #[cfg(target_arch = "x86_64")]
     if *CLOCKSOURCE.lock() == ClockSource::Tsc {
         return tsc::read_ns();
     }
-    #[cfg(target_arch = "riscv64")]
-    if *CLOCKSOURCE.lock() == ClockSource::ClintMtime {
-        return clint::read_ns();
-    }
     MONO_NS.load(Ordering::Relaxed)
 }
 
-pub fn read_boottime_ns() -> u64 {
-    BOOT_NS.load(Ordering::Relaxed)
-}
-
-pub fn realtime_offset_ns() -> i64 {
-    REALTIME_OFFSET_NS.load(Ordering::Relaxed)
-}
-
-pub fn set_realtime_offset_ns(offset: i64) {
-    REALTIME_OFFSET_NS.store(offset, Ordering::SeqCst);
-}
-
-pub fn tai_offset_s() -> i64 {
-    TAI_OFFSET_S.load(Ordering::Relaxed)
-}
-
-pub fn set_tai_offset_s(s: i64) {
-    TAI_OFFSET_S.store(s, Ordering::SeqCst);
-}
+pub fn read_boottime_ns() -> u64 { BOOT_NS.load(Ordering::Relaxed) }
+pub fn realtime_offset_ns() -> i64 { REALTIME_OFFSET_NS.load(Ordering::Relaxed) }
+pub fn set_realtime_offset_ns(offset: i64) { REALTIME_OFFSET_NS.store(offset, Ordering::SeqCst); }
+pub fn tai_offset_s() -> i64 { TAI_OFFSET_S.load(Ordering::Relaxed) }
+pub fn set_tai_offset_s(s: i64) { TAI_OFFSET_S.store(s, Ordering::SeqCst); }
 
 /// Initialise the timekeeping subsystem.
-/// Must be called after the APIC / CLINT interrupt source is configured.
+/// Must be called after the APIC / ARM timer interrupt source is configured.
 pub fn init() {
     #[cfg(target_arch = "x86_64")]
     {
@@ -215,33 +169,10 @@ pub fn init() {
             set_clocksource(ClockSource::Hpet);
         }
     }
-    #[cfg(target_arch = "riscv64")]
-    {
-        if clint::init() {
-            set_clocksource(ClockSource::ClintMtime);
-        }
-    }
     timer::init();
     timerfd::init();
 }
 
-// ===== GUESS: short aliases for new callers =====
-
-/// GUESS: alias of `read_monotonic_ns`.
-#[inline]
-pub fn monotonic_ns() -> u64 {
-    read_monotonic_ns()
-}
-
-/// GUESS: ns -> ms conversion of monotonic clock.
-#[inline]
-pub fn monotonic_ms() -> u64 {
-    read_monotonic_ns() / 1_000_000
-}
-
-/// GUESS: ns -> us "ticks" (microseconds) — best fit for callers that count
-/// "ticks" without a specific frequency contract.
-#[inline]
-pub fn monotonic_ticks() -> u64 {
-    read_monotonic_ns() / 1_000
-}
+#[inline] pub fn monotonic_ns() -> u64 { read_monotonic_ns() }
+#[inline] pub fn monotonic_ms() -> u64 { read_monotonic_ns() / 1_000_000 }
+#[inline] pub fn monotonic_ticks() -> u64 { read_monotonic_ns() / 1_000 }
