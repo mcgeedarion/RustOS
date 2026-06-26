@@ -127,11 +127,37 @@ fault-inject = []
 # ---------------------------------------------------------------------------
 syscall-trace = []
 
+# ---------------------------------------------------------------------------
+# Meta-features for build profiles.
+#
+# `release-boot` is the lean CI / normal-boot image:
+#   - No kmtest harness
+#   - No fault-inject framework
+#   - No syscall-trace profiling hooks
+#   - No GDB stub or trace ring buffer
+#
+# Debug and profiling images opt into these explicitly via `--features`.
+# ---------------------------------------------------------------------------
+release-boot = []
+
 [profile.release]
 opt-level = 3
 lto = true
 codegen-units = 1
 strip = false
+
+[profile.release-boot]
+inherits = "release"
+# No DWARF / debuginfo for the boot image; keep symbols in separate debug builds.
+debug = 0
+# Make sure cfg(debug_assertions) is off even if other profiles flip it on.
+debug-assertions = false
+# Optimise for size; LTO + single codegen unit keeps hot paths inlined.
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+# Strip debuginfo and most symbol names from the final binary.
+strip = "debuginfo"
 
 [profile.dev]
 opt-level = 0
