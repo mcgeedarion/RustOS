@@ -19,9 +19,8 @@ xtask = "run --target x86_64-unknown-linux-gnu -p xtask --"
 # the aarch64 UEFI loader/application.  Use `cargo xtask image
 # --arch aarch64` when you need the FAT ESP image.
 #
-# x86_64 and riscv64 remain explicit targets:
+# x86_64 remain explicit targets:
 #   cargo xtask build --arch x86_64
-#   cargo xtask build --arch riscv64 --boot sbi
 [build]
 target = "targets/aarch64-uefi-loader.json"
 
