@@ -5,7 +5,6 @@
 #
 # Architecture × boot-mode support:
 #   aarch64 — uefi, baremetal
-#   riscv64 — uefi, sbi
 #   x86_64  — uefi
 
 name: Build
@@ -25,7 +24,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arch: [aarch64, riscv64, x86_64]
+        arch: [aarch64, x86_64]
     with:
       arch: ${{ matrix.arch }}
       run_build: true
