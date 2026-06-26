@@ -34,7 +34,7 @@ extern crate alloc;
 // Organised by kernel layer (outermost = most dependent on others):
 //   core        — Zero-dependency foundation (error types, panic, cpu-local,
 //                 intrusive collections).  Everything may depend on this.
-//   arch        — Architecture-specific code (x86_64, riscv64)
+//   arch        — Architecture-specific code (x86_64, aarch64)
 //   firmware    — Platform firmware interfaces (ACPI, Device Tree)
 //   device      — Hardware-neutral bus manager (PCI, future: platform, USB)
 //   irq         — Interrupt controllers (PLIC, CLINT; arch-gated)
