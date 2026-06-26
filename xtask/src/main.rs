@@ -70,11 +70,22 @@ enum Boot {
     Baremetal,
 }
 
+/// Build profile used for kernel compilation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BuildProfile {
+    /// Dev/debug build: -O0 + full debug symbols, `cfg(debug_assertions)` on.
+    Dev,
+    /// Optimised developer build: [profile.release] + default debug features.
+    Release,
+    /// Lean boot image: [profile.release-boot] + release-boot feature set.
+    ReleaseBoot,
+}
+
 #[derive(Debug, Clone)]
 struct BuildOpts {
     arch: Arch,
     boot: Boot,
-    debug: bool,
+    profile: BuildProfile,
     initrd: bool,
     features: Option<String>,
 }
@@ -84,7 +95,7 @@ impl Default for BuildOpts {
         Self {
             arch: Arch::X86_64,
             boot: Boot::Uefi,
-            debug: false,
+            profile: BuildProfile::Dev,
             initrd: false,
             features: None,
         }
@@ -108,6 +119,14 @@ fn boot_str(boot: Boot) -> &'static str {
         Boot::Uefi => "uefi",
         Boot::Sbi => "sbi",
         Boot::Baremetal => "baremetal",
+    }
+}
+
+fn profile_str(profile: BuildProfile) -> &'static str {
+    match profile {
+        BuildProfile::Dev => "debug",
+        BuildProfile::Release => "release",
+        BuildProfile::ReleaseBoot => "release-boot",
     }
 }
 
@@ -177,18 +196,10 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
-fn profile(opts: &BuildOpts) -> &'static str {
-    if opts.debug {
-        "debug"
-    } else {
-        "release"
-    }
-}
-
 fn build_output_path(root: &Path, opts: &BuildOpts) -> PathBuf {
     root.join("target")
         .join(target_dir_name(opts.arch, opts.boot))
-        .join(profile(opts))
+        .join(profile_str(opts.profile))
 }
 
 fn artifact_path(root: &Path, opts: &BuildOpts) -> Option<PathBuf> {
@@ -274,7 +285,19 @@ fn parse_build_args(args: &[String]) -> BuildOpts {
                 i += 1;
                 opts.features = args.get(i).cloned();
             },
-            "--debug" => opts.debug = true,
+            "--debug" => opts.profile = BuildProfile::Dev,
+            "--profile" => {
+                i += 1;
+                opts.profile = match args.get(i).map(String::as_str) {
+                    Some("dev") | Some("debug") => BuildProfile::Dev,
+                    Some("release") => BuildProfile::Release,
+                    Some("release-boot") => BuildProfile::ReleaseBoot,
+                    other => {
+                        eprintln!("[xtask] unknown --profile: {:?}", other);
+                        exit(1);
+                    },
+                };
+            },
             "--initrd" => opts.initrd = true,
             other => {
                 eprintln!("[xtask] unknown argument: {other}");
@@ -321,24 +344,40 @@ fn build_kernel(root: &Path, opts: &BuildOpts) -> Result<()> {
         .args(["build", "--target"])
         .arg(target_json(root, opts.arch, opts.boot));
     add_build_std_flags(&mut cmd);
-    if !opts.debug {
-        cmd.arg("--release");
-    }
-    match &opts.features {
-        Some(features) => {
-            if features
-                .split(',')
-                .any(|feature| feature.trim() == "boot_minimal")
-            {
-                cmd.arg("--no-default-features");
-            }
-            cmd.arg("--features").arg(features);
+
+    match opts.profile {
+        BuildProfile::Dev => {
+            // default: debug profile, default feature set
         },
-        None if opts.boot == Boot::Uefi => {
-            cmd.arg("--features").arg("uefi_boot");
+        BuildProfile::Release => {
+            cmd.arg("--release");
         },
-        None => {},
+        BuildProfile::ReleaseBoot => {
+            cmd.args(["--profile", "release-boot"]);
+            // Lean feature set: no default debug / test / profiling features.
+            cmd.arg("--no-default-features");
+            cmd.arg("--features").arg("release-boot");
+        },
     }
+
+    if !matches!(opts.profile, BuildProfile::ReleaseBoot) {
+        match &opts.features {
+            Some(features) => {
+                if features
+                    .split(',')
+                    .any(|feature| feature.trim() == "boot_minimal")
+                {
+                    cmd.arg("--no-default-features");
+                }
+                cmd.arg("--features").arg(features);
+            },
+            None if opts.boot == Boot::Uefi => {
+                cmd.arg("--features").arg("uefi_boot");
+            },
+            None => {},
+        }
+    }
+
     run(&mut cmd)?;
 
     if opts.boot == Boot::Uefi {
@@ -351,7 +390,7 @@ fn build_kernel(root: &Path, opts: &BuildOpts) -> Result<()> {
         "built {} {} {}",
         arch_str(opts.arch),
         boot_str(opts.boot),
-        profile(opts)
+        profile_str(opts.profile)
     ));
     Ok(())
 }
@@ -725,8 +764,8 @@ fn resolve_ovmf(root: &Path) -> Result<PathBuf> {
 ///
 /// ```text
 /// cargo xtask run --arch x86_64
-/// cargo xtask run --arch x86_64 --debug
-/// cargo xtask run --arch x86_64 --features boot_minimal
+/// cargo xtask run --arch x86_64 --profile release
+/// cargo xtask run --arch x86_64 --profile release-boot
 /// ```
 ///
 /// Serial output is forwarded to stdout. Press Ctrl-A X to quit QEMU.
@@ -743,9 +782,10 @@ fn run_qemu(root: &Path, opts: &BuildOpts) -> Result<()> {
 
     // Step 1 — build kernel + assemble FAT image.
     log(format!(
-        "==> Step 1/3: building {} {} kernel",
+        "==> Step 1/3: building {} {} kernel ({})",
         arch_str(opts.arch),
-        boot_str(opts.boot)
+        boot_str(opts.boot),
+        profile_str(opts.profile),
     ));
     image(root, opts)?;
 
@@ -944,9 +984,11 @@ Phase 2 userspace validation:
 Options (apply to run / build / image):
   --arch <aarch64|riscv64|x86_64>   target architecture (default: x86_64)
   --boot <uefi|sbi|baremetal>       boot protocol      (default: uefi)
-  --features <feat1,feat2,...>       extra Cargo features
-  --debug                            debug build (no --release)
-  --initrd                           also build + pack initramfs
+  --features <feat1,feat2,...>      extra Cargo features
+  --debug                           debug build (alias for --profile dev)
+  --profile <dev|release|release-boot>
+                                   build profile (default: dev)
+  --initrd                          also build + pack initramfs
 
 build-init options:
   --debug                            debug build of /init
