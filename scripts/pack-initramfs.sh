@@ -18,7 +18,7 @@
 #
 # Why uncompressed?
 #   RustOS does not yet include a decompressor.  QEMU's -initrd flag and
-#   the UEFI/SBI boot stub both call set_initramfs_range() with the raw
+#   the UEFI boot stub both call set_initramfs_range() with the raw
 #   physical address and byte length of whatever memory region the firmware
 #   hands them.  Compressed formats (gzip, lz4, zstd) would silently fail
 #   the `070701` magic check in src/init/initramfs/mod.rs and the kernel
