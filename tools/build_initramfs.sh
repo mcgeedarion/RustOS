@@ -1,0 +1,1 @@
+__BUILD_INITRAMFS_SH__

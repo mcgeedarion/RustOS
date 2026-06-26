@@ -1,0 +1,1 @@
+__CONSOLE_MOD_RS__
