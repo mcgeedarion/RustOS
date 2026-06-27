@@ -139,8 +139,6 @@ fn test_panic_header_fields() {
     assert_contains("PANIC_ARCH: x86_64");
     #[cfg(target_arch = "aarch64")]
     assert_contains("PANIC_ARCH: aarch64");
-    #[cfg(target_arch = "riscv64")]
-    assert_contains("PANIC_ARCH: riscv64");
 }
 
 // ---------------------------------------------------------------------------

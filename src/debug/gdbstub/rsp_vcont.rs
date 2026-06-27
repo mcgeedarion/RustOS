@@ -84,9 +84,7 @@ pub fn range_step_done(state: &RspState, pc: u64) -> bool {
 /// Enable architecture single-step.
 ///
 /// x86_64 and AArch64 have a trap-frame bit this code can set directly.
-/// RISC-V software single-step requires instruction decode plus temporary
-/// EBREAK patch/restore support, so this returns `false` until that lower layer
-/// exists instead of pretending the step was armed.
+/// Enable architecture-supported single-step bits when available.
 #[inline]
 fn arch_enable_single_step(frame: &mut crate::arch::TrapFrame) -> bool {
     #[cfg(target_arch = "x86_64")]
@@ -101,16 +99,10 @@ fn arch_enable_single_step(frame: &mut crate::arch::TrapFrame) -> bool {
         true
     }
 
-    #[cfg(target_arch = "riscv64")]
-    {
-        let _ = frame;
-        false
-    }
 
     #[cfg(not(any(
         target_arch = "x86_64",
         target_arch = "aarch64",
-        target_arch = "riscv64"
     )))]
     {
         let _ = frame;

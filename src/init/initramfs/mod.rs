@@ -2,12 +2,6 @@
 //!
 //! ## Boot-protocol initramfs discovery
 //!
-//! On **RISC-V / OpenSBI**: QEMU passes the initrd physical address and size
-//! in FDT node `/chosen`, properties `linux,initrd-start` and
-//! `linux,initrd-end`. `pmm::init_from_fdt()` stores those values via
-//! `set_initramfs_range()` before the heap is initialised, so no allocation is
-//! needed.
-//!
 //! On **x86_64 / UEFI**: the UEFI stub receives the initrd via the
 //! `LoadFile2` protocol and calls `set_initramfs_range()` with the physical
 //! address and byte length before jumping to `kernel_main`.
@@ -29,7 +23,7 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 static INITRAMFS_PA: AtomicUsize = AtomicUsize::new(0);
 static INITRAMFS_LEN: AtomicUsize = AtomicUsize::new(0);
 
-/// Called by the boot stub (FDT walker on RISC-V, UEFI stub on x86_64/aarch64)
+/// Called by the boot stub (UEFI stub on x86_64/aarch64)
 /// to register the initramfs physical range before heap init.
 pub fn set_initramfs_range(phys_start: usize, byte_len: usize) {
     INITRAMFS_PA.store(phys_start, Ordering::Relaxed);
@@ -65,16 +59,10 @@ pub fn load() -> InitramfsHandle<'static> {
         crate::kprintln!("initramfs: Pass -initrd <file> to QEMU and ensure");
         crate::kprintln!("initramfs: the boot stub calls set_initramfs_range().");
         loop {
-            #[cfg(target_arch = "riscv64")]
-            unsafe {
-                core::arch::asm!("wfi");
-            }
             #[cfg(target_arch = "x86_64")]
             unsafe {
                 core::arch::asm!("hlt");
             }
-            #[cfg(not(any(target_arch = "riscv64", target_arch = "x86_64")))]
-            core::hint::spin_loop();
         }
     }
 

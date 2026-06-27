@@ -2,7 +2,7 @@
 //!
 //! | Module           | Role                                                         |
 //! |------------------|--------------------------------------------------------------|
-//! | `boot_info`      | Parsed multiboot2 / UEFI / SBI boot information.            |
+//! | `boot_info`      | Parsed multiboot2 / UEFI boot information.            |
 //! | `crt`            | C runtime stub: sets up the initial stack frame and calls   |
 //! |                  | `main` for user-space ELF binaries.                          |
 //! | `initramfs`      | CPIO initramfs parser and in-memory VFS mount.               |

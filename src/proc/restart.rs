@@ -25,7 +25,7 @@ use spin::Mutex;
 pub struct RestartBlock {
     /// The syscall instruction address (PC before the +advance).
     /// Restoring this makes the CPU re-execute the syscall on return.
-    pub sepc_ecall: usize,
+    pub syscall_pc: usize,
 
     /// The original syscall number. Stored so the GDB register snapshot
     /// can report it correctly even if the live frame's syscall register

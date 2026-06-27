@@ -131,9 +131,9 @@ pub fn pending() -> usize {
     RING.lock().len()
 }
 
-/// Timestamp helper: returns (sec, usec) since boot using the CLINT mtime.
+/// Timestamp helper: returns (sec, usec) since boot using monotonic time.
 fn timestamp() -> (u32, u32) {
-    let ns = crate::drivers::platform::clint::monotonic_ns();
+    let ns = crate::time::monotonic_ns();
     (
         (ns / 1_000_000_000) as u32,
         ((ns % 1_000_000_000) / 1_000) as u32,

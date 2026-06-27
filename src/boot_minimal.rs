@@ -1,7 +1,7 @@
 //! Shared first-stage boot path used by every architecture in `boot_minimal` builds.
 //!
 //! This deliberately avoids heap allocation, filesystems, scheduler, device
-//! discovery, and userspace. Architecture firmware/SBI stubs only need to build a
+//! discovery, and userspace. Architecture firmware stubs only need to build a
 //! [`BootInfo`](crate::init::boot_info::BootInfo) and enter `kernel_main`; this
 //! module provides the common post-handoff sequence.
 

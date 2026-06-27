@@ -14,9 +14,8 @@
 //! |--------------|--------------|-----------------------------|
 //! | x86\_64      | `rdtsc`      | TSC (64-bit, IA32\_TSC)     |
 //! | AArch64      | `mrs`        | `cntvct_el0` (virtual timer)|
-//! | RISC-V 64    | `rdtime`     | `time` CSR                  |
 //!
-//! All three counters are monotonic, non-wrapping in practice for the boot
+//! Both counters are monotonic, non-wrapping in practice for the boot
 //! window, and readable from kernel EL/privilege level without enabling
 //! any extra CPU feature flags.
 //!
@@ -78,26 +77,8 @@ pub fn read_hw_counter() -> u64 {
         tick
     }
 
-    #[cfg(target_arch = "riscv64")]
-    {
-        let tick: u64;
-        // SAFETY: `rdtime` reads the `time` CSR which is always available
-        // in M-mode and S-mode on RV64; no prior CSR writes required.
-        unsafe {
-            core::arch::asm!(
-                "rdtime {}",
-                out(reg) tick,
-                options(nomem, nostack),
-            );
-        }
-        tick
-    }
 
     // Fallback for host-side unit-test builds (std target).
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "riscv64")))]
-    {
-        0u64
-    }
 }
 
 /// Emit a timestamped boot milestone marker on the serial console.

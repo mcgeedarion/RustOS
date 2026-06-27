@@ -44,7 +44,7 @@ pub struct TraceEvent {
     /// Context-dependent payload: return value, target PID, or function
     /// address.
     pub arg: u64,
-    /// Hardware timestamp (RISC-V `cycle` CSR or x86_64 `rdtsc`).
+    /// Hardware timestamp (x86_64 `rdtsc`).
     pub ticks: u64,
 }
 

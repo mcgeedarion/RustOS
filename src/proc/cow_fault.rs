@@ -2,7 +2,7 @@
 //!
 //! Arch-neutral: uses arch::Arch (Paging trait) throughout.
 //!
-//! ## CoW fault error code bits (x86-64 / RISC-V scause store-page-fault)
+//! ## CoW fault error code bits (x86-64 page-fault error code)
 //!   bit 0  P  — present
 //!   bit 1  W  — write
 //!   bit 2  U  — user
@@ -18,7 +18,7 @@
 //! always returned false, and every CoW write fault was delivered as a
 //! SIGSEGV instead of being transparently resolved.
 //!
-//! Fixed by reading `user_satp` from the current process's Pcb.
+//! Fixed by reading `user_pagetable` from the current process's Pcb.
 //! Falls back to `false` gracefully if no PCB is found (should never
 //! happen in the user-fault path, but is safe in the kernel path).
 
@@ -32,7 +32,7 @@ use crate::proc::scheduler;
 const PAGE_SIZE: usize = 4096;
 
 /// Create a CoW copy of the parent's address space for a fork() child.
-/// Returns the child's CR3 / SATP physical address, or 0 on OOM.
+/// Returns the child's address-space root physical address, or 0 on OOM.
 pub fn clone_for_fork(parent_pid: usize, child_pid: usize, parent_cr3: usize) -> usize {
     let child_cr3 = match <Arch as Paging>::clone_address_space(parent_cr3) {
         Some(c) => c,
@@ -55,10 +55,10 @@ pub fn handle_cow_fault(faulting_va: usize, error_code: u64) -> bool {
     }
 
     // FIX: use the current process's user CR3, not the kernel's.
-    // CoW PTEs live in the userspace page tables rooted at user_satp.
+    // CoW PTEs live in the userspace page tables rooted at user_pagetable.
     // Querying kernel_cr3() would always return None for user VAs.
     let pid = scheduler::current_pid();
-    let cr3 = match scheduler::with_proc(pid, |p| p.user_satp) {
+    let cr3 = match scheduler::with_proc(pid, |p| p.user_pagetable) {
         Some(c) if c != 0 => c,
         _ => return false,
     };

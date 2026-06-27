@@ -65,7 +65,7 @@ validate_architecture() {
             ;;
         *)
             log_error "Unsupported architecture: $ARCH"
-            log_info "Supported architectures: x86_64, aarch64, riscv64, arm, i386"
+            log_info "Supported architectures: x86_64, aarch64, arm, i386"
             return 1
             ;;
     esac

@@ -28,7 +28,7 @@ cargo build --target x86_64-unknown-none \
 | Counter | Source | Notes |
 |---|---|---|
 | `invocations` | `AtomicU64::fetch_add(Relaxed)` | Incremented on every call, before routing |
-| `total_cycles` | TSC delta (x86_64) / `mcycle` (RISC-V) / `PMCCNTR_EL0` (AArch64) | Includes full kernel-side execution time |
+| `total_cycles` | TSC delta (x86_64) / `PMCCNTR_EL0` (AArch64) | Includes full kernel-side execution time |
 | `avg_cycles` | `total / invocations` | Computed at read time, not stored |
 
 ### Reading the data

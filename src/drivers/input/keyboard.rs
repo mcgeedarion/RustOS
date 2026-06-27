@@ -98,7 +98,7 @@ static STATE: Mutex<KbdState> = Mutex::new(KbdState {
 });
 
 /// Process one raw PS/2 scancode byte.
-/// Called from the keyboard IRQ handler (IRQ 1 on x86, PLIC source on RISC-V).
+/// Called from the keyboard IRQ handler.
 pub fn handle_scancode(sc: u8) {
     let mut st = STATE.lock();
 

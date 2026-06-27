@@ -30,7 +30,7 @@ else ifeq ($(ARCH),aarch64)
   CC           := aarch64-linux-musl-gcc
   ARCH_CFLAGS  := -march=armv8-a
 else
-  $(error Unsupported ARCH=$(ARCH). Use x86_64, riscv64, or aarch64)
+  $(error Unsupported ARCH=$(ARCH). Use x86_64 or aarch64)
 endif
 
 CFLAGS := $(COMMON_CFLAGS) $(ARCH_CFLAGS) -fno-stack-protector
@@ -53,7 +53,7 @@ all: check-tools $(PROGRAMS)
 help:
 	@echo "RustOS Userspace Build System"
 	@echo ""
-	@echo "Usage: make [ARCH=x86_64|riscv64|aarch64] [target]"
+	@echo "Usage: make [ARCH=x86_64|aarch64] [target]"
 	@echo ""
 	@echo "Available targets:"
 	@echo "  all      - Build all userspace binaries (default)"

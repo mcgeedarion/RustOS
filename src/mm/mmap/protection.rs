@@ -16,7 +16,7 @@ pub fn sys_mprotect(addr: usize, length: usize, prot: u32) -> isize {
     }
     let len = page_align_up(length);
     let pid = crate::proc::scheduler::current_pid();
-    let user_cr3 = scheduler::with_proc(pid, |p| p.user_satp).unwrap_or(0);
+    let user_cr3 = scheduler::with_proc(pid, |p| p.user_pagetable).unwrap_or(0);
     if user_cr3 == 0 {
         return -14;
     }

@@ -169,8 +169,8 @@ pub fn do_exit(pid: usize, code: i32) {
 
     let last = is_last_live_thread(pid, tgid);
     if last {
-        let user_satp = scheduler::with_proc(pid, |p| p.user_satp).unwrap_or(0);
-        free_address_space(pid, user_satp);
+        let user_pagetable = scheduler::with_proc(pid, |p| p.user_pagetable).unwrap_or(0);
+        free_address_space(pid, user_pagetable);
         crate::proc::signal::group_pending_clear(tgid);
         ns_exit(pid);
     }
@@ -218,9 +218,9 @@ pub fn sys_exit_group(status: i32) -> isize {
         crate::ipc::endpoint_cleanup_pid(sibling);
         crate::fs::process_fd::proc_fd_free(sibling);
         reparent_orphans(sibling);
-        let user_satp_sibling = scheduler::with_proc(sibling, |p| p.user_satp).unwrap_or(0);
-        if user_satp_sibling != 0 {
-            free_address_space(sibling, user_satp_sibling);
+        let user_pagetable_sibling = scheduler::with_proc(sibling, |p| p.user_pagetable).unwrap_or(0);
+        if user_pagetable_sibling != 0 {
+            free_address_space(sibling, user_pagetable_sibling);
         }
         crate::proc::cgroup::cgroup_exit(sibling);
         let vfork_parent = zombify(sibling, status);

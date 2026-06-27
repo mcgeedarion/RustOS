@@ -125,7 +125,7 @@ fn read_mem(pid: usize, buf: &mut [u8], vaddr: usize) -> isize {
     if vaddr >= crate::uaccess::USER_SPACE_END {
         return -14;
     }
-    let cr3 = match scheduler::with_proc(pid, |p| p.user_satp) {
+    let cr3 = match scheduler::with_proc(pid, |p| p.user_pagetable) {
         Some(c) if c != 0 => c,
         _ => return -3, // ESRCH
     };
@@ -209,7 +209,7 @@ fn write_mem(pid: usize, data: &[u8], vaddr: usize) -> isize {
     if !may_mutate_debuggee(caller, pid) {
         return -1;
     }
-    let cr3 = match scheduler::with_proc(pid, |p| p.user_satp) {
+    let cr3 = match scheduler::with_proc(pid, |p| p.user_pagetable) {
         Some(c) if c != 0 => c,
         _ => return -3,
     };
@@ -317,7 +317,6 @@ fn write_ctl(pid: usize, data: &[u8]) -> isize {
                             };
                             f[F_R11] |= RFLAGS_TF;
                         }
-                        // RISC-V: handled by ebreak injection in rsp_riscv.rs
                     }
                 }
             });
