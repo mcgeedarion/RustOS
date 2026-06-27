@@ -46,12 +46,22 @@ done
 STUB_MODULES=("io_uring" "net" "display" "security")
 
 for MOD in "${STUB_MODULES[@]}"; do
-  # Unconditional `pub mod $MOD;` without a preceding #[cfg] is a violation
-  if grep -nP "^pub mod ${MOD};" "$ROOT/src/lib.rs" 2>/dev/null; then
-    echo "FAIL: src/lib.rs exposes 'pub mod ${MOD}' without a #[cfg(feature=...)] guard" >&2
-    ERRORS=$((ERRORS + 1))
-  else
+  # `pub mod $MOD;` must be guarded by a nearby #[cfg(...)] attribute. The
+  # module declarations in src/lib.rs are commonly documented, then cfg-gated,
+  # then declared; checking only the same line produces false positives.
+  if awk -v mod="$MOD" '
+    $0 ~ "^pub mod " mod ";" {
+      if (prev !~ /^#\[cfg/) {
+        print FNR ":" $0;
+        exit 1;
+      }
+    }
+    NF { prev=$0 }
+  ' "$ROOT/src/lib.rs"; then
     echo "OK: $MOD is feature-gated in lib.rs"
+  else
+    echo "FAIL: src/lib.rs exposes 'pub mod ${MOD}' without a nearby #[cfg(...)] guard" >&2
+    ERRORS=$((ERRORS + 1))
   fi
 done
 
