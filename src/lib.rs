@@ -40,6 +40,12 @@ pub mod console;
 /// Early-boot / init subsystem — BootInfo, initramfs, loader, schemes.
 pub mod init;
 
+/// Compatibility re-export: `crate::initramfs::…` resolves to
+/// `crate::init::initramfs::…`. Kept so any call sites outside the two
+/// `uefi_entry.rs` files that haven't been updated to the `init::initramfs`
+/// path don't silently break.
+pub use init::initramfs;
+
 /// Core kernel utilities — panic handler, rand, uaccess, architecture info.
 pub mod kernel;
 

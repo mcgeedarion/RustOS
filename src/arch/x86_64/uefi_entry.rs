@@ -255,7 +255,7 @@ unsafe extern "efiapi" fn uefi_start(
             let byte_size = *data.add(1) as usize;
             if phys_start != 0 && byte_size > 0 {
                 #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
-                crate::initramfs::set_initramfs_range(phys_start, byte_size);
+                crate::init::initramfs::set_initramfs_range(phys_start, byte_size);
                 initramfs = BootRange::new(phys_start, byte_size);
                 ovmf_initrd_found = true;
             }
@@ -421,7 +421,7 @@ unsafe fn load_initrd_via_loadfile2(bs: &EfiBootServices) -> Option<BootRange> {
     );
     if status == EFI_SUCCESS {
         #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
-        crate::initramfs::set_initramfs_range(initrd_buf as usize, initrd_size);
+        crate::init::initramfs::set_initramfs_range(initrd_buf as usize, initrd_size);
         return Some(BootRange::new(initrd_buf as usize, initrd_size));
     }
     None
