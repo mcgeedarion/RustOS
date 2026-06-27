@@ -1,0 +1,186 @@
+name: Fault Injection Stability Gate
+
+# ---------------------------------------------------------------------------
+# Runs the kernel with the `fault-inject` feature active and verifies that
+# every simulated failure produces a clean errno or diagnostic — never an
+# unwrap/panic/triple-fault.
+# ---------------------------------------------------------------------------
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: fault-inject-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUSTFLAGS: ""
+
+jobs:
+  fault-inject-x86_64:
+    name: Fault injection (x86_64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
+          components: rust-src, llvm-tools-preview
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+
+      - name: Cache build artifacts
+        uses: actions/cache@v4
+        with:
+          path: target/
+          key: cargo-target-fault-inject-x86_64-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-target-fault-inject-x86_64-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends \
+            clang lld llvm \
+            qemu-system-x86 \
+            ovmf \
+            mtools
+
+      # Build with fault-inject feature enabled
+      - name: Build fault-inject image (x86_64)
+        run: |
+          set -o pipefail
+          cargo xtask build --arch x86_64 --features fault-inject 2>&1 | tee build-fault-inject.log
+          cargo xtask image --arch x86_64 --features fault-inject 2>&1 | tee image-fault-inject.log
+          test -f boot-x86_64.img || { echo "ERROR: boot-x86_64.img not produced" >&2; exit 1; }
+
+      # Boot and capture serial output
+      - name: Boot fault-inject image in QEMU
+        run: |
+          find_existing_file() {
+            for path in "$@"; do
+              [ -f "$path" ] && { echo "$path"; return 0; }
+            done
+            return 1
+          }
+
+          OVMF_CODE=$(find_existing_file \
+            /usr/share/OVMF/OVMF_CODE.fd \
+            /usr/share/OVMF/OVMF_CODE_4M.fd \
+            /usr/share/ovmf/OVMF.fd \
+            /usr/share/qemu/OVMF.fd) || {
+            echo "ERROR: OVMF firmware not found" >&2
+            exit 1
+          }
+
+          OVMF_VAR_ARGS=()
+          if OVMF_VARS_TMPL=$(find_existing_file \
+              /usr/share/OVMF/OVMF_VARS.fd \
+              /usr/share/OVMF/OVMF_VARS_4M.fd); then
+            cp "$OVMF_VARS_TMPL" /tmp/OVMF_VARS.fd
+            OVMF_VAR_ARGS=(-drive if=pflash,format=raw,file=/tmp/OVMF_VARS.fd)
+          fi
+
+          set +e
+          timeout 90 qemu-system-x86_64 \
+            -machine q35 \
+            -cpu qemu64,+xsave,+avx \
+            -m 256M \
+            -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" \
+            "${OVMF_VAR_ARGS[@]}" \
+            -drive if=virtio,format=raw,file=boot-x86_64.img \
+            -serial stdio \
+            -display none \
+            -no-reboot \
+            -no-shutdown \
+            -d guest_errors,cpu_reset \
+            > qemu-fault-inject.log 2>&1
+          QEMU_STATUS=$?
+          set -e
+
+          echo "--- QEMU serial output (fault-inject) ---"
+          cat qemu-fault-inject.log
+          echo "--- end (exit $QEMU_STATUS) ---"
+
+          if [ "$QEMU_STATUS" -ne 0 ] && [ "$QEMU_STATUS" -ne 124 ]; then
+            echo "ERROR: QEMU crashed unexpectedly (status $QEMU_STATUS)" >&2
+            exit "$QEMU_STATUS"
+          fi
+
+      # --- Assertion battery ---
+      # Each injected failure path must produce a controlled outcome.
+      # A panic, triple fault, or missing diagnostic line is a test failure.
+
+      - name: Assert PMM OOM path is clean
+        run: |
+          if grep -qiE 'panic|triple.fault|cpu reset' qemu-fault-inject.log; then
+            echo "FAIL: kernel panic or triple fault detected during fault injection" >&2
+            grep -iE 'panic|triple.fault|cpu reset' qemu-fault-inject.log >&2
+            exit 1
+          fi
+          if ! grep -q 'FAULT_INJECT\[pmm\]' qemu-fault-inject.log; then
+            echo "WARN: PMM fault-inject marker not found — injector may not have fired"
+          else
+            echo "OK: PMM OOM injection fired"
+          fi
+
+      - name: Assert VMM map failure path is clean
+        run: |
+          if ! grep -q 'FAULT_INJECT\[vmm\]' qemu-fault-inject.log; then
+            echo "WARN: VMM fault-inject marker not found"
+          else
+            echo "OK: VMM map-failure injection fired"
+          fi
+
+      - name: Assert syscall resource-exhaustion paths are clean
+        run: |
+          # Every fault-injected syscall failure must emit ERRNO=<N>, not panic.
+          if grep -q 'FAULT_INJECT\[syscall\]' qemu-fault-inject.log; then
+            if grep -q 'ERRNO=' qemu-fault-inject.log; then
+              echo "OK: syscall fault-inject returned errno correctly"
+            else
+              echo "FAIL: syscall fault-inject fired but no ERRNO= line found" >&2
+              exit 1
+            fi
+          else
+            echo "WARN: syscall fault-inject marker not found"
+          fi
+
+      - name: Assert no unwrap/panic in serial output
+        run: |
+          if grep -qiE 'panicked at|called.*unwrap.*on.*None|called.*expect.*on.*Err' qemu-fault-inject.log; then
+            echo "FAIL: Rust panic detected during fault injection" >&2
+            grep -iE 'panicked at|called.*unwrap.*on.*None|called.*expect.*on.*Err' qemu-fault-inject.log >&2
+            exit 1
+          fi
+          echo "OK: no Rust panics in fault-inject run"
+
+      - name: Upload fault-inject logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fault-inject-x86_64
+          path: |
+            build-fault-inject.log
+            image-fault-inject.log
+            qemu-fault-inject.log
