@@ -1,8 +1,8 @@
 # Getting Started — RustOS Developer On-Ramp
 
-This document is the canonical Phase 1 on-ramp. One command builds the kernel,
-assembles the UEFI ESP image, acquires OVMF firmware if needed, and boots the
-result in QEMU with serial output on your terminal.
+This document is the canonical local validation on-ramp. One documented command,
+`cargo xtask smoke`, builds the kernel, assembles the UEFI ESP image, boots it in
+QEMU, captures serial output, and validates the boot sentinel.
 
 ## Prerequisites
 
@@ -59,10 +59,10 @@ sudo pacman -S edk2-ovmf
 ```bash
 git clone https://github.com/mcgeedarion/RustOS.git
 cd RustOS
-cargo xtask run --arch x86_64
+cargo xtask smoke --arch x86_64
 ```
 
-That's it. What happens under the hood:
+That's it. This is the single documented local validation command. What happens under the hood:
 
 ```
 [xtask] ==> Step 1/3: building x86_64 uefi kernel
@@ -71,7 +71,7 @@ That's it. What happens under the hood:
 [xtask]   image ready: boot-x86_64.img
 [xtask] ==> Step 2/3: resolving OVMF firmware
 [xtask]   OVMF: found system firmware: /usr/share/OVMF/OVMF_CODE.fd
-[xtask] ==> Step 3/3: launching QEMU (serial → stdout; Ctrl-A X to quit)
+[xtask] ==> Step 3/3: launching QEMU (serial → target/smoke-x86_64.log)
 [xtask]   image:    boot-x86_64.img
 [xtask]   firmware: /usr/share/OVMF/OVMF_CODE.fd
 
@@ -79,7 +79,7 @@ BDSv2.0 ...
 rustos: kernel_main reached
 ```
 
-Serial output goes directly to stdout. Press **Ctrl-A X** to quit QEMU.
+Serial output is captured and scanned for `BOOT_MINIMAL_OK`, `FULL_OS_USERSPACE_OK`, or `entering cpu_idle`. Use `cargo xtask run --arch x86_64` only for interactive debugging.
 
 ## Variants
 
@@ -110,17 +110,17 @@ cargo xtask image --arch x86_64
 ## Subcommand Reference
 
 ```
-cargo xtask run           Build + boot in QEMU   ← golden path
+cargo xtask smoke         Build + boot + assert serial sentinel ← local validation
 cargo xtask build         Compile the kernel only
 cargo xtask image         Build a FAT ESP disk image
-cargo xtask mkinitramfs   Build userspace + pack initramfs.cpio
-cargo xtask smoke         CI smoke test (checks for boot marker in output)
+cargo xtask build-init    Build userspace + pack initramfs.cpio
+cargo xtask run           Interactive QEMU run for debugging
 cargo xtask help          Show all options
 ```
 
 ## CI Smoke Test
 
-The `smoke` subcommand (used by CI) builds the image, boots it, and
+The `smoke` subcommand is the documented local validation command and the command used by CI. It builds the image, boots it, and
 verifies that a known-good log line appears within a timeout:
 
 ```bash

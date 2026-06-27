@@ -16,6 +16,7 @@
 //!   /proc/perf_core_count   → count of online Performance-class cores
 //!   /proc/slabinfo          → slab allocator cache statistics
 //!   /proc/schemes           → one registered scheme name per line
+//!   /proc/syscall_stats     → syscall counters when syscall-trace is enabled
 //! (Redox-style)   /proc/sys/fs/binfmt_misc/*  → delegated to procfs_binfmt
 //!
 //! ## Debug fds  (/proc/<pid>/mem|regs|ctl)
@@ -308,6 +309,9 @@ fn generate(path: &str) -> Option<Vec<u8>> {
             out.push('\n');
         }
         return Some(out.into_bytes());
+    }
+    if p == "/proc/syscall_stats" {
+        return Some(crate::fs::syscall_stats::read_syscall_stats().into_bytes());
     }
     None
 }
