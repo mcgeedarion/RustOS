@@ -6,10 +6,6 @@
 //!   0xF2 — function call (deferred work)
 //!   0xFE — panic halt (NMI preferred but vector fallback)
 //!
-//! RISC-V: uses SBI SEND_IPI (EID 0x735049) to set SIP.SSIP on the target
-//! hart.  The target takes a supervisor software interrupt (scause = 1) and
-//! calls `ipi::dispatch(cpu_id)` from the trap handler.
-//!
 //! ## IPI pending bits  (`PercpuBlock::ipi_pending`, AtomicU32)
 //!   bit 0 = TlbShootdown  → handle_tlb_shootdown(cpu_id)
 //!   bit 1 = Reschedule    → proc::scheduler::schedule()
@@ -18,20 +14,15 @@
 //!
 //! ## Send protocol
 //!   1. Set target's `ipi_pending` bit(s) with `fetch_or(..., Release)`.
-//!   2. Call `send(target_cpu, kind)` which invokes the arch-specific mechanism (x86: APIC ICR
-//!      write; RISC-V: SBI SEND_IPI ecall).
-//!
-//! ## Receive protocol (RISC-V, trap handler scause code 1)
-//!   1. Clear SIP.SSIP to acknowledge the interrupt.
-//!   2. Call `ipi::dispatch(cpu_id)` — reads & clears `ipi_pending` atomically then dispatches each
-//!      set bit.
+//!   2. Call `send(target_cpu, kind)` which invokes the arch-specific mechanism
+//!      (x86: APIC ICR write).
 //!
 //! ## `schedule_on(task, cpu)` integration
 //!   When the scheduler pins a task to a specific remote CPU via
 //!   `schedule_on`, it calls `send_reschedule(cpu)` after enqueuing the task
-//!   onto that CPU's runqueue.  The remote CPU wakes from `wfi` (or preempts
-//!   its current timeslice) and calls `schedule()`, which picks up the newly
-//!   enqueued task.
+//!   onto that CPU's runqueue.  The remote CPU wakes from its idle loop
+//!   (or preempts its current timeslice) and calls `schedule()`, which picks
+//!   up the newly enqueued task.
 
 use crate::smp::{cpu_info, num_online_cpus, MAX_CPUS};
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
@@ -98,13 +89,6 @@ pub fn send(target_cpu: u32, kind: IpiKind) {
             crate::arch::x86_64::apic::send_ipi(info.hw_id, vec);
         }
     }
-    #[cfg(target_arch = "riscv64")]
-    {
-        let _ = kind;
-        if let Some(info) = cpu_info(target_cpu) {
-            crate::arch::riscv64::smp::send_ipi(info.hw_id as usize);
-        }
-    }
 }
 
 /// Set the pending bit for `kind` on `target_cpu` then fire the IPI.
@@ -143,15 +127,14 @@ pub fn reschedule(target_cpu: u32) {
     send_reschedule(target_cpu);
 }
 
-/// Called from the supervisor software interrupt handler (RISC-V scause = 1)
-/// after SIP.SSIP has been cleared.  Atomically drains all pending IPI bits
-/// and dispatches each one.
+/// Called from the IPI handler after the interrupt has been acknowledged.
+/// Atomically drains all pending IPI bits and dispatches each one.
 pub fn dispatch(cpu_id: u32) {
     let blk = unsafe { &crate::smp::percpu::PERCPU_BLOCKS[cpu_id as usize] };
     let pending = blk.ipi_pending.swap(0, Ordering::AcqRel);
     if pending == 0 {
         return;
-    } // spurious SSIP
+    }
 
     if pending & (1 << IpiKind::TlbShootdown as u8) != 0 {
         handle_tlb_shootdown(cpu_id);
@@ -165,13 +148,13 @@ pub fn dispatch(cpu_id: u32) {
     if pending & (1 << IpiKind::PanicHalt as u8) != 0 {
         crate::println!("smp: cpu {} halted by IPI_PANIC_HALT", cpu_id);
         loop {
-            #[cfg(target_arch = "riscv64")]
-            unsafe {
-                core::arch::asm!("wfi", options(nostack, nomem));
-            }
             #[cfg(target_arch = "x86_64")]
             unsafe {
                 core::arch::asm!("hlt", options(nostack, nomem));
+            }
+            #[cfg(target_arch = "aarch64")]
+            unsafe {
+                core::arch::asm!("wfi", options(nostack, nomem));
             }
         }
     }
@@ -226,9 +209,9 @@ fn local_tlb_flush(start: u64, end: u64) {
             va += 0x1000;
         }
     }
-    #[cfg(target_arch = "riscv64")]
+    #[cfg(target_arch = "aarch64")]
     unsafe {
-        core::arch::asm!("sfence.vma", options(nostack));
+        core::arch::asm!("dsb ishst; tlbi vmalle1is; dsb ish; isb", options(nostack));
     }
 }
 
