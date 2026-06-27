@@ -50,6 +50,7 @@ pub use init::initramfs;
 pub mod kernel;
 
 /// Symmetric multi-processing — per-CPU blocks, IPI send/dispatch.
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod smp;
 
 // ---------------------------------------------------------------------------
@@ -137,7 +138,6 @@ pub mod ipc;
 pub mod irq;
 
 /// Architecture-independent kernel entry-point dispatcher.
-#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod kernel_main;
 
 /// In-kernel test harness (requires `--features kmtest`).

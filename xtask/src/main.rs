@@ -325,16 +325,17 @@ fn build_kernel(root: &Path, opts: &BuildOpts) -> Result<()> {
     if !matches!(opts.profile, BuildProfile::ReleaseBoot) {
         match &opts.features {
             Some(features) => {
-                if features
-                    .split(',')
-                    .any(|f| f.trim() == "boot_minimal")
-                {
+                if features.split(',').any(|f| f.trim() == "boot_minimal") {
                     cmd.arg("--no-default-features");
                 }
                 cmd.arg("--features").arg(features);
             },
             None => {
-                // default features
+                // Keep the default developer boot path on the known-good
+                // first-stage profile while the full kernel module graph is
+                // still being stabilised.
+                cmd.arg("--no-default-features");
+                cmd.arg("--features").arg("boot_minimal");
             },
         }
     }
@@ -364,13 +365,8 @@ fn stage_esp(root: &Path, opts: &BuildOpts) -> Result<PathBuf> {
         .ok_or_else(|| anyhow!("kernel artifact not found — did `build_kernel` succeed?"))?;
 
     let dest = boot_dir.join(efi_boot_filename(opts.arch));
-    fs::copy(&artifact, &dest).with_context(|| {
-        format!(
-            "copy {} → {}",
-            artifact.display(),
-            dest.display()
-        )
-    })?;
+    fs::copy(&artifact, &dest)
+        .with_context(|| format!("copy {} → {}", artifact.display(), dest.display()))?;
 
     log(format!(
         "staged {} → {}",
@@ -382,26 +378,192 @@ fn stage_esp(root: &Path, opts: &BuildOpts) -> Result<PathBuf> {
 
 fn build_fat_image(root: &Path, esp_dir: &Path, arch: Arch) -> Result<PathBuf> {
     let img = root.join(image_name(arch));
-    require_tool(&["mformat", "mcopy"], "apt install mtools");
+    if which_first(&["mformat"]).is_none() || which_first(&["mcopy"]).is_none() {
+        log("mtools not found; using built-in FAT16 ESP writer");
+        return build_fat_image_builtin(&img, esp_dir, arch);
+    }
 
     // 64 MiB FAT image
     let size_kb = 65536u32;
     run(Command::new("mformat")
         .args(["-i", img.to_str().unwrap(), "-C", "-F"])
         .args(["-T", &size_kb.to_string()])
-        .args(["::")
-    ])?;
+        .args(["::"]))?;
 
     // Copy entire EFI/ tree
     let efi_src = esp_dir.join("EFI");
     run(Command::new("mcopy")
         .args(["-i", img.to_str().unwrap(), "-s"])
         .arg(&efi_src)
-        .arg("::")
-    )?;
+        .arg("::"))?;
 
     log(format!("built FAT image: {}", img.display()));
     Ok(img)
+}
+
+fn build_fat_image_builtin(img: &Path, esp_dir: &Path, arch: Arch) -> Result<PathBuf> {
+    const BYTES_PER_SECTOR: usize = 512;
+    const SECTORS_PER_CLUSTER: usize = 4;
+    const RESERVED_SECTORS: usize = 1;
+    const FAT_COUNT: usize = 2;
+    const ROOT_ENTRIES: usize = 512;
+    const ROOT_DIR_SECTORS: usize = ROOT_ENTRIES * 32 / BYTES_PER_SECTOR;
+    const SECTORS_PER_FAT: usize = 256;
+    const TOTAL_SECTORS: usize = 131_072; // 64 MiB
+    const CLUSTER_SIZE: usize = BYTES_PER_SECTOR * SECTORS_PER_CLUSTER;
+
+    let efi_path = esp_dir.join("EFI/BOOT").join(efi_boot_filename(arch));
+    let efi = fs::read(&efi_path)
+        .with_context(|| format!("read staged EFI binary {}", efi_path.display()))?;
+    let file_clusters = efi.len().div_ceil(CLUSTER_SIZE);
+    if file_clusters == 0 {
+        bail!("staged EFI binary is empty: {}", efi_path.display());
+    }
+
+    let first_data_sector = RESERVED_SECTORS + (FAT_COUNT * SECTORS_PER_FAT) + ROOT_DIR_SECTORS;
+    let mut image = vec![0u8; TOTAL_SECTORS * BYTES_PER_SECTOR];
+
+    // BIOS Parameter Block for a FAT16 ESP-style image.
+    image[0..3].copy_from_slice(&[0xEB, 0x3C, 0x90]);
+    image[3..11].copy_from_slice(b"RUSTOS  ");
+    put_u16(&mut image, 11, BYTES_PER_SECTOR as u16);
+    image[13] = SECTORS_PER_CLUSTER as u8;
+    put_u16(&mut image, 14, RESERVED_SECTORS as u16);
+    image[16] = FAT_COUNT as u8;
+    put_u16(&mut image, 17, ROOT_ENTRIES as u16);
+    put_u16(&mut image, 19, 0);
+    image[21] = 0xF8;
+    put_u16(&mut image, 22, SECTORS_PER_FAT as u16);
+    put_u16(&mut image, 24, 32);
+    put_u16(&mut image, 26, 64);
+    put_u32(&mut image, 28, 0);
+    put_u32(&mut image, 32, TOTAL_SECTORS as u32);
+    image[36] = 0x80;
+    image[38] = 0x29;
+    put_u32(&mut image, 39, 0x5255_5354);
+    image[43..54].copy_from_slice(b"RUSTOS ESP ");
+    image[54..62].copy_from_slice(b"FAT16   ");
+    image[510] = 0x55;
+    image[511] = 0xAA;
+
+    let file_start_cluster = 4usize;
+    let last_file_cluster = file_start_cluster + file_clusters - 1;
+    for fat_index in 0..FAT_COUNT {
+        let fat_base = (RESERVED_SECTORS + fat_index * SECTORS_PER_FAT) * BYTES_PER_SECTOR;
+        put_u16(&mut image, fat_base, 0xFFF8);
+        put_u16(&mut image, fat_base + 2, 0xFFFF);
+        put_u16(&mut image, fat_base + 2 * 2, 0xFFFF); // EFI directory
+        put_u16(&mut image, fat_base + 3 * 2, 0xFFFF); // BOOT directory
+        for cluster in file_start_cluster..=last_file_cluster {
+            let next = if cluster == last_file_cluster {
+                0xFFFF
+            } else {
+                (cluster + 1) as u16
+            };
+            put_u16(&mut image, fat_base + cluster * 2, next);
+        }
+    }
+
+    let root_dir = (RESERVED_SECTORS + FAT_COUNT * SECTORS_PER_FAT) * BYTES_PER_SECTOR;
+    write_dir_entry(
+        &mut image[root_dir..root_dir + 32],
+        b"EFI     ",
+        b"   ",
+        0x10,
+        2,
+        0,
+    );
+
+    let efi_dir = cluster_offset(first_data_sector, 2);
+    write_dir_entry(
+        &mut image[efi_dir..efi_dir + 32],
+        b".       ",
+        b"   ",
+        0x10,
+        2,
+        0,
+    );
+    write_dir_entry(
+        &mut image[efi_dir + 32..efi_dir + 64],
+        b"..      ",
+        b"   ",
+        0x10,
+        0,
+        0,
+    );
+    write_dir_entry(
+        &mut image[efi_dir + 64..efi_dir + 96],
+        b"BOOT    ",
+        b"   ",
+        0x10,
+        3,
+        0,
+    );
+
+    let boot_dir = cluster_offset(first_data_sector, 3);
+    write_dir_entry(
+        &mut image[boot_dir..boot_dir + 32],
+        b".       ",
+        b"   ",
+        0x10,
+        3,
+        0,
+    );
+    write_dir_entry(
+        &mut image[boot_dir + 32..boot_dir + 64],
+        b"..      ",
+        b"   ",
+        0x10,
+        2,
+        0,
+    );
+    write_dir_entry(
+        &mut image[boot_dir + 64..boot_dir + 96],
+        match arch {
+            Arch::AArch64 => b"BOOTAA64",
+            Arch::X86_64 => b"BOOTX64 ",
+        },
+        b"EFI",
+        0x20,
+        file_start_cluster as u16,
+        efi.len() as u32,
+    );
+
+    let file_offset = cluster_offset(first_data_sector, file_start_cluster);
+    image[file_offset..file_offset + efi.len()].copy_from_slice(&efi);
+
+    fs::write(img, image).with_context(|| format!("write FAT image {}", img.display()))?;
+    log(format!("built FAT image: {}", img.display()));
+    Ok(img.to_path_buf())
+}
+
+fn cluster_offset(first_data_sector: usize, cluster: usize) -> usize {
+    const BYTES_PER_SECTOR: usize = 512;
+    const SECTORS_PER_CLUSTER: usize = 4;
+    (first_data_sector + (cluster - 2) * SECTORS_PER_CLUSTER) * BYTES_PER_SECTOR
+}
+
+fn write_dir_entry(
+    entry: &mut [u8],
+    name: &[u8; 8],
+    ext: &[u8; 3],
+    attr: u8,
+    first_cluster: u16,
+    size: u32,
+) {
+    entry[..8].copy_from_slice(name);
+    entry[8..11].copy_from_slice(ext);
+    entry[11] = attr;
+    entry[26..28].copy_from_slice(&first_cluster.to_le_bytes());
+    entry[28..32].copy_from_slice(&size.to_le_bytes());
+}
+
+fn put_u16(bytes: &mut [u8], offset: usize, value: u16) {
+    bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+}
+
+fn put_u32(bytes: &mut [u8], offset: usize, value: u32) {
+    bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
 }
 
 // ── OVMF firmware resolution (x86_64) ─────────────────────────────────────
@@ -471,18 +633,30 @@ fn ensure_ovmf(root: &Path) -> Result<PathBuf> {
 
 // ── QEMU launch ────────────────────────────────────────────────────────────
 
-fn launch_qemu_x86_64(root: &Path, img: &Path, ovmf: &Path, debug_port: Option<u16>) -> Result<()> {
+fn launch_qemu_x86_64(
+    _root: &Path,
+    img: &Path,
+    ovmf: &Path,
+    debug_port: Option<u16>,
+) -> Result<()> {
     require_tool(&["qemu-system-x86_64"], "apt install qemu-system-x86");
 
     let mut cmd = Command::new("qemu-system-x86_64");
     cmd.args([
-        "-machine", "q35",
-        "-cpu", "qemu64,+xsave,+avx",
-        "-m", "256M",
-        "-drive", &format!("if=pflash,format=raw,readonly=on,file={}", ovmf.display()),
-        "-drive", &format!("if=virtio,format=raw,file={}", img.display()),
-        "-serial", "stdio",
-        "-display", "none",
+        "-machine",
+        "q35",
+        "-cpu",
+        "qemu64,+xsave,+avx",
+        "-m",
+        "256M",
+        "-drive",
+        &format!("if=pflash,format=raw,readonly=on,file={}", ovmf.display()),
+        "-drive",
+        &format!("if=virtio,format=raw,file={}", img.display()),
+        "-serial",
+        "stdio",
+        "-display",
+        "none",
         "-no-reboot",
         "-no-shutdown",
     ]);
@@ -494,7 +668,7 @@ fn launch_qemu_x86_64(root: &Path, img: &Path, ovmf: &Path, debug_port: Option<u
     run(&mut cmd)
 }
 
-fn launch_qemu_aarch64(root: &Path, img: &Path, debug_port: Option<u16>) -> Result<()> {
+fn launch_qemu_aarch64(_root: &Path, img: &Path, debug_port: Option<u16>) -> Result<()> {
     require_tool(&["qemu-system-aarch64"], "apt install qemu-system-arm");
 
     // Locate AArch64 UEFI firmware
@@ -518,14 +692,22 @@ fn launch_qemu_aarch64(root: &Path, img: &Path, debug_port: Option<u16>) -> Resu
 
     let mut cmd = Command::new("qemu-system-aarch64");
     cmd.args([
-        "-machine", "virt",
-        "-cpu", "cortex-a57",
-        "-m", "512M",
-        "-bios", fw.to_str().unwrap(),
-        "-drive", &format!("if=none,id=esp,format=raw,file={}", img.display()),
-        "-device", "virtio-blk-device,drive=esp",
-        "-serial", "stdio",
-        "-display", "none",
+        "-machine",
+        "virt",
+        "-cpu",
+        "cortex-a57",
+        "-m",
+        "512M",
+        "-bios",
+        fw.to_str().unwrap(),
+        "-drive",
+        &format!("if=none,id=esp,format=raw,file={}", img.display()),
+        "-device",
+        "virtio-blk-device,drive=esp",
+        "-serial",
+        "stdio",
+        "-display",
+        "none",
         "-no-reboot",
         "-no-shutdown",
     ]);
@@ -546,8 +728,7 @@ fn build_init(root: &Path, arch: Arch) -> Result<()> {
     };
 
     // Ensure the musl target is installed
-    run(Command::new("rustup")
-        .args(["target", "add", target]))?;
+    run(Command::new("rustup").args(["target", "add", target]))?;
 
     // Build userspace/init
     let mut cmd = cargo();
@@ -569,8 +750,7 @@ fn build_init(root: &Path, arch: Arch) -> Result<()> {
     // Write a minimal /etc/os-release
     let etc = initramfs_root.join("etc");
     fs::create_dir_all(&etc).context("create initramfs_root/etc")?;
-    fs::write(etc.join("os-release"), OS_RELEASE_CONTENT)
-        .context("write os-release")?;
+    fs::write(etc.join("os-release"), OS_RELEASE_CONTENT).context("write os-release")?;
 
     // Pack initramfs.cpio
     require_tool(&["cpio"], "apt install cpio");
@@ -635,23 +815,6 @@ fn lint_modules(root: &Path) -> Result<()> {
 }
 
 // ── FAT helpers (used by build_fat_image) ──────────────────────────────────
-
-fn write_fat16_dir_entry(
-    entry: &mut [u8; 32],
-    name: &[u8; 8],
-    ext: &[u8; 3],
-    attr: u8,
-    first_cluster: u16,
-    size: u32,
-) -> Result<()> {
-    entry[..8].copy_from_slice(name);
-    let raw_ext: [u8; 3] = ext[..3].try_into().unwrap();
-    entry[8..11].copy_from_slice(&raw_ext);
-    entry[11] = attr;
-    entry[26..28].copy_from_slice(&first_cluster.to_le_bytes());
-    entry[28..32].copy_from_slice(&size.to_le_bytes());
-    Ok(())
-}
 
 // ── main ────────────────────────────────────────────────────────────────────
 
