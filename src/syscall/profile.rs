@@ -10,7 +10,7 @@
 //!   `AtomicU64::fetch_add(Relaxed)` for the counter and two `rdtsc` reads
 //!   for timing.  No locks, no allocations.
 //!
-//! * **Multi-arch** — TSC on x86_64, `mcycle` CSR on RISC-V,
+//! * **Multi-arch** — TSC on x86_64 and PMCCNTR_EL0 on AArch64.
 //!   `PMCCNTR_EL0` on AArch64.  Falls back to a zero constant on unknown
 //!   targets so the code compiles everywhere.
 //!
@@ -79,14 +79,6 @@ mod enabled {
                 core::arch::x86_64::_rdtsc()
             }
         }
-        #[cfg(target_arch = "riscv64")]
-        {
-            let v: u64;
-            unsafe {
-                core::arch::asm!("csrr {}, mcycle", out(reg) v, options(nomem, nostack));
-            }
-            v
-        }
         #[cfg(target_arch = "aarch64")]
         {
             let v: u64;
@@ -97,8 +89,7 @@ mod enabled {
         }
         #[cfg(not(any(
             target_arch = "x86_64",
-            target_arch = "riscv64",
-            target_arch = "aarch64"
+                target_arch = "aarch64"
         )))]
         {
             0u64

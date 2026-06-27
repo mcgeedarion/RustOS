@@ -9,7 +9,7 @@
 //! ```text
 //! KERNEL PANIC: <message>
 //! PANIC_LOC: <file>:<line>:<col>
-//! PANIC_ARCH: <x86_64|aarch64|riscv64>
+//! PANIC_ARCH: <x86_64|aarch64>
 //! PANIC_TASK: <name> PID=<pid>          (omitted if no task context)
 //! PANIC_FAULT_ADDR: <0xHEX>             (set by fault injectors; 0x0 otherwise)
 //! --- REGISTER DUMP ---

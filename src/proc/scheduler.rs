@@ -1114,10 +1114,6 @@ pub fn current_ppid() -> u32 {
 pub fn ap_idle() -> ! {
     loop {
         schedule();
-        #[cfg(target_arch = "riscv64")]
-        unsafe {
-            core::arch::asm!("wfi", options(nostack, nomem));
-        }
         #[cfg(target_arch = "x86_64")]
         unsafe {
             core::arch::asm!("hlt", options(nostack, nomem));

@@ -31,7 +31,7 @@
 //! The kernel does not yet include a decompressor.  `cargo xtask mkinitramfs`
 //! and `scripts/pack-initramfs.sh` both emit uncompressed archives, and QEMU
 //! passes the raw bytes to `set_initramfs_range()` via `LoadFile2` (x86-64
-//! UEFI) or the FDT `/chosen` node (RISC-V SBI / AArch64).
+//! UEFI) or the FDT `/chosen` node (AArch64).
 //!
 //! ## Missing `/init`
 //!

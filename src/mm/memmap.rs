@@ -49,14 +49,6 @@ fn phys_to_virt(pa: u64) -> usize {
     crate::arch::x86_64::mem_layout::higher_half::phys_to_virt(pa)
 }
 
-#[cfg(target_arch = "riscv64")]
-#[inline]
-fn phys_to_virt(pa: u64) -> usize {
-    extern "C" {
-        static KERNEL_PHYS_BASE: usize;
-    }
-    unsafe { pa as usize + KERNEL_PHYS_BASE }
-}
 
 #[cfg(target_arch = "aarch64")]
 #[inline]

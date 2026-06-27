@@ -1,7 +1,6 @@
 /*
  * <bits/rustos_syscall.h> — syscall number table for RustOS.
  *
- * RustOS uses the Linux x86_64 / riscv64 syscall ABI verbatim.
  * Numbers below 500 are identical to Linux.  Numbers >= 500 are
  * RustOS private extensions.
  *

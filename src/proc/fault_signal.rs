@@ -38,7 +38,7 @@
 //! }
 //! ```
 //!
-//! ## Integration (RISC-V / AArch64)
+//! ## Integration (AArch64)
 //!
 //! Map the relevant mcause / ESR_EL1 codes to the corresponding
 //! `on_*` function below.
@@ -48,7 +48,7 @@ use crate::proc::scheduler;
 /// Page-fault exception.  Sends SIGSEGV (access error) or SIGBUS (alignment).
 ///
 /// `fault_addr` — the faulting virtual address (CR2 on x86_64, FAR_EL1 on
-///               AArch64, `stval` on RISC-V).
+///               AArch64).
 /// `error_code` — architecture-specific fault flags.  Bit 0 on x86_64:
 ///   0 = page not present (SEGV_MAPERR), 1 = protection violation (SEGV_ACCERR).
 pub fn on_page_fault(fault_addr: usize, error_code: u64) {

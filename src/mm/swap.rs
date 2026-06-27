@@ -33,7 +33,6 @@
 //!
 //! ```text
 //!  x86_64 (64-bit PTE):  [ slot:32 | dev_id:8 | type=SWAP:8 | P=0 ]
-//!  RISC-V Sv39 (64-bit): [ slot:32 | dev_id:8 | type=SWAP:8 | V=0 ]
 //!
 //!  Bit layout (LSB = bit 0):
 //!    bits  7:0  = 0xAB  (swap-type marker; bit 0 = P/V = 0)
@@ -49,7 +48,7 @@
 //!
 //! Physical pages eligible for eviction are tracked in `LRU_CLOCK`, a
 //! circular buffer of `(pa, pid, va)` triples.  kswapd scans the clock hand
-//! and evicts pages whose PTE accessed-bit (x86 bit 5 / RISC-V bit A) is
+//! and evicts pages whose PTE accessed-bit is
 //! clear.  Pages with the accessed-bit set are given a second chance and the
 //! bit is cleared.
 //!
@@ -451,7 +450,7 @@ pub fn swapout_one() -> bool {
                 continue;
             }
             // Check the accessed bit in the PTE.
-            let cr3 = scheduler::with_proc(e.pid, |p| p.user_satp).unwrap_or(0);
+            let cr3 = scheduler::with_proc(e.pid, |p| p.user_pagetable).unwrap_or(0);
             if cr3 == 0 {
                 continue;
             }
@@ -528,7 +527,7 @@ pub fn swapout_one() -> bool {
         return false;
     }
 
-    let cr3 = scheduler::with_proc(e.pid, |p| p.user_satp).unwrap_or(0);
+    let cr3 = scheduler::with_proc(e.pid, |p| p.user_pagetable).unwrap_or(0);
     if cr3 != 0 {
         let swap_pte = slot.encode_pte();
         <Arch as Paging>::set_pte(cr3, e.va, swap_pte);
@@ -553,7 +552,7 @@ pub fn swapout_one() -> bool {
 pub fn swapin(pid: u32, faulting_va: usize) -> bool {
     let page_va = faulting_va & PAGE_MASK;
 
-    let cr3 = scheduler::with_proc(pid, |p| p.user_satp).unwrap_or(0);
+    let cr3 = scheduler::with_proc(pid, |p| p.user_pagetable).unwrap_or(0);
     if cr3 == 0 {
         return false;
     }
@@ -731,8 +730,8 @@ fn drain_swap_device(dev_idx: u8) {
     let targets: alloc::vec::Vec<(u32, usize)> = scheduler::with_procs_ro(|procs| {
         procs
             .iter()
-            .filter(|p| p.user_satp != 0)
-            .map(|p| (p.pid as u32, p.user_satp))
+            .filter(|p| p.user_pagetable != 0)
+            .map(|p| (p.pid as u32, p.user_pagetable))
             .collect()
     });
 

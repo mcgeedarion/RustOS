@@ -3,9 +3,7 @@
 //! ## Modules
 //!   e1000e           — Intel e1000e Gigabit Ethernet (takes BAR0 MMIO u64)
 //!   nic              — NIC abstraction layer (send / recv / mac / stats)
-//!   virtio_net       — VirtIO network device (PCIe, x86_64; takes BAR0 I/O
-//! port u16)   virtio_net_mmio  — VirtIO network device (MMIO, RISC-V virt
-//! machine)
+//!   virtio_net       — VirtIO network device (PCIe; takes BAR0 I/O port u16)
 //!
 //! ## Boot entry-point
 //!
@@ -22,12 +20,10 @@
 //! Priority order (first match wins):
 //!   1. Intel e1000e   (0x8086:0x10D3 / 0x10F6 / 0x150C)
 //!   2. virtio-net PCI (0x1AF4:0x1000 legacy | 0x1041 transitional)
-//!   3. virtio-net MMIO (RISC-V only)
 
 pub mod e1000e;
 pub mod nic;
 pub mod virtio_net;
-pub mod virtio_net_mmio;
 
 const VENDOR_INTEL: u16 = 0x8086;
 const DEV_E1000E_82574L: u16 = 0x10D3;
@@ -40,8 +36,8 @@ const DEV_VIRTIO_NET_T: u16 = 0x1041; // transitional (virtio 1.x)
 
 /// Probe and initialise the first available NIC.
 ///
-/// Called once from `kernel_main` after `pci::init()` (x86_64) or
-/// `fdt_phase2()` (RISC-V).  Safe to call before the scheduler is running.
+/// Called once from `kernel_main` after `pci::init()` on PCI-capable targets.
+/// Safe to call before the scheduler is running.
 pub fn init() {
     #[cfg(target_arch = "x86_64")]
     {
@@ -92,13 +88,4 @@ pub fn init() {
         crate::serial_println!("[nic] no supported NIC found on PCI bus");
     }
 
-    #[cfg(target_arch = "riscv64")]
-    {
-        crate::drivers::net::virtio_net_mmio::init();
-        if crate::drivers::net::virtio_net_mmio::is_initialised() {
-            crate::serial_println!("[nic] virtio-net MMIO initialised");
-        } else {
-            crate::serial_println!("[nic] no virtio-net MMIO device found");
-        }
-    }
 }

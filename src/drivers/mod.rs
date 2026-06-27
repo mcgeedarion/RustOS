@@ -3,14 +3,13 @@
 //! ## Subsystems
 //!   gpu/      — DRM/KMS, framebuffer, GOP, VGA, virtio-gpu, AMD GEM
 //!   input/    — evdev, HID, keyboard, mouse, USB, Bluetooth, virtio-input
-//!   net/      — e1000e, NIC abstraction, virtio-net (PCIe + MMIO)
+//!   net/      — e1000e, NIC abstraction, virtio-net (PCIe)
 //!   block/    — AHCI, NVMe, virtio-blk
 //!   platform/ — GPIO, PCIe ECAM
 //!   virtio/   — MMIO transport and split virtqueue (shared by all virtio drivers)
 //!   media/    — Camera / ISP subsystem (AMD ISP4 / amdisp4, merged Linux 7.2)
 //!
 //! Terminal semantics (line discipline, PTY, termios) live in `crate::tty`.
-//! Interrupt controllers (PLIC, CLINT) live in `crate::irq::riscv64`.
 
 pub mod block;
 pub mod gpu;
@@ -23,9 +22,6 @@ pub mod input;
 pub mod net;
 // Compatibility re-export for `crate::drivers::nic::*` callers.
 pub use net::nic;
-// Compatibility re-export for older riscv64 callers that import
-// `crate::drivers::virtio_net_mmio` directly instead of via `net::`.
-pub use net::virtio_net_mmio;
 pub mod platform;
 // GUESS: callers use crate::drivers::pcie; canonical home is platform::pcie.
 pub use platform::pcie;

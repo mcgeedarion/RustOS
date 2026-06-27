@@ -62,15 +62,11 @@ fn cmd_bt() {
     unsafe {
         core::arch::asm!("mov {}, rbp", out(reg) fp, options(nostack))
     };
-    #[cfg(target_arch = "riscv64")]
-    unsafe {
-        core::arch::asm!("mv {}, s0",  out(reg) fp, options(nostack))
-    };
 
     crate::tty::serial_ldisc::write(b"backtrace:\r\n");
     let mut depth = 0usize;
     while fp != 0 && depth < 32 {
-        // On both x86_64 and RISC-V with the standard frame layout:
+        // On x86_64 with the standard frame layout:
         //   [fp - 8]  = return address
         //   [fp - 16] = saved previous fp
         let ra = unsafe { *((fp as *const usize).wrapping_sub(1)) };

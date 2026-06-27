@@ -104,15 +104,12 @@ unsafe fn arch_halt() -> ! {
             options(nomem, nostack)
         );
 
-        #[cfg(target_arch = "riscv64")]
-        core::arch::asm!("wfi", options(nomem, nostack));
 
         // Unknown architecture: busy-loop.
         #[cfg(not(any(
             target_arch = "x86_64",
             target_arch = "aarch64",
-            target_arch = "riscv64",
-        )))]
+            )))]
         core::hint::spin_loop();
     }
 }

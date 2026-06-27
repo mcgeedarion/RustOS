@@ -4,9 +4,6 @@
  * Compile with:
  *   -nostdlib -ffreestanding -fno-stack-protector
  *
- * Only x86_64 is wired today; the riscv64 path is a commented stub.
- * To add riscv64: replace the inline asm block with ecall equivalents
- * and define ARCH=riscv64 in the build system.
  */
 
 #include "shim.h"
@@ -34,32 +31,6 @@ long shim_syscall(long nr,
         : "rcx", "r11", "memory"
     );
     return ret;
-}
-
-#elif defined(__riscv) && __riscv_xlen == 64
-/*
- * RISC-V 64 ecall ABI
- *   a7 = syscall number, a0-a5 = args, a0 = return value
- */
-long shim_syscall(long nr,
-                  long a1, long a2, long a3,
-                  long a4, long a5, long a6)
-{
-    register long rn  __asm__("a7") = nr;
-    register long ra1 __asm__("a0") = a1;
-    register long ra2 __asm__("a1") = a2;
-    register long ra3 __asm__("a2") = a3;
-    register long ra4 __asm__("a3") = a4;
-    register long ra5 __asm__("a4") = a5;
-    register long ra6 __asm__("a5") = a6;
-    __asm__ volatile (
-        "ecall"
-        : "+r" (ra1)
-        : "r" (rn), "r" (ra2), "r" (ra3),
-          "r" (ra4), "r" (ra5), "r" (ra6)
-        : "memory"
-    );
-    return ra1;
 }
 
 #else

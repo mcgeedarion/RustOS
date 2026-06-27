@@ -8,7 +8,7 @@
 //!
 //! Each physical frame is allocated from the PMM (which guarantees zero-fill)
 //! and mapped at its kernel-virtual address via the architecture's flat
-//! physmap (PHYS_OFFSET on x86-64, KERNEL_PHYS_BASE on RISC-V).
+//! physmap.
 //!
 //! `alloc_kstack()` returns a `KstackInfo` that records both the physical
 //! addresses (for PMM free) and the virtual addresses (for unmap_page and
@@ -56,16 +56,6 @@ fn phys_to_virt(pa: usize) -> usize {
 /// `KERNEL_PHYS_BASE` is a linker-defined symbol whose *address* encodes the
 /// physical base of the kernel image.  We take its address as a `usize` rather
 /// than reading through it as a `usize`-typed object, which would be unsound.
-#[cfg(target_arch = "riscv64")]
-#[inline]
-fn phys_to_virt(pa: usize) -> usize {
-    extern "C" {
-        // Declare as a ZST (u8) so we can take its address without reading it.
-        static KERNEL_PHYS_BASE: u8;
-    }
-    let base = unsafe { &KERNEL_PHYS_BASE as *const u8 as usize };
-    pa + base
-}
 
 #[cfg(target_arch = "aarch64")]
 #[inline]

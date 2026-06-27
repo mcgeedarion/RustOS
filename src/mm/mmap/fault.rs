@@ -25,7 +25,7 @@ pub fn free_address_space(pid: usize, user_cr3: usize) {
 
     <Arch as Paging>::free_page_table(user_cr3);
     clear_vmas_internal(pid);
-    with_mm_write(pid, |p| p.user_satp = 0);
+    with_mm_write(pid, |p| p.user_pagetable = 0);
 }
 
 fn clear_vmas_internal(pid: usize) {

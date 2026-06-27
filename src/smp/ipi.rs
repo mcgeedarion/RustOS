@@ -10,7 +10,7 @@
 //!   bit 0 = TlbShootdown  → handle_tlb_shootdown(cpu_id)
 //!   bit 1 = Reschedule    → proc::scheduler::schedule()
 //!   bit 2 = FuncCall      → (future deferred-work queue)
-//!   bit 3 = PanicHalt     → halt this hart / CPU
+//!   bit 3 = PanicHalt     → halt this CPU
 //!
 //! ## Send protocol
 //!   1. Set target's `ipi_pending` bit(s) with `fetch_or(..., Release)`.

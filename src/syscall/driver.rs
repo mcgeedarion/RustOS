@@ -110,7 +110,7 @@ fn map_phys_to_user(
     let (va, user_cr3) = mmap::with_mm_write(pid, |p| {
         let va = mmap::page_align_up(p.next_va);
         p.next_va = mmap::page_align_up(va + size + mmap::PAGE);
-        (va, p.user_satp)
+        (va, p.user_pagetable)
     })
     .ok_or(DriverSysError::NoMem)?;
 

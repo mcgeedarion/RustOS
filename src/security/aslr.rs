@@ -9,7 +9,7 @@
 //! ## Entropy
 //!
 //! All four functions call `rand::arch_entropy()` (RDRAND on x86_64,
-//! hardware CSR mix on RISC-V) rather than the xorshift PRNG.  This ensures
+//! hardware counters on supported architectures) rather than the xorshift PRNG.  This ensures
 //! ASLR offsets are derived from hardware entropy and cannot be predicted
 //! from observed program output.
 //!

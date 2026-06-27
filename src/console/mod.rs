@@ -14,7 +14,6 @@
 //! | Architecture | Backend                           |
 //! |--------------|-----------------------------------|
 //! | x86\_64      | `arch::x86_64::serial` (UART 16550)|
-//! | riscv64      | SBI console putchar extension     |
 
 pub mod console;
 

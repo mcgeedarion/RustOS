@@ -5,7 +5,7 @@
 //!   - error_code bit 2 (U) == 1  — fault in user mode
 //!
 //! Arch-neutral: uses `Arch as Paging` throughout, so both x86_64 and
-//! RISC-V share this single implementation. The only arch-specific bits
+//! Supported architectures share this single implementation. The only arch-specific bits
 //! are `map_page` and `flush_va` — both are trait methods.
 //!
 //! ## File-backed VMA fault handling
@@ -67,9 +67,9 @@ pub fn handle_demand_fault(faulting_va: usize) -> bool {
         },
     };
 
-    // `user_satp` doubles as CR3 on x86_64 (same field name in the PCB;
+    // `user_pagetable` doubles as CR3 on x86_64 (same field name in the PCB;
     // the Paging trait methods interpret the value correctly per arch).
-    let user_cr3 = scheduler::with_proc(pid, |p| p.user_satp).unwrap_or(0);
+    let user_cr3 = scheduler::with_proc(pid, |p| p.user_pagetable).unwrap_or(0);
     if user_cr3 == 0 {
         send_sigsegv(pid, faulting_va);
         return false;

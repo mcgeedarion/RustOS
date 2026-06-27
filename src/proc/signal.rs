@@ -22,7 +22,6 @@
 //! ## SA_RESTART
 //!
 //!   When a signal with SA_RESTART set interrupts a restartable syscall,
-//!   `check_and_deliver_with_sepc` (called from the RISC-V ecall path)
 //!   replays the syscall instead of returning -EINTR to userspace.
 //!
 //! ## AArch64 extensions

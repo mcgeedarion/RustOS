@@ -67,7 +67,7 @@ pub fn scheduler_tick() {}
 ///
 /// Before wiring real IRQ handlers, audit whether `WaitQueue::wake` (which
 /// calls `scheduler::wake_pid`) is safe from softirq context on all target
-/// architectures (x86_64 / RISC-V / AArch64).
+/// architectures (x86_64 / AArch64).
 pub fn post_cqe_from_irq(ring_idx: usize, user_data: u64, res: i32, flags: u32) -> bool {
     ring::with_ring(ring_idx, |r| r.post_cqe(user_data, res, flags)).unwrap_or(false)
 }

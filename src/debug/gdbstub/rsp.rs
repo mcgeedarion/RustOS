@@ -29,13 +29,10 @@ pub fn rsp_packet(body: &str) -> String {
 
 #[cfg(target_arch = "x86_64")]
 const ARCH_REG_COUNT: usize = 24;
-#[cfg(target_arch = "riscv64")]
-const ARCH_REG_COUNT: usize = 33; // 32 GPR + pc
 #[cfg(target_arch = "aarch64")]
 const ARCH_REG_COUNT: usize = 34; // x0-x30 + sp + pc + pstate
 #[cfg(not(any(
     target_arch = "x86_64",
-    target_arch = "riscv64",
     target_arch = "aarch64"
 )))]
 const ARCH_REG_COUNT: usize = 32;
@@ -49,17 +46,12 @@ fn arch_reg_buf_len() -> usize {
     {
         crate::debug::gdbstub::arch::X86_64::reg_buf_len()
     }
-    #[cfg(target_arch = "riscv64")]
-    {
-        crate::debug::gdbstub::arch::RiscV64::reg_buf_len()
-    }
     #[cfg(target_arch = "aarch64")]
     {
         crate::debug::gdbstub::arch::AArch64::reg_buf_len()
     }
     #[cfg(not(any(
         target_arch = "x86_64",
-        target_arch = "riscv64",
         target_arch = "aarch64"
     )))]
     {
@@ -72,17 +64,12 @@ fn arch_read_regs(trap: &crate::debug::AnyTrapFrame, buf: &mut [u8]) {
     {
         crate::debug::gdbstub::arch::X86_64::read_regs(trap, buf);
     }
-    #[cfg(target_arch = "riscv64")]
-    {
-        crate::debug::gdbstub::arch::RiscV64::read_regs(trap, buf);
-    }
     #[cfg(target_arch = "aarch64")]
     {
         crate::debug::gdbstub::arch::AArch64::read_regs(trap, buf);
     }
     #[cfg(not(any(
         target_arch = "x86_64",
-        target_arch = "riscv64",
         target_arch = "aarch64"
     )))]
     {
@@ -95,17 +82,12 @@ fn arch_write_regs(trap: &mut crate::debug::AnyTrapFrame, buf: &[u8]) {
     {
         crate::debug::gdbstub::arch::X86_64::write_regs(trap, buf);
     }
-    #[cfg(target_arch = "riscv64")]
-    {
-        crate::debug::gdbstub::arch::RiscV64::write_regs(trap, buf);
-    }
     #[cfg(target_arch = "aarch64")]
     {
         crate::debug::gdbstub::arch::AArch64::write_regs(trap, buf);
     }
     #[cfg(not(any(
         target_arch = "x86_64",
-        target_arch = "riscv64",
         target_arch = "aarch64"
     )))]
     {

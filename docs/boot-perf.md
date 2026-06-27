@@ -56,11 +56,10 @@ BOOT_MARK label=BOOT_INIT_EXEC ticks=12380000
 |--------------|---------------|-----------------------------------|-------------------------|
 | x86\_64      | `rdtsc`       | `IA32_TSC` (Time Stamp Counter)   | CPU core clock (GHz)    |
 | AArch64      | `mrs cntvct_el0` | Virtual timer counter          | `CNTFRQ_EL0` Hz (usually 25–100 MHz) |
-| RISC-V 64    | `rdtime`      | `time` CSR                        | Platform-defined (typically 1–10 MHz) |
 
-All three counters are:
+Both counters are:
 - **Monotonic** — never decrease within a single boot.
-- **Readable without privilege escalation** — accessible from EL1 / S-mode / kernel mode without extra CSR writes.
+- **Readable without privilege escalation** — accessible from EL1 / kernel mode without extra setup.
 - **Available before the memory allocator** — the `boot_mark!` macro calls only `read_hw_counter()` and `serial_println!`; no heap allocation is performed.
 
 > **Converting ticks to wall time** — divide the delta by the counter

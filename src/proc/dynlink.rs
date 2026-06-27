@@ -179,7 +179,7 @@ fn map_elf_phdrs(elf: &[u8]) -> Result<usize, isize> {
         procs
             .iter()
             .find(|p| p.pid == pid)
-            .map_or(0, |p| p.user_satp)
+            .map_or(0, |p| p.user_pagetable)
     });
     if cr3 == 0 {
         return Err(-12);

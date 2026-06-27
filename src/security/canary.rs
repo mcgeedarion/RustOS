@@ -60,16 +60,6 @@ pub extern "C" fn __stack_chk_fail() -> ! {
         core::arch::asm!("mov {}, cs", out(reg) cs, options(nostack, preserves_flags));
         in_kernel = (cs & 3) == 0;
     }
-    #[cfg(target_arch = "riscv64")]
-    unsafe {
-        let sstatus: u64;
-        core::arch::asm!("csrr {}, sstatus", out(reg) sstatus, options(nostack));
-        in_kernel = (sstatus >> 8) & 1 == 1;
-    }
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "riscv64")))]
-    {
-        let in_kernel = true;
-    }
 
     if in_kernel {
         panic!("KERNEL STACK CANARY CORRUPTION DETECTED — HALTING");

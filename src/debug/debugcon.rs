@@ -8,8 +8,7 @@
 //! The port is a QEMU-specific convention; writes to 0xe9 are no-ops on real
 //! hardware, so these functions are always safe to call without a feature gate.
 //!
-//! On RISC-V this module is not compiled (see mod.rs cfg guard).  Use
-//! SBI `console_putchar` (ecall extension 0x01) for equivalent early output.
+//! Use
 
 const DEBUGCON_PORT: u16 = 0xe9;
 
