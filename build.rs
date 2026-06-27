@@ -11,7 +11,6 @@ const CRT_SOURCES: &[&str] = &[
     "memset.c",
 ];
 
-
 const CRT_COMPILE_FLAGS: &[&str] = &[
     "-ffreestanding",
     "-nostdlib",
@@ -24,21 +23,37 @@ const CRT_COMPILE_FLAGS: &[&str] = &[
 fn main() {
     let out = PathBuf::from(std::env::var("OUT_DIR").unwrap());
     let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
-
-    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let target_os   = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let boot_minimal = std::env::var("CARGO_FEATURE_BOOT_MINIMAL").is_ok();
 
     println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_ARCH");
     println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_OS");
 
-    if target_os != "uefi" && !boot_minimal {
-        compile_crt(&target_arch);
+    // ----------------------------------------------------------------
+    // Bare-metal ELF targets only (x86_64-kernel.json, aarch64-kernel.json)
+    // UEFI PE/COFF targets (x86_64-uefi-loader.json, aarch64-uefi-loader.json)
+    // have target_os == "uefi"; they use the PE/COFF layout built into
+    // lld-link and must NOT have an ELF linker script injected.
+    // ----------------------------------------------------------------
+    if target_os != "uefi" {
+        let script = match target_arch.as_str() {
+            "x86_64"  => "linker/x86_64.ld",
+            "aarch64" => "linker/aarch64.ld",
+            other => {
+                println!("cargo:warning=build.rs: no linker script for arch '{other}'");
+                ""
+            }
+        };
+        if !script.is_empty() {
+            println!("cargo:rerun-if-changed={script}");
+            println!("cargo:rustc-link-arg=-T{script}");
+        }
+
+        // CRT stubs are only needed for bare-metal ELF builds.
+        if !boot_minimal {
+            compile_crt(&target_arch);
+        }
     }
-
-
-    // UEFI image production is handled by `cargo xtask build/image` after Cargo
-    // has produced the final `rustos` ELF. Doing this from build.rs is too early
-    // in Cargo's build graph and previously used stale target paths.
 
     if std::env::var("CARGO_FEATURE_TRACE").is_ok() {
         println!("cargo:rustc-flags=-Z instrument-functions");
@@ -114,15 +129,6 @@ fn command_exists(name: &str) -> bool {
         .map(|status| status.success())
         .unwrap_or(false)
 }
-
-fn which_first(names: &[&str]) -> Option<String> {
-    names
-        .iter()
-        .find(|name| command_exists(name))
-        .map(|name| (*name).to_string())
-}
-
-
 
 fn run_command(mut cmd: Command, context: &str) -> bool {
     match cmd.status() {

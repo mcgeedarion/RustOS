@@ -2,27 +2,44 @@
 xtask = "run --target x86_64-unknown-linux-gnu -p xtask --"
 
 # ============================================================
-# Golden-path developer on-ramp (Phase 1)
+# Boot target overview
 # ============================================================
 #
+# PRIMARY   — x86_64 UEFI  (targets/x86_64-uefi-loader.json)
+# SECONDARY — aarch64 UEFI (targets/aarch64-uefi-loader.json)
+#
+# Both produce PE/COFF UEFI applications. The firmware calls
+# the arch entry point, which runs ExitBootServices and tail-
+# calls kernel_main via a stack-switch trampoline.
+#
+# Bare-metal ELF variants (for QEMU -kernel / U-Boot direct
+# load) live in targets/x86_64-kernel.json and
+# targets/aarch64-kernel.json; those use a custom ELF linker
+# script and are invoked explicitly:
+#
+#   cargo build --target targets/x86_64-kernel.json
+#   cargo build --target targets/aarch64-kernel.json
+#
+# ============================================================
+# Developer on-ramp
+# ============================================================
+#
+# Plain `cargo build` builds the x86_64 UEFI image (PRIMARY).
+#
+# To build the aarch64 UEFI image:
+#   cargo xtask build --arch aarch64
+#   -- or --
+#   cargo build --target targets/aarch64-uefi-loader.json
+#
+# To run in QEMU (downloads OVMF automatically if needed):
 #   cargo xtask run --arch x86_64
+#   cargo xtask run --arch aarch64
 #
-# That single command builds the kernel, stages the UEFI ESP,
-# assembles boot-x86_64.img, resolves OVMF firmware (auto-
-# downloading if needed), and launches qemu-system-x86_64 with
-# serial output on stdout.
-#
-# See docs/getting-started.md for the full on-ramp guide.
+# See docs/getting-started.md for the full guide.
 # ============================================================
 
-# Plain `cargo build` builds the repository-default boot artifact:
-# the aarch64 UEFI loader/application.  Use `cargo xtask image
-# --arch aarch64` when you need the FAT ESP image.
-#
-# x86_64 remain explicit targets:
-#   cargo xtask build --arch x86_64
 [build]
-target = "targets/aarch64-uefi-loader.json"
+target = "targets/x86_64-uefi-loader.json"
 
 # Freestanding kernel builds require -Z build-std. xtask injects
 # those flags only for kernel cargo invocations so the host xtask
