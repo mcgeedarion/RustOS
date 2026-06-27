@@ -107,7 +107,16 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     }
 
     serial_write(b"PANIC_ARCH: ");
+    #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
     serial_write(crate::arch::api::name().as_bytes());
+    #[cfg(all(feature = "boot_minimal", target_arch = "x86_64"))]
+    serial_write(b"x86_64");
+    #[cfg(all(feature = "boot_minimal", target_arch = "aarch64"))]
+    serial_write(b"aarch64");
+    #[cfg(all(feature = "userspace_boot", target_arch = "x86_64"))]
+    serial_write(b"x86_64");
+    #[cfg(all(feature = "userspace_boot", target_arch = "aarch64"))]
+    serial_write(b"aarch64");
     serial_write(b"\r\n");
 
     // 3. Current task name + PID (best-effort — may not be available early).
@@ -154,7 +163,16 @@ fn alloc_error(layout: core::alloc::Layout) -> ! {
     serial_write(b"\r\nOOM_ALIGN: ");
     serial_u64(layout.align() as u64);
     serial_write(b"\r\nOOM_ARCH: ");
+    #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
     serial_write(crate::arch::api::name().as_bytes());
+    #[cfg(all(feature = "boot_minimal", target_arch = "x86_64"))]
+    serial_write(b"x86_64");
+    #[cfg(all(feature = "boot_minimal", target_arch = "aarch64"))]
+    serial_write(b"aarch64");
+    #[cfg(all(feature = "userspace_boot", target_arch = "x86_64"))]
+    serial_write(b"x86_64");
+    #[cfg(all(feature = "userspace_boot", target_arch = "aarch64"))]
+    serial_write(b"aarch64");
     serial_write(b"\r\n--- END OOM ---\r\n");
     halt_loop()
 }

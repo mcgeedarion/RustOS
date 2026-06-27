@@ -208,6 +208,14 @@ pub unsafe extern "efiapi" fn efi_entry_raw(
 }
 
 #[no_mangle]
+pub unsafe extern "efiapi" fn efi_main(
+    image_handle: *mut core::ffi::c_void,
+    system_table: *mut core::ffi::c_void,
+) -> ! {
+    efi_entry_raw(image_handle, system_table)
+}
+
+#[no_mangle]
 unsafe extern "efiapi" fn uefi_start(
     image_handle: EfiHandle,
     system_table: *mut EfiSystemTable,
