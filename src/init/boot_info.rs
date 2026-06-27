@@ -88,9 +88,9 @@ pub enum BootPriority {
 impl BootPriority {
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::Primary => "PRIMARY",
+            Self::Primary   => "PRIMARY",
             Self::Secondary => "SECONDARY",
-            Self::Tertiary => "TERTIARY",
+            Self::Tertiary  => "TERTIARY",
         }
     }
 }
@@ -122,24 +122,29 @@ impl BootInfo {
     }
 
     /// Returns the compile-time boot priority for the current architecture.
+    ///
+    /// Priority assignment:
+    ///   PRIMARY   — x86_64  (default `cargo build` target)
+    ///   SECONDARY — aarch64 (explicit `--target targets/aarch64-uefi-loader.json`)
+    ///   TERTIARY  — riscv64 and any future arch not yet assigned
     pub const fn priority() -> BootPriority {
-        #[cfg(target_arch = "aarch64")]
+        #[cfg(target_arch = "x86_64")]
         {
             BootPriority::Primary
         }
-        #[cfg(target_arch = "riscv64")]
+        #[cfg(target_arch = "aarch64")]
         {
             BootPriority::Secondary
         }
-        #[cfg(target_arch = "x86_64")]
+        #[cfg(target_arch = "riscv64")]
         {
             BootPriority::Tertiary
         }
         // Fallback for any future architecture not yet assigned a priority.
         #[cfg(not(any(
+            target_arch = "x86_64",
             target_arch = "aarch64",
             target_arch = "riscv64",
-            target_arch = "x86_64",
         )))]
         {
             BootPriority::Tertiary
