@@ -6,15 +6,19 @@
 //! - GPU/display driver abstraction
 //! - GEM (Graphics Execution Manager) buffer objects
 //! - Synchronization primitives for GPU work (fences, dma-buf)
+//! - HDMI 2.1 FRL link training and SCDC management
+//! - ACP 7.x audio co-processor endpoint management
 //!
 //! The Wayland compositor (`crate::display::wayland`) interfaces with this
 //! subsystem to perform display output and buffer presentation.
 
+pub mod acp;
 pub mod connector;
 pub mod crtc;
 pub mod encoder;
 pub mod framebuffer;
 pub mod gem;
+pub mod hdmi;
 pub mod plane;
 
 use core::fmt;
@@ -72,6 +76,10 @@ pub enum DrmError {
     InvalidId,
     /// A hardware or driver-internal error occurred.
     HardwareError(&'static str),
+    /// HDMI 2.1 FRL link training failed.
+    FrlNegotiationFailed,
+    /// ACP audio co-processor error.
+    AcpError(acp::AcpError),
 }
 
 impl fmt::Display for DrmError {
@@ -82,6 +90,8 @@ impl fmt::Display for DrmError {
             DrmError::InvalidFramebuffer => write!(f, "DRM: invalid framebuffer"),
             DrmError::InvalidId => write!(f, "DRM: invalid CRTC/connector id"),
             DrmError::HardwareError(msg) => write!(f, "DRM: hardware error: {}", msg),
+            DrmError::FrlNegotiationFailed => write!(f, "DRM: HDMI 2.1 FRL negotiation failed"),
+            DrmError::AcpError(e) => write!(f, "DRM: ACP error: {}", e),
         }
     }
 }
