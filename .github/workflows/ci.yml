@@ -67,6 +67,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y llvm lld musl-tools cpio mtools ovmf qemu-system-x86
       - name: Run x86_64 UEFI smoke
-        run: ARCH=x86_64 ./scripts/ci/run_qemu.sh --boot uefi --smoke --timeout 60
+        run: cargo xtask smoke --arch x86_64 --boot uefi
       - name: Run x86_64 UEFI kmtest
         run: ARCH=x86_64 ./scripts/ci/run_qemu.sh --boot uefi --test --timeout 90

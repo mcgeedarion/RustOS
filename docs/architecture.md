@@ -6,7 +6,7 @@
 - **CI requirement**: All pushes and PRs **must** pass the smoke test
   (`RUSTOS_BOOT_OK` / `BOOT_MINIMAL_OK` sentinel in QEMU serial output).
 - **Feature requirement**: All Cargo features must compile on x86_64.
-- **QEMU command**: `cargo xtask run --arch x86_64` (golden path)
+- **QEMU command**: `cargo xtask smoke --arch x86_64` (local validation)
 
 ## Secondary architecture: aarch64
 
@@ -16,7 +16,7 @@
   Failures are **blocking** for M1; best-effort for M2+.
 - **Feature requirement**: `boot_minimal` and `userspace_boot` features must
   compile. `full-kernel`, `net`, `wayland-compositor` are compile-tested only.
-- **QEMU command**: `cargo xtask run --arch aarch64`
+- **QEMU command**: `cargo xtask smoke --arch aarch64`
 
 ## Planned: RISC-V (riscv64)
 

@@ -41,10 +41,10 @@ state. Update it alongside any code change that promotes or demotes a module.
 | `src/syscall/` dispatch | partial | _(default)_ | x86_64 SYSCALL/SYSRET; EFAULT not uniform |
 | `write` (fd 1/2) | partial | _(default)_ | Console path only; no file-backed write |
 | `open` / `close` | stub | `userspace_boot` | Returns fd 0–2 only |
-| `fork` | stub | `userspace_boot` | Returns `ENOSYS` |
-| `execve` | stub | `userspace_boot` | ELF loader partial |
+| `fork` | partial | `userspace_boot` | Minimal PID creation path smoke-tested |
+| `execve` | partial | `userspace_boot` | Static ELF path smoke-tested; complex argv/envp pending |
 | `exit` / `exit_group` | partial | _(default)_ | Process teardown incomplete |
-| `waitpid` / `wait4` | stub | `userspace_boot` | Returns `ECHILD` |
+| `waitpid` / `wait4` | partial | `userspace_boot` | Child exit collection smoke-tested; options pending |
 | `mmap` / `munmap` | partial | `full-kernel` | Anonymous mmap; file-backed stub |
 | `brk` | partial | `full-kernel` | — |
 | Syscall-trace counters | real | `syscall-trace` | Per-syscall ns timing via /proc/syscall_stats |
@@ -54,7 +54,7 @@ state. Update it alongside any code change that promotes or demotes a module.
 | Module | Status | Feature gate | Notes |
 |--------|--------|--------------|-------|
 | `src/fs/` VFS | partial | `full-kernel` | Inode/dentry layer incomplete |
-| initramfs (cpio newc) | partial | `userspace_boot` | Discovery path; missing ESP-less path |
+| initramfs (cpio newc) | partial | `userspace_boot` | Boot-protocol range first; no ESP scan required |
 | ext2 | experimental | `full-kernel` | Read-only; not CI-gated |
 | ext4 | planned | `full-kernel` | — |
 | devfs | stub | `userspace_boot` | `/dev/null`, `/dev/zero` stubs only |
@@ -128,7 +128,7 @@ it promotes a stub or experimental path.
 
 | Improvement | First code path | Validation |
 |-------------|-----------------|------------|
-| Reliable developer workflow | `cargo xtask check`, `cargo xtask ci-local` | Fast local check passes before push |
+| Reliable developer workflow | `cargo xtask smoke` | Single documented local validation command passes before push |
 | Boot smoke stability | `cargo xtask smoke` | Serial log contains `BOOT_MINIMAL_OK`, `FULL_OS_USERSPACE_OK`, or `entering cpu_idle` |
 | Syscall correctness | `src/syscall/` | `/init` minimum syscalls return data or errno, never kernel panic |
 | Fault injection | `fault-inject` + `kmtest` | OOM/map/syscall resource failures produce controlled errors |
