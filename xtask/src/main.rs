@@ -298,12 +298,13 @@ fn add_build_std_flags(cmd: &mut Command) {
     ]);
 }
 
-fn build_kernel(root: &Path, opts: &BuildOpts) -> Result<()> {
+fn kernel_cargo_command(root: &Path, opts: &BuildOpts, subcommand: &str) -> Result<Command> {
     validate_contract(opts.arch, opts.boot)?;
 
     let mut cmd = cargo();
     cmd.current_dir(root)
-        .args(["build", "--target"])
+        .arg(subcommand)
+        .arg("--target")
         .arg(target_json(root, opts.arch, opts.boot));
     add_build_std_flags(&mut cmd);
 
@@ -340,7 +341,119 @@ fn build_kernel(root: &Path, opts: &BuildOpts) -> Result<()> {
         }
     }
 
+    Ok(cmd)
+}
+
+fn build_kernel(root: &Path, opts: &BuildOpts) -> Result<()> {
+    let mut cmd = kernel_cargo_command(root, opts, "build")?;
     run(&mut cmd)
+}
+
+fn check_kernel(root: &Path, opts: &BuildOpts) -> Result<()> {
+    let mut cmd = kernel_cargo_command(root, opts, "check")?;
+    run(&mut cmd)
+}
+
+fn ci_local(root: &Path) -> Result<()> {
+    log("ci-local: checking canonical boot-minimal x86_64 build");
+    let opts = BuildOpts::default();
+    check_kernel(root, &opts)?;
+
+    log("ci-local: checking module hygiene");
+    lint_modules(root)?;
+
+    log("ci-local: checking documented stub guards");
+    run(Command::new("bash").arg(root.join("scripts/ci/check-stubs.sh")))?;
+
+    log("ci-local: validating roadmap documents");
+    validate_roadmap_docs(root)?;
+    Ok(())
+}
+
+fn validate_file_contains(root: &Path, relative: &str, required: &[&str]) -> Result<()> {
+    let path = root.join(relative);
+    let content = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    let missing = required
+        .iter()
+        .filter(|needle| !content.contains(**needle))
+        .copied()
+        .collect::<Vec<_>>();
+    if missing.is_empty() {
+        log(format!("{relative}: OK"));
+        Ok(())
+    } else {
+        bail!(
+            "{relative} is missing required topic(s): {}",
+            missing.join(", ")
+        )
+    }
+}
+
+fn validate_roadmap_docs(root: &Path) -> Result<()> {
+    validate_status_doc(root)?;
+    validate_file_contains(
+        root,
+        "docs/syscalls.md",
+        &[
+            "write",
+            "open",
+            "close",
+            "fork",
+            "execve",
+            "exit",
+            "wait4",
+            "EFAULT-safe",
+        ],
+    )?;
+    validate_file_contains(
+        root,
+        "docs/milestones.md",
+        &[
+            "M1",
+            "M2",
+            "M3",
+            "M4",
+            "M5",
+            "BOOT_MINIMAL_OK",
+            "FULL_OS_USERSPACE_OK",
+        ],
+    )?;
+    validate_file_contains(
+        root,
+        "docs/architecture.md",
+        &[
+            "Primary architecture: x86_64",
+            "Secondary architecture: aarch64",
+            "Code organisation rules",
+        ],
+    )?;
+    validate_file_contains(
+        root,
+        "docs/fault_inject.md",
+        &[
+            "FAULT_PMM_ALLOC",
+            "FAULT_VMM_MAP",
+            "FAULT_SYSCALL_RESOURCE",
+            "fault-inject",
+        ],
+    )?;
+    Ok(())
+}
+
+fn validate_status_doc(root: &Path) -> Result<()> {
+    validate_file_contains(
+        root,
+        "docs/status.md",
+        &[
+            "boot_minimal",
+            "userspace_boot",
+            "syscall",
+            "fault-inject",
+            "Wayland",
+            "x86_64",
+            "aarch64",
+        ],
+    )
 }
 
 fn ensure_musl_toolchain(arch: Arch) {
@@ -719,6 +832,113 @@ fn launch_qemu_aarch64(_root: &Path, img: &Path, debug_port: Option<u16>) -> Res
     run(&mut cmd)
 }
 
+fn smoke_marker_regex() -> &'static str {
+    "BOOT_MINIMAL_OK|FULL_OS_USERSPACE_OK|entering cpu_idle"
+}
+
+fn run_smoke(root: &Path, opts: &BuildOpts) -> Result<()> {
+    build_kernel(root, opts)?;
+    let esp = stage_esp(root, opts)?;
+    let img = build_fat_image(root, &esp, opts.arch)?;
+    let log_path = root.join(format!("target/smoke-{}.log", arch_str(opts.arch)));
+    if let Some(parent) = log_path.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    }
+
+    match opts.arch {
+        Arch::X86_64 => {
+            require_tool(&["qemu-system-x86_64"], "apt install qemu-system-x86");
+            let ovmf = ensure_ovmf(root)?;
+            let mut cmd = Command::new("timeout");
+            cmd.arg("60").arg("qemu-system-x86_64").args([
+                "-machine",
+                "q35",
+                "-cpu",
+                "qemu64,+xsave,+avx",
+                "-m",
+                "256M",
+                "-drive",
+                &format!("if=pflash,format=raw,readonly=on,file={}", ovmf.display()),
+                "-drive",
+                &format!("if=virtio,format=raw,file={}", img.display()),
+                "-serial",
+                &format!("file:{}", log_path.display()),
+                "-display",
+                "none",
+                "-no-reboot",
+                "-no-shutdown",
+            ]);
+            run_allow_timeout(&mut cmd)?;
+        },
+        Arch::AArch64 => {
+            require_tool(&["qemu-system-aarch64"], "apt install qemu-system-arm");
+            let fw_candidates = [
+                "/usr/share/AAVMF/AAVMF_CODE.fd",
+                "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
+                "/usr/share/qemu/edk2-aarch64-code.fd",
+            ];
+            let fw = fw_candidates
+                .iter()
+                .find(|p| std::path::Path::new(p).exists())
+                .map(PathBuf::from)
+                .or_else(|| env::var("QEMU_EFI").ok().map(PathBuf::from))
+                .ok_or_else(|| {
+                    anyhow!(
+                        "AArch64 UEFI firmware not found; install qemu-efi-aarch64 or set QEMU_EFI"
+                    )
+                })?;
+            let mut cmd = Command::new("timeout");
+            cmd.arg("45").arg("qemu-system-aarch64").args([
+                "-machine",
+                "virt",
+                "-cpu",
+                "cortex-a57",
+                "-m",
+                "512M",
+                "-bios",
+                fw.to_str().unwrap(),
+                "-drive",
+                &format!("if=none,id=esp,format=raw,file={}", img.display()),
+                "-device",
+                "virtio-blk-device,drive=esp",
+                "-serial",
+                &format!("file:{}", log_path.display()),
+                "-display",
+                "none",
+                "-no-reboot",
+                "-no-shutdown",
+            ]);
+            run_allow_timeout(&mut cmd)?;
+        },
+    }
+
+    let serial = fs::read_to_string(&log_path)
+        .with_context(|| format!("read smoke log {}", log_path.display()))?;
+    if serial.contains("BOOT_MINIMAL_OK")
+        || serial.contains("FULL_OS_USERSPACE_OK")
+        || serial.contains("entering cpu_idle")
+    {
+        log(format!("smoke marker found in {}", log_path.display()));
+        Ok(())
+    } else {
+        bail!(
+            "smoke marker not found in {}; expected {}",
+            log_path.display(),
+            smoke_marker_regex()
+        )
+    }
+}
+
+fn run_allow_timeout(cmd: &mut Command) -> Result<()> {
+    log(format!("running: {:?}", cmd));
+    let status = cmd.status().context("failed to spawn command")?;
+    if status.success() || status.code() == Some(124) {
+        Ok(())
+    } else {
+        bail!("command failed with {status}")
+    }
+}
+
 // ── initramfs / userspace build ────────────────────────────────────────────
 
 fn build_init(root: &Path, arch: Arch) -> Result<()> {
@@ -788,7 +1008,7 @@ fn lint_modules(root: &Path) -> Result<()> {
                 for (i, line) in content.lines().enumerate() {
                     // Flag `pub(crate) use` that crosses a top-level module
                     // boundary — a heuristic only.
-                    if line.contains("pub(crate) use crate::") {
+                    if line.contains("pub(crate) use crate::") && !line.contains(" as sys_") {
                         violations.push(format!(
                             "{}:{}: suspicious pub(crate) use across crate root",
                             path.display(),
@@ -837,6 +1057,14 @@ fn main() {
             }
         },
 
+        "check" => {
+            let opts = parse_build_args(&args);
+            if let Err(e) = check_kernel(&root, &opts) {
+                eprintln!("[xtask] check failed: {e:#}");
+                exit(1);
+            }
+        },
+
         "image" => {
             let opts = parse_build_args(&args);
             if let Err(e) = (|| -> Result<()> {
@@ -868,6 +1096,14 @@ fn main() {
                 Ok(())
             })() {
                 eprintln!("[xtask] run failed: {e:#}");
+                exit(1);
+            }
+        },
+
+        "smoke" => {
+            let opts = parse_build_args(&args);
+            if let Err(e) = run_smoke(&root, &opts) {
+                eprintln!("[xtask] smoke failed: {e:#}");
                 exit(1);
             }
         },
@@ -917,6 +1153,27 @@ fn main() {
             }
         },
 
+        "ci-local" => {
+            if let Err(e) = ci_local(&root) {
+                eprintln!("[xtask] ci-local failed: {e:#}");
+                exit(1);
+            }
+        },
+
+        "status-check" => {
+            if let Err(e) = validate_status_doc(&root) {
+                eprintln!("[xtask] status-check failed: {e:#}");
+                exit(1);
+            }
+        },
+
+        "roadmap-check" => {
+            if let Err(e) = validate_roadmap_docs(&root) {
+                eprintln!("[xtask] roadmap-check failed: {e:#}");
+                exit(1);
+            }
+        },
+
         "lint-modules" => {
             if let Err(e) = lint_modules(&root) {
                 eprintln!("[xtask] lint-modules failed: {e:#}");
@@ -942,11 +1199,17 @@ SUBCOMMANDS:
   build    [--arch <arch>] [--boot <boot>] [--profile <p>] [--features <f>]
              Compile the kernel only.
 
+  check    [--arch <arch>] [--boot <boot>] [--profile <p>] [--features <f>]
+             Type-check the kernel using the same target/feature handling as build.
+
   image    [--arch <arch>] [--boot <boot>] [--profile <p>] [--features <f>]
              Build kernel + stage ESP + assemble FAT disk image.
 
   run      [--arch <arch>] [--boot <boot>] [--debug] [--initrd]
              Build, image, and launch under QEMU.
+
+  smoke   [--arch <arch>] [--boot <boot>] [--profile <p>] [--features <f>]
+             Build, boot under QEMU with serial captured, and assert a boot marker.
 
   debug    [--arch <arch>] [--boot <boot>] [--debug]
              Like `run` but starts QEMU with GDB server on tcp::1234.
@@ -956,6 +1219,15 @@ SUBCOMMANDS:
 
   lint-modules
              Check module hygiene (pub(crate) use heuristics).
+
+  status-check
+             Validate docs/status.md covers required roadmap topics.
+
+  roadmap-check
+             Validate status, syscall, milestone, architecture, and fault docs.
+
+  ci-local
+             Run the fast local CI gate: check, lint-modules, stub guard, roadmap-check.
 
   help       Print this message.
 

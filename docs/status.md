@@ -117,3 +117,32 @@ appears in a `full-kernel` feature build. Run it locally with:
 ```sh
 bash scripts/ci/check-stubs.sh
 ```
+
+---
+
+## Improvement Roadmap
+
+Use this section to connect subsystem status to concrete work items. Each new
+feature should identify the milestone it advances and update the table above if
+it promotes a stub or experimental path.
+
+| Improvement | First code path | Validation |
+|-------------|-----------------|------------|
+| Reliable developer workflow | `cargo xtask check`, `cargo xtask ci-local` | Fast local check passes before push |
+| Boot smoke stability | `cargo xtask smoke` | Serial log contains `BOOT_MINIMAL_OK`, `FULL_OS_USERSPACE_OK`, or `entering cpu_idle` |
+| Syscall correctness | `src/syscall/` | `/init` minimum syscalls return data or errno, never kernel panic |
+| Fault injection | `fault-inject` + `kmtest` | OOM/map/syscall resource failures produce controlled errors |
+| Boot performance | `docs/boot-optimization-checklist.md` | Measurements exist before optimization claims |
+| Userspace display hardening | Wayland compositor | Pointer/focus/ping/seccomp/privilege-drop tasks are tracked before trust expansion |
+| Stub visibility | `docs/status.md` and feature gates | Stubs stay documented and cannot silently become full-kernel dependencies |
+| Architecture policy | x86_64 and aarch64 milestones | Each arch has an explicit build/smoke expectation |
+
+## Contribution Rules
+
+1. New functionality should identify which milestone it advances.
+2. Stubs must be named or documented as stubs and feature-gated when possible.
+3. Boot success must be decided by serial sentinels, not by fixed sleeps.
+4. Raw `cargo check` against JSON target specs is discouraged; use `cargo xtask check` so nightly `-Z` flags and target settings stay consistent.
+5. Performance work must add or update a measurement before claiming an improvement.
+6. Run `cargo xtask roadmap-check` when changing status, syscall, milestone, architecture, or fault-injection documentation.
+7. Run `bash scripts/ci/check-stubs.sh` when changing module gates or stub classifications.

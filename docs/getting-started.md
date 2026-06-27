@@ -129,6 +129,27 @@ cargo xtask smoke
 
 The marker regex is configurable via `SMOKE_MARKER_RE` for CI environments.
 
+
+## Local CI Gate
+
+Prefer `xtask` over raw `cargo check` for kernel work. The kernel uses custom
+target specifications and build-std flags, so `cargo xtask check` supplies the
+nightly `-Z` options consistently.
+
+```bash
+# Fast pre-push check
+cargo xtask ci-local
+
+# Validate the full roadmap/documentation contract
+cargo xtask roadmap-check
+
+# Type-check a specific milestone
+cargo xtask check --arch x86_64 --features boot_minimal
+```
+
+Subsystem maturity and the current improvement roadmap live in
+[`docs/status.md`](status.md).
+
 ## Disk Image Layout
 
 ```
