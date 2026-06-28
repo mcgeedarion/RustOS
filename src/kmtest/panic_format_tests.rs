@@ -190,9 +190,18 @@ fn test_oom_header_fields() {
 // ---------------------------------------------------------------------------
 
 pub fn register() {
-    kmtest::register!("panic_format::oops_section_headers",  test_oops_section_headers);
-    kmtest::register!("panic_format::bare_panic_reg_note",   test_bare_panic_reg_note);
-    kmtest::register!("panic_format::panic_header_fields",   test_panic_header_fields);
-    kmtest::register!("panic_format::frame_line_format",     test_frame_line_format);
-    kmtest::register!("panic_format::oom_header_fields",     test_oom_header_fields);
+    crate::kmtest::register!(
+        "panic_format::oops_section_headers",
+        test_oops_section_headers
+    );
+    crate::kmtest::register!(
+        "panic_format::bare_panic_reg_note",
+        test_bare_panic_reg_note
+    );
+    crate::kmtest::register!(
+        "panic_format::panic_header_fields",
+        test_panic_header_fields
+    );
+    crate::kmtest::register!("panic_format::frame_line_format", test_frame_line_format);
+    crate::kmtest::register!("panic_format::oom_header_fields", test_oom_header_fields);
 }
