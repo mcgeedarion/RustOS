@@ -36,7 +36,7 @@ INIT_BIN="build/userspace/init"
 if [[ ! -f "$INIT_BIN" ]]; then
     echo "error: $INIT_BIN not found." >&2
     echo "       Build userspace first:" >&2
-    echo "         cargo xtask mkinitramfs --arch x86_64" >&2
+    echo "         cargo xtask build-init --arch x86_64" >&2
     echo "       or:  make -C userspace" >&2
     exit 1
 fi
