@@ -41,10 +41,6 @@ pub fn with_registry<R>(f: impl FnOnce(&[KmTestEntry]) -> R) -> R {
     f(&registry)
 }
 
-pub fn registry_snapshot() -> Vec<KmTestEntry> {
-    REGISTRY.lock().clone()
-}
-
 macro_rules! register {
     ($name:expr, $run:path $(,)?) => {
         $crate::kmtest::register_entry($name, $run)
