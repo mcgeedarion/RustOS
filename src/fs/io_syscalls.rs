@@ -86,12 +86,23 @@ fn resolve(fd: usize) -> isize {
     proc_fd_backing(cpid(), fd)
 }
 
+const O_ACCMODE: i32 = 0o3;
+const O_RDONLY: i32 = 0;
+const O_WRONLY: i32 = 1;
 const O_APPEND: i32 = 0o2000;
 
 const RLIMIT_FSIZE: usize = 1;
 const RLIM_INFINITY: u64 = u64::MAX;
 const SIGXFSZ: u32 = 25;
 const EFBIG: isize = -27;
+
+fn fd_allows_read(fd: usize) -> bool {
+    (proc_fd_getfl(cpid(), fd) & O_ACCMODE) != O_WRONLY
+}
+
+fn fd_allows_write(fd: usize) -> bool {
+    (proc_fd_getfl(cpid(), fd) & O_ACCMODE) != O_RDONLY
+}
 
 fn check_fsize_limit(bfd: usize, count: usize) -> Result<usize, isize> {
     let pid = cpid();
@@ -121,6 +132,16 @@ pub fn sys_read(fd: usize, buf_va: usize, count: usize) -> isize {
         n if n < 0 => return n,
         n => n as usize,
     };
+
+    if !fd_allows_read(fd) {
+        return -9; // EBADF
+    }
+
+    // Standard descriptors are direction-specific in the early console path:
+    // fd 0 is stdin only, while fd 1/2 are write-only stdout/stderr.
+    if bfd == 1 || bfd == 2 {
+        return -9; // EBADF
+    }
 
     let mut kbuf = alloc::vec![0u8; count];
     let n: isize;
@@ -184,6 +205,16 @@ pub fn sys_write(fd: usize, buf_va: usize, count: usize) -> isize {
         n if n < 0 => return n,
         n => n as usize,
     };
+
+    if !fd_allows_write(fd) {
+        return -9; // EBADF
+    }
+
+    // fd 0 is stdin; writes to it should fail instead of falling through to
+    // VFS fd 0 or another unrelated backing object.
+    if bfd == 0 {
+        return -9; // EBADF
+    }
 
     let mut kbuf = alloc::vec![0u8; count];
     if copy_from_user(&mut kbuf, buf_va).is_err() {
@@ -424,6 +455,9 @@ pub fn sys_writev(fd: usize, iov_va: usize, iovcnt: usize) -> isize {
         n if n < 0 => return n,
         n => n as usize,
     };
+    if !fd_allows_write(fd) {
+        return -9;
+    }
     let iov_size = core::mem::size_of::<IoVec>();
     if !validate_user_ptr(iov_va, iovcnt * iov_size) {
         return -14;
@@ -488,6 +522,9 @@ pub fn sys_readv(fd: usize, iov_va: usize, iovcnt: usize) -> isize {
         n if n < 0 => return n,
         n => n as usize,
     };
+    if !fd_allows_read(fd) {
+        return -9;
+    }
     let iov_size = core::mem::size_of::<IoVec>();
     let mut total = 0isize;
     for i in 0..iovcnt {
