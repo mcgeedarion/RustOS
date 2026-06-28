@@ -4,9 +4,11 @@ version = "0.1.0"
 edition = "2021"
 
 # This crate is intentionally outside the kernel workspace — it targets
-# a Linux userspace ABI (x86_64-unknown-linux-musl or x86_64-user.json)
+# a freestanding userspace ABI (x86_64-unknown-none or aarch64-unknown-none)
 # while the kernel workspace targets bare-metal / UEFI.
 # Build via: cargo xtask build-init   OR   cargo build (from this dir)
+
+[workspace]
 
 [[bin]]
 name = "init"

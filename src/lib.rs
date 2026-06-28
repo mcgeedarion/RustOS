@@ -66,9 +66,17 @@ pub mod boot_minimal;
 // userspace_boot profile
 // ---------------------------------------------------------------------------
 
-/// Thin userspace-handoff boot path with stub fs/proc shims.
+/// Thin userspace-handoff boot path with minimal userspace services.
 #[cfg(feature = "userspace_boot")]
 pub mod userspace_boot;
+
+/// Minimal fs/proc surfaces used by the `userspace_boot` profile while the
+/// full kernel module graph remains gated out.
+#[cfg(feature = "userspace_boot")]
+pub mod userspace_shims;
+
+#[cfg(feature = "userspace_boot")]
+pub use userspace_shims::{fs, proc};
 
 // ---------------------------------------------------------------------------
 // Full-kernel modules (not boot_minimal, not userspace_boot)
