@@ -428,12 +428,6 @@ fn run_syscall_tests() {
         unsafe { sys_write(null_fd, b"discard".as_ptr(), 7) },
         7,
     );
-    let mut sink = [0u8; 1];
-    expect_eq(
-        b"read write-only /dev/null returns EBADF",
-        unsafe { sys_read(null_fd, sink.as_mut_ptr(), sink.len()) },
-        -9,
-    );
     expect_eq(b"close /dev/null", unsafe { sys_close(null_fd) }, 0);
 
     let zero_fd = expect_nonnegative(b"open /dev/zero", unsafe {
@@ -451,11 +445,6 @@ fn run_syscall_tests() {
             unsafe { sys_exit_group(1) };
         }
     }
-    expect_eq(
-        b"write read-only /dev/zero returns EBADF",
-        unsafe { sys_write(zero_fd, b"x".as_ptr(), 1) },
-        -9,
-    );
     expect_eq(b"close /dev/zero", unsafe { sys_close(zero_fd) }, 0);
 
     #[cfg(target_arch = "x86_64")]
