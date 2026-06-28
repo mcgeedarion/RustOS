@@ -122,6 +122,12 @@ pub fn sys_read(fd: usize, buf_va: usize, count: usize) -> isize {
         n => n as usize,
     };
 
+    // Standard descriptors are direction-specific in the early console path:
+    // fd 0 is stdin only, while fd 1/2 are write-only stdout/stderr.
+    if bfd == 1 || bfd == 2 {
+        return -9; // EBADF
+    }
+
     let mut kbuf = alloc::vec![0u8; count];
     let n: isize;
 
@@ -184,6 +190,12 @@ pub fn sys_write(fd: usize, buf_va: usize, count: usize) -> isize {
         n if n < 0 => return n,
         n => n as usize,
     };
+
+    // fd 0 is stdin; writes to it should fail instead of falling through to
+    // VFS fd 0 or another unrelated backing object.
+    if bfd == 0 {
+        return -9; // EBADF
+    }
 
     let mut kbuf = alloc::vec![0u8; count];
     if copy_from_user(&mut kbuf, buf_va).is_err() {
