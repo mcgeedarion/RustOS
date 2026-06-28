@@ -545,6 +545,9 @@ fn read_bfd(bfd: usize, buf_va: usize, count: usize) -> isize {
     if !validate_user_ptr(buf_va, count) {
         return -14;
     }
+    if bfd == 1 || bfd == 2 {
+        return -9;
+    }
     let mut kbuf = alloc::vec![0u8; count];
     let n: isize;
     if bfd == 0 {
@@ -594,6 +597,9 @@ fn read_bfd(bfd: usize, buf_va: usize, count: usize) -> isize {
 fn write_bfd(bfd: usize, buf_va: usize, count: usize) -> isize {
     if !validate_user_ptr(buf_va, count) {
         return -14;
+    }
+    if bfd == 0 {
+        return -9;
     }
     let mut kbuf = alloc::vec![0u8; count];
     if copy_from_user(&mut kbuf, buf_va).is_err() {
