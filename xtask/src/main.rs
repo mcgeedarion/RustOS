@@ -817,10 +817,7 @@ fn launch_qemu_x86_64(
     ]);
 
     if let Some(initrd) = initrd {
-        cmd.arg("-fw_cfg").arg(format!(
-            "name=opt/org.tianocore/InitrdLoader,file={}",
-            initrd.display()
-        ));
+        cmd.arg("-initrd").arg(initrd);
     }
 
     if let Some(port) = debug_port {
@@ -880,10 +877,7 @@ fn launch_qemu_aarch64(
     ]);
 
     if let Some(initrd) = initrd {
-        cmd.arg("-fw_cfg").arg(format!(
-            "name=opt/org.tianocore/InitrdLoader,file={}",
-            initrd.display()
-        ));
+        cmd.arg("-initrd").arg(initrd);
     }
 
     if let Some(port) = debug_port {
@@ -931,10 +925,7 @@ fn run_smoke(root: &Path, opts: &BuildOpts) -> Result<()> {
                 "-no-shutdown",
             ]);
             if let Some(initrd) = initrd.as_deref() {
-                cmd.arg("-fw_cfg").arg(format!(
-                    "name=opt/org.tianocore/InitrdLoader,file={}",
-                    initrd.display()
-                ));
+                cmd.arg("-initrd").arg(initrd);
             }
             run_allow_timeout(&mut cmd)?;
         },
@@ -977,10 +968,7 @@ fn run_smoke(root: &Path, opts: &BuildOpts) -> Result<()> {
                 "-no-shutdown",
             ]);
             if let Some(initrd) = initrd.as_deref() {
-                cmd.arg("-fw_cfg").arg(format!(
-                    "name=opt/org.tianocore/InitrdLoader,file={}",
-                    initrd.display()
-                ));
+                cmd.arg("-initrd").arg(initrd);
             }
             run_allow_timeout(&mut cmd)?;
         },
