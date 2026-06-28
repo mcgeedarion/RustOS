@@ -10,9 +10,9 @@
 //! SMP load tests are annotated but gated behind a separate feature
 //! flag (`smp_tests`) so they only run on multi-CPU QEMU instances.
 
+use crate::kmtest::{register, KmTestResult};
 use crate::proc::futex::sys_futex;
 use crate::sync::{mutex::Mutex, rwlock::RwLock, semaphore::Semaphore, spinlock::SpinLock};
-use kmtest::{register, KmTestResult};
 
 const FUTEX_WAIT: u32 = 0;
 const FUTEX_WAKE: u32 = 1;
