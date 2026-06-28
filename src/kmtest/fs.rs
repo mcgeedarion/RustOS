@@ -8,6 +8,7 @@
 //!   open O_CREAT | O_EXCL on existing file returns EEXIST
 //!   stat reflects correct size after write
 //!   lseek positions correctly; read at offset returns expected data
+//!   stdio access modes reject read(stdout) and write(stdin)
 
 use crate::fs::{
     io_syscalls::{sys_close, sys_open, sys_read, sys_write},
@@ -213,6 +214,27 @@ fn fs_lseek_append_read() -> KmTestResult {
     Ok(())
 }
 
+fn fs_stdio_access_modes() -> KmTestResult {
+    let data = b"x";
+    let w = sys_write(0, data.as_ptr() as usize, data.len());
+    if w != -9 {
+        return Err("write(stdin) did not return EBADF");
+    }
+
+    let mut buf = [0u8; 1];
+    let r = sys_read(1, buf.as_mut_ptr() as usize, buf.len());
+    if r != -9 {
+        return Err("read(stdout) did not return EBADF");
+    }
+
+    let r = sys_read(2, buf.as_mut_ptr() as usize, buf.len());
+    if r != -9 {
+        return Err("read(stderr) did not return EBADF");
+    }
+
+    Ok(())
+}
+
 pub fn register() {
     register!("fs_write_read_roundtrip", fs_write_read_roundtrip);
     register!("fs_excl_existing", fs_excl_existing);
@@ -220,4 +242,5 @@ pub fn register() {
     register!("fs_unlink_removes", fs_unlink_removes);
     register!("fs_stat_size", fs_stat_size);
     register!("fs_lseek_append_read", fs_lseek_append_read);
+    register!("fs_stdio_access_modes", fs_stdio_access_modes);
 }
