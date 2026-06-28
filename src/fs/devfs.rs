@@ -20,6 +20,7 @@
 #![allow(dead_code)]
 
 use crate::fs::vfs_ops::FileOps;
+#[cfg(feature = "input_events")]
 use crate::input::{device_count, EventNode};
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
@@ -102,14 +103,27 @@ fn alloc_synth_fd(kind: SyntheticDev) -> usize {
 
 /// Initialise the devfs layer.
 pub fn init() {
-    let count = device_count();
-    for minor in 0..count {
-        let node = Arc::new(EventNode::new(minor)) as Arc<dyn FileOps + Send + Sync>;
-        register_char_device(INPUT_MAJOR, minor, node);
-        log::info!("devfs: registered /dev/input/event{}", minor);
-    }
+    #[cfg(feature = "input_events")]
+    {
+        let count = device_count();
+        for minor in 0..count {
+            let node = Arc::new(EventNode::new(minor)) as Arc<dyn FileOps + Send + Sync>;
+            register_char_device(INPUT_MAJOR, minor, node);
+            log::info!("devfs: registered /dev/input/event{}", minor);
+        }
 
-    crate::fs::vfs::ensure_dir("/dev/input");
+        crate::fs::vfs::ensure_dir("/dev/input");
+    }
+}
+
+/// Open the built-in minimal device nodes that are required before the full
+/// devfs/VFS stack is complete.
+pub fn try_open(path: &str, _flags: u32) -> Option<usize> {
+    match path {
+        "/dev/null" | "dev/null" => Some(alloc_synth_fd(SyntheticDev::Null)),
+        "/dev/zero" | "dev/zero" => Some(alloc_synth_fd(SyntheticDev::Zero)),
+        _ => None,
+    }
 }
 
 /// Open the built-in minimal device nodes that are required before the full
