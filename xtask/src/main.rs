@@ -344,6 +344,22 @@ fn kernel_cargo_command(root: &Path, opts: &BuildOpts, subcommand: &str) -> Resu
         .arg(subcommand)
         .arg("--target")
         .arg(target_json(root, opts.arch, opts.boot));
+    if opts.initrd {
+        let initrd = initrd_path(root);
+        cmd.env("RUSTOS_INITRAMFS", &initrd);
+        if let Ok(meta) = fs::metadata(&initrd) {
+            let modified = meta
+                .modified()
+                .ok()
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0);
+            cmd.env(
+                "RUSTOS_INITRAMFS_FINGERPRINT",
+                format!("{}:{modified}", meta.len()),
+            );
+        }
+    }
     add_build_std_flags(&mut cmd);
 
     match opts.profile {

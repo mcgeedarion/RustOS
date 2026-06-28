@@ -40,6 +40,11 @@ pub mod console;
 /// Early-boot / init subsystem — BootInfo, initramfs, loader, schemes.
 pub mod init;
 
+/// Optional initramfs bytes embedded by `xtask --initrd` builds.
+pub mod embedded_initramfs {
+    include!(concat!(env!("OUT_DIR"), "/initramfs_embed.rs"));
+}
+
 /// Compatibility re-export: `crate::initramfs::…` resolves to
 /// `crate::init::initramfs::…`. Kept so any call sites outside the two
 /// `uefi_entry.rs` files that haven't been updated to the `init::initramfs`
