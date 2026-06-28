@@ -29,6 +29,7 @@
 use anyhow::{anyhow, bail, Context, Result};
 use std::{
     env, fs,
+    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::{exit, Command},
 };
@@ -232,6 +233,43 @@ fn require_tool(names: &[&str], install_hint: &str) {
     }
 }
 
+fn has_feature(opts: &BuildOpts, feature: &str) -> bool {
+    opts.features
+        .as_deref()
+        .map(|features| {
+            features
+                .split(',')
+                .map(str::trim)
+                .any(|candidate| candidate == feature)
+        })
+        .unwrap_or(false)
+}
+
+fn initrd_path(root: &Path) -> PathBuf {
+    root.join("initramfs.cpio")
+}
+
+fn ensure_initrd(root: &Path, opts: &BuildOpts) -> Result<Option<PathBuf>> {
+    if !opts.initrd {
+        return Ok(None);
+    }
+
+    if has_feature(opts, "userspace_boot") {
+        build_init(root, opts.arch)?;
+    }
+
+    let initrd = initrd_path(root);
+    if !initrd.exists() {
+        bail!(
+            "initrd requested but {} does not exist; run `cargo xtask build-init --arch {}`",
+            initrd.display(),
+            arch_str(opts.arch)
+        );
+    }
+
+    Ok(Some(initrd))
+}
+
 fn parse_build_args(args: &[String]) -> BuildOpts {
     let mut opts = BuildOpts::default();
     let mut i = 0;
@@ -306,6 +344,22 @@ fn kernel_cargo_command(root: &Path, opts: &BuildOpts, subcommand: &str) -> Resu
         .arg(subcommand)
         .arg("--target")
         .arg(target_json(root, opts.arch, opts.boot));
+    if opts.initrd {
+        let initrd = initrd_path(root);
+        cmd.env("RUSTOS_INITRAMFS", &initrd);
+        if let Ok(meta) = fs::metadata(&initrd) {
+            let modified = meta
+                .modified()
+                .ok()
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0);
+            cmd.env(
+                "RUSTOS_INITRAMFS_FINGERPRINT",
+                format!("{}:{modified}", meta.len()),
+            );
+        }
+    }
     add_build_std_flags(&mut cmd);
 
     match opts.profile {
@@ -454,19 +508,6 @@ fn validate_status_doc(root: &Path) -> Result<()> {
             "aarch64",
         ],
     )
-}
-
-fn ensure_musl_toolchain(arch: Arch) {
-    match arch {
-        Arch::AArch64 => require_tool(
-            &["aarch64-linux-musl-gcc", "aarch64-unknown-linux-musl-gcc"],
-            "install an aarch64 musl cross compiler",
-        ),
-        Arch::X86_64 => require_tool(
-            &["musl-gcc", "x86_64-linux-musl-gcc"],
-            "apt install musl-tools  OR  install x86_64-linux-musl-gcc",
-        ),
-    }
 }
 
 fn stage_esp(root: &Path, opts: &BuildOpts) -> Result<PathBuf> {
@@ -750,6 +791,7 @@ fn launch_qemu_x86_64(
     _root: &Path,
     img: &Path,
     ovmf: &Path,
+    initrd: Option<&Path>,
     debug_port: Option<u16>,
 ) -> Result<()> {
     require_tool(&["qemu-system-x86_64"], "apt install qemu-system-x86");
@@ -774,6 +816,13 @@ fn launch_qemu_x86_64(
         "-no-shutdown",
     ]);
 
+    if let Some(initrd) = initrd {
+        cmd.arg("-fw_cfg").arg(format!(
+            "name=opt/org.tianocore/InitrdLoader,file={}",
+            initrd.display()
+        ));
+    }
+
     if let Some(port) = debug_port {
         cmd.args(["-s", "-S", "-gdb", &format!("tcp::{port}")]);
     }
@@ -781,7 +830,12 @@ fn launch_qemu_x86_64(
     run(&mut cmd)
 }
 
-fn launch_qemu_aarch64(_root: &Path, img: &Path, debug_port: Option<u16>) -> Result<()> {
+fn launch_qemu_aarch64(
+    _root: &Path,
+    img: &Path,
+    initrd: Option<&Path>,
+    debug_port: Option<u16>,
+) -> Result<()> {
     require_tool(&["qemu-system-aarch64"], "apt install qemu-system-arm");
 
     // Locate AArch64 UEFI firmware
@@ -825,6 +879,13 @@ fn launch_qemu_aarch64(_root: &Path, img: &Path, debug_port: Option<u16>) -> Res
         "-no-shutdown",
     ]);
 
+    if let Some(initrd) = initrd {
+        cmd.arg("-fw_cfg").arg(format!(
+            "name=opt/org.tianocore/InitrdLoader,file={}",
+            initrd.display()
+        ));
+    }
+
     if let Some(port) = debug_port {
         cmd.args(["-s", "-S", "-gdb", &format!("tcp::{port}")]);
     }
@@ -837,6 +898,7 @@ fn smoke_marker_regex() -> &'static str {
 }
 
 fn run_smoke(root: &Path, opts: &BuildOpts) -> Result<()> {
+    let initrd = ensure_initrd(root, opts)?;
     build_kernel(root, opts)?;
     let esp = stage_esp(root, opts)?;
     let img = build_fat_image(root, &esp, opts.arch)?;
@@ -868,6 +930,12 @@ fn run_smoke(root: &Path, opts: &BuildOpts) -> Result<()> {
                 "-no-reboot",
                 "-no-shutdown",
             ]);
+            if let Some(initrd) = initrd.as_deref() {
+                cmd.arg("-fw_cfg").arg(format!(
+                    "name=opt/org.tianocore/InitrdLoader,file={}",
+                    initrd.display()
+                ));
+            }
             run_allow_timeout(&mut cmd)?;
         },
         Arch::AArch64 => {
@@ -908,6 +976,12 @@ fn run_smoke(root: &Path, opts: &BuildOpts) -> Result<()> {
                 "-no-reboot",
                 "-no-shutdown",
             ]);
+            if let Some(initrd) = initrd.as_deref() {
+                cmd.arg("-fw_cfg").arg(format!(
+                    "name=opt/org.tianocore/InitrdLoader,file={}",
+                    initrd.display()
+                ));
+            }
             run_allow_timeout(&mut cmd)?;
         },
     }
@@ -943,11 +1017,11 @@ fn run_allow_timeout(cmd: &mut Command) -> Result<()> {
 
 fn build_init(root: &Path, arch: Arch) -> Result<()> {
     let target = match arch {
-        Arch::X86_64 => "x86_64-unknown-linux-musl",
-        Arch::AArch64 => "aarch64-unknown-linux-musl",
+        Arch::X86_64 => "x86_64-unknown-none",
+        Arch::AArch64 => "aarch64-unknown-none",
     };
 
-    // Ensure the musl target is installed
+    // Ensure the freestanding userspace target is installed.
     run(Command::new("rustup").args(["target", "add", target]))?;
 
     // Build userspace/init
@@ -973,19 +1047,91 @@ fn build_init(root: &Path, arch: Arch) -> Result<()> {
     fs::write(etc.join("os-release"), OS_RELEASE_CONTENT).context("write os-release")?;
 
     // Pack initramfs.cpio
-    require_tool(&["cpio"], "apt install cpio");
     let cpio_out = root.join("initramfs.cpio");
-    let cpio_cmd = format!(
-        "find . | cpio --create --format=newc --quiet > {}",
-        cpio_out.display()
-    );
-    run(Command::new("sh")
-        .current_dir(&initramfs_root)
-        .arg("-c")
-        .arg(&cpio_cmd))?;
+    pack_cpio_newc(&initramfs_root, &cpio_out)?;
 
     log(format!("initramfs packed: {}", cpio_out.display()));
     Ok(())
+}
+
+fn pack_cpio_newc(root: &Path, out: &Path) -> Result<()> {
+    let mut entries = Vec::new();
+    collect_initramfs_entries(root, root, &mut entries)?;
+    entries.sort();
+
+    let mut archive = Vec::new();
+    for rel in entries {
+        let path = root.join(&rel);
+        let meta = fs::metadata(&path).with_context(|| format!("metadata {}", path.display()))?;
+        let name = rel.to_string_lossy().replace('\\', "/");
+        let mode = meta.permissions().mode();
+        if meta.is_dir() {
+            write_cpio_entry(&mut archive, &name, mode | 0o040000, &[])?;
+        } else if meta.is_file() {
+            let data = fs::read(&path).with_context(|| format!("read {}", path.display()))?;
+            write_cpio_entry(&mut archive, &name, mode | 0o100000, &data)?;
+        }
+    }
+    write_cpio_entry(&mut archive, "TRAILER!!!", 0, &[])?;
+    fs::write(out, archive).with_context(|| format!("write {}", out.display()))?;
+    Ok(())
+}
+
+fn collect_initramfs_entries(root: &Path, dir: &Path, entries: &mut Vec<PathBuf>) -> Result<()> {
+    for entry in fs::read_dir(dir).with_context(|| format!("read dir {}", dir.display()))? {
+        let entry = entry.with_context(|| format!("read dir entry {}", dir.display()))?;
+        let path = entry.path();
+        let rel = path
+            .strip_prefix(root)
+            .with_context(|| format!("strip prefix {}", path.display()))?
+            .to_path_buf();
+        entries.push(rel.clone());
+        if entry
+            .file_type()
+            .with_context(|| format!("file type {}", path.display()))?
+            .is_dir()
+        {
+            collect_initramfs_entries(root, &path, entries)?;
+        }
+    }
+    Ok(())
+}
+
+fn write_cpio_entry(archive: &mut Vec<u8>, name: &str, mode: u32, data: &[u8]) -> Result<()> {
+    let namesize = name
+        .len()
+        .checked_add(1)
+        .ok_or_else(|| anyhow!("cpio name too long"))?;
+    let filesize = data.len();
+    let header = format!(
+        "070701{ino:08x}{mode:08x}{uid:08x}{gid:08x}{nlink:08x}{mtime:08x}{filesize:08x}{devmajor:08x}{devminor:08x}{rdevmajor:08x}{rdevminor:08x}{namesize:08x}{check:08x}",
+        ino = 0u32,
+        mode = mode,
+        uid = 0u32,
+        gid = 0u32,
+        nlink = 1u32,
+        mtime = 0u32,
+        filesize = filesize,
+        devmajor = 0u32,
+        devminor = 0u32,
+        rdevmajor = 0u32,
+        rdevminor = 0u32,
+        namesize = namesize,
+        check = 0u32,
+    );
+    archive.extend_from_slice(header.as_bytes());
+    archive.extend_from_slice(name.as_bytes());
+    archive.push(0);
+    pad_to_4(archive);
+    archive.extend_from_slice(data);
+    pad_to_4(archive);
+    Ok(())
+}
+
+fn pad_to_4(bytes: &mut Vec<u8>) {
+    while bytes.len() % 4 != 0 {
+        bytes.push(0);
+    }
 }
 
 // ── lint-modules subcommand ────────────────────────────────────────────────
@@ -1081,16 +1227,17 @@ fn main() {
         "run" => {
             let opts = parse_build_args(&args);
             if let Err(e) = (|| -> Result<()> {
+                let initrd = ensure_initrd(&root, &opts)?;
                 build_kernel(&root, &opts)?;
                 let esp = stage_esp(&root, &opts)?;
                 let img = build_fat_image(&root, &esp, opts.arch)?;
                 match opts.arch {
                     Arch::X86_64 => {
                         let ovmf = ensure_ovmf(&root)?;
-                        launch_qemu_x86_64(&root, &img, &ovmf, None)?;
+                        launch_qemu_x86_64(&root, &img, &ovmf, initrd.as_deref(), None)?;
                     },
                     Arch::AArch64 => {
-                        launch_qemu_aarch64(&root, &img, None)?;
+                        launch_qemu_aarch64(&root, &img, initrd.as_deref(), None)?;
                     },
                 }
                 Ok(())
@@ -1111,16 +1258,17 @@ fn main() {
         "debug" => {
             let opts = parse_build_args(&args);
             if let Err(e) = (|| -> Result<()> {
+                let initrd = ensure_initrd(&root, &opts)?;
                 build_kernel(&root, &opts)?;
                 let esp = stage_esp(&root, &opts)?;
                 let img = build_fat_image(&root, &esp, opts.arch)?;
                 match opts.arch {
                     Arch::X86_64 => {
                         let ovmf = ensure_ovmf(&root)?;
-                        launch_qemu_x86_64(&root, &img, &ovmf, Some(1234))?;
+                        launch_qemu_x86_64(&root, &img, &ovmf, initrd.as_deref(), Some(1234))?;
                     },
                     Arch::AArch64 => {
-                        launch_qemu_aarch64(&root, &img, Some(1234))?;
+                        launch_qemu_aarch64(&root, &img, initrd.as_deref(), Some(1234))?;
                     },
                 }
                 Ok(())
@@ -1144,8 +1292,6 @@ fn main() {
                     },
                 })
                 .unwrap_or(Arch::X86_64);
-
-            ensure_musl_toolchain(arch);
 
             if let Err(e) = build_init(&root, arch) {
                 eprintln!("[xtask] build-init failed: {e:#}");
@@ -1208,7 +1354,7 @@ SUBCOMMANDS:
   run      [--arch <arch>] [--boot <boot>] [--debug] [--initrd]
              Build, image, and launch under QEMU.
 
-  smoke   [--arch <arch>] [--boot <boot>] [--profile <p>] [--features <f>]
+  smoke   [--arch <arch>] [--boot <boot>] [--profile <p>] [--features <f>] [--initrd]
              Build, boot under QEMU with serial captured, and assert a boot marker.
 
   debug    [--arch <arch>] [--boot <boot>] [--debug]
