@@ -28,8 +28,8 @@ use crate::uaccess::copy_to_user;
 // ---------------------------------------------------------------------------
 
 /// Accepted inside the `options` bitfield of waitpid / wait4.
-pub const WNOHANG: i32    = 1;
-pub const WUNTRACED: i32  = 2;
+pub const WNOHANG: i32 = 1;
+pub const WUNTRACED: i32 = 2;
 pub const WCONTINUED: i32 = 8;
 
 // ---------------------------------------------------------------------------
@@ -58,8 +58,8 @@ pub fn encode_exit(code: i32) -> i32 {
 
 /// Wake the parent so it can call waitpid() and collect the zombie.
 pub fn notify_exit(child_pid: usize) {
-    let (ppid, exit_code) = scheduler::with_proc(child_pid, |p| (p.ppid, p.exit_code))
-        .unwrap_or((0, 0));
+    let (ppid, exit_code) =
+        scheduler::with_proc(child_pid, |p| (p.ppid, p.exit_code)).unwrap_or((0, 0));
 
     if ppid == 0 {
         return;
@@ -85,12 +85,7 @@ pub fn sys_waitpid(target_pid: isize, wstatus_va: usize, options: i32) -> isize 
     sys_wait4(target_pid, wstatus_va, options, 0 /* no rusage */)
 }
 
-pub fn sys_wait4(
-    target_pid: isize,
-    wstatus_va: usize,
-    options: i32,
-    rusage_va: usize,
-) -> isize {
+pub fn sys_wait4(target_pid: isize, wstatus_va: usize, options: i32, rusage_va: usize) -> isize {
     let caller = scheduler::current_pid();
     let caller_pgid = scheduler::with_proc(caller, |p| p.pgid).unwrap_or(caller);
 
@@ -120,23 +115,30 @@ pub fn sys_wait4(
 
         // Look for a zombie among eligible children.
         let zombie = eligible.iter().find(|&&cpid| {
-            scheduler::with_proc(cpid, |p| p.load_state() == State::Zombie)
-                .unwrap_or(false)
+            scheduler::with_proc(cpid, |p| p.load_state() == State::Zombie).unwrap_or(false)
         });
 
         if let Some(&cpid) = zombie {
             let exit_code = scheduler::with_proc(cpid, |p| p.exit_code).unwrap_or(0);
 
-            // Write wstatus if user pointer is non-null.
+            // Write wstatus if user pointer is non-null.  Do this before
+            // reaping the zombie so an EFAULT leaves the child waitable for a
+            // retry with a valid status pointer.
             if wstatus_va != 0 {
-                let _ = copy_to_user(wstatus_va, &(exit_code as u32).to_ne_bytes());
+                if copy_to_user(wstatus_va, &(exit_code as u32).to_ne_bytes()).is_err() {
+                    return -14; // EFAULT
+                }
             }
 
-            // Write rusage if requested.
+            // Write rusage if requested.  As with wstatus, preserve the zombie
+            // if the user buffer is invalid so callers do not lose child state
+            // because of a bad pointer.
             if rusage_va != 0 {
                 // Minimal rusage: zeroed struct.
                 let zeroes = [0u8; 144]; // sizeof(struct rusage) on x86_64
-                let _ = copy_to_user(rusage_va, &zeroes);
+                if copy_to_user(rusage_va, &zeroes).is_err() {
+                    return -14; // EFAULT
+                }
             }
 
             // Remove from the process table.
