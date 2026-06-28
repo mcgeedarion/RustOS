@@ -23,11 +23,14 @@ const CRT_COMPILE_FLAGS: &[&str] = &[
 fn main() {
     let out = PathBuf::from(std::env::var("OUT_DIR").unwrap());
     let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
-    let target_os   = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let boot_minimal = std::env::var("CARGO_FEATURE_BOOT_MINIMAL").is_ok();
 
     println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_ARCH");
     println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_OS");
+    println!("cargo:rerun-if-env-changed=RUSTOS_INITRAMFS");
+    println!("cargo:rerun-if-env-changed=RUSTOS_INITRAMFS_FINGERPRINT");
+    write_initramfs_embed(&out);
 
     // ----------------------------------------------------------------
     // Bare-metal ELF targets only (x86_64-kernel.json, aarch64-kernel.json)
@@ -37,12 +40,12 @@ fn main() {
     // ----------------------------------------------------------------
     if target_os != "uefi" {
         let script = match target_arch.as_str() {
-            "x86_64"  => "linker/x86_64.ld",
+            "x86_64" => "linker/x86_64.ld",
             "aarch64" => "linker/aarch64.ld",
             other => {
                 println!("cargo:warning=build.rs: no linker script for arch '{other}'");
                 ""
-            }
+            },
         };
         if !script.is_empty() {
             println!("cargo:rerun-if-changed={script}");
@@ -59,6 +62,19 @@ fn main() {
         println!("cargo:rustc-flags=-Z instrument-functions");
         println!("cargo:rerun-if-env-changed=CARGO_FEATURE_TRACE");
     }
+}
+
+fn write_initramfs_embed(out: &PathBuf) {
+    let dest = out.join("initramfs_embed.rs");
+    let content = match std::env::var("RUSTOS_INITRAMFS") {
+        Ok(path) if !path.is_empty() && std::path::Path::new(&path).exists() => {
+            println!("cargo:rerun-if-changed={path}");
+            let escaped = path.replace('\\', "\\\\").replace('"', "\\\"");
+            format!("pub static INITRAMFS: &[u8] = include_bytes!(\"{escaped}\");\n")
+        },
+        _ => "pub static INITRAMFS: &[u8] = &[];\n".to_string(),
+    };
+    std::fs::write(dest, content).expect("write initramfs_embed.rs");
 }
 
 /// Compile C runtime stubs into a static archive `librustos_crt.a`.
