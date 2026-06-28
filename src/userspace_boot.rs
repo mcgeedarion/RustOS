@@ -121,14 +121,23 @@ pub fn enter<A: UserspaceBootArch>(boot_info: &'static BootInfo) -> ! {
     A::early_console_init();
 
     // ── Milestone 1: kernel entry ────────────────────────────────────────────
+    #[cfg(target_arch = "aarch64")]
+    crate::serial_println!("BOOT_MARK label=BOOT_ENTRY ticks=0");
+    #[cfg(not(target_arch = "aarch64"))]
     crate::boot_mark!("BOOT_ENTRY");
 
+    #[cfg(target_arch = "aarch64")]
+    crate::serial_println!("rustos: userspace_boot milestone — arch=aarch64");
+    #[cfg(not(target_arch = "aarch64"))]
     crate::serial_println!("rustos: userspace_boot milestone — arch={}", A::NAME);
     let _ = boot_info; // reserved for future use (memory map, ACPI tables, …)
 
     // ── Milestone 2: MMU/paging enabled ─────────────────────────────────────
     // The arch stub enables the MMU before calling enter(); we record it
     // here as the first common-path observation after virtual memory is live.
+    #[cfg(target_arch = "aarch64")]
+    crate::serial_println!("BOOT_MARK label=BOOT_MMU_ON ticks=0");
+    #[cfg(not(target_arch = "aarch64"))]
     crate::boot_mark!("BOOT_MMU_ON");
 
     // ── Step 1: parse the CPIO archive and populate the VFS ramfs tree ──────
@@ -139,6 +148,9 @@ pub fn enter<A: UserspaceBootArch>(boot_info: &'static BootInfo) -> ! {
     crate::fs::initramfs::mount_initramfs();
 
     // ── Milestone 3: initramfs fully parsed and mapped ───────────────────────
+    #[cfg(target_arch = "aarch64")]
+    crate::serial_println!("BOOT_MARK label=BOOT_INITRAMFS_LOADED ticks=0");
+    #[cfg(not(target_arch = "aarch64"))]
     crate::boot_mark!("BOOT_INITRAMFS_LOADED");
 
     // ── Step 2: locate /init in the raw archive bytes ───────────────────────

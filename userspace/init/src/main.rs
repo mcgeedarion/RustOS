@@ -21,75 +21,145 @@
 
 use core::arch::{asm, naked_asm};
 
-// ── Linux x86-64 syscall numbers ──────────────────────────────────────────
+// ── Linux syscall numbers ─────────────────────────────────────────────────
+#[cfg(target_arch = "x86_64")]
 const SYS_READ: usize = 0;
+#[cfg(target_arch = "x86_64")]
 const SYS_WRITE: usize = 1;
+#[cfg(target_arch = "x86_64")]
 const SYS_BRK: usize = 12;
+#[cfg(target_arch = "x86_64")]
 const SYS_EXIT_GROUP: usize = 231;
+
+#[cfg(target_arch = "aarch64")]
+const SYS_READ: usize = 63;
+#[cfg(target_arch = "aarch64")]
+const SYS_WRITE: usize = 64;
+#[cfg(target_arch = "aarch64")]
+const SYS_BRK: usize = 214;
+#[cfg(target_arch = "aarch64")]
+const SYS_EXIT_GROUP: usize = 94;
 
 // ── Raw syscall wrappers ───────────────────────────────────────────────────
 
 /// `write(fd, buf, count)` → bytes written (or negative errno)
 #[inline(always)]
 unsafe fn sys_write(fd: usize, buf: *const u8, count: usize) -> isize {
-    let ret: isize;
-    asm!(
-        "syscall",
-        in("rax") SYS_WRITE,
-        in("rdi") fd,
-        in("rsi") buf,
-        in("rdx") count,
-        out("rcx") _,
-        out("r11") _,
-        lateout("rax") ret,
-        options(nostack),
-    );
-    ret
+    #[cfg(target_arch = "x86_64")]
+    {
+        let ret: isize;
+        asm!(
+            "syscall",
+            in("rax") SYS_WRITE,
+            in("rdi") fd,
+            in("rsi") buf,
+            in("rdx") count,
+            out("rcx") _,
+            out("r11") _,
+            lateout("rax") ret,
+            options(nostack),
+        );
+        ret
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        let ret: isize;
+        asm!(
+            "svc #0",
+            in("x8") SYS_WRITE,
+            in("x0") fd,
+            in("x1") buf,
+            in("x2") count,
+            lateout("x0") ret,
+            options(nostack),
+        );
+        ret
+    }
 }
 
 /// `read(fd, buf, count)` → bytes read (or negative errno)
 #[inline(always)]
 #[allow(dead_code)]
 unsafe fn sys_read(fd: usize, buf: *mut u8, count: usize) -> isize {
-    let ret: isize;
-    asm!(
-        "syscall",
-        in("rax") SYS_READ,
-        in("rdi") fd,
-        in("rsi") buf,
-        in("rdx") count,
-        out("rcx") _,
-        out("r11") _,
-        lateout("rax") ret,
-        options(nostack),
-    );
-    ret
+    #[cfg(target_arch = "x86_64")]
+    {
+        let ret: isize;
+        asm!(
+            "syscall",
+            in("rax") SYS_READ,
+            in("rdi") fd,
+            in("rsi") buf,
+            in("rdx") count,
+            out("rcx") _,
+            out("r11") _,
+            lateout("rax") ret,
+            options(nostack),
+        );
+        ret
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        let ret: isize;
+        asm!(
+            "svc #0",
+            in("x8") SYS_READ,
+            in("x0") fd,
+            in("x1") buf,
+            in("x2") count,
+            lateout("x0") ret,
+            options(nostack),
+        );
+        ret
+    }
 }
 
 /// `brk(addr)` — returns current program break; brk(0) is a harmless probe.
 #[inline(always)]
 unsafe fn sys_brk(addr: usize) -> usize {
-    let ret: usize;
-    asm!(
-        "syscall",
-        in("rax") SYS_BRK,
-        in("rdi") addr,
-        out("rcx") _,
-        out("r11") _,
-        lateout("rax") ret,
-        options(nostack),
-    );
-    ret
+    #[cfg(target_arch = "x86_64")]
+    {
+        let ret: usize;
+        asm!(
+            "syscall",
+            in("rax") SYS_BRK,
+            in("rdi") addr,
+            out("rcx") _,
+            out("r11") _,
+            lateout("rax") ret,
+            options(nostack),
+        );
+        ret
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        let ret: usize;
+        asm!(
+            "svc #0",
+            in("x8") SYS_BRK,
+            in("x0") addr,
+            lateout("x0") ret,
+            options(nostack),
+        );
+        ret
+    }
 }
 
 /// `exit_group(status)` — terminates every thread in the thread group.
 /// Never returns; used as the clean PID-1 exit path.
 #[inline(always)]
 unsafe fn sys_exit_group(status: usize) -> ! {
+    #[cfg(target_arch = "x86_64")]
     asm!(
         "syscall",
         in("rax") SYS_EXIT_GROUP,
         in("rdi") status,
+        options(noreturn),
+    );
+    #[cfg(target_arch = "aarch64")]
+    asm!(
+        "svc #0",
+        in("x8") SYS_EXIT_GROUP,
+        in("x0") status,
         options(noreturn),
     );
 }
