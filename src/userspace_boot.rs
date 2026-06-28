@@ -166,35 +166,22 @@ pub fn enter<A: UserspaceBootArch>(boot_info: &'static BootInfo) -> ! {
     crate::serial_println!("initramfs: looking for /init");
     let init_elf: &[u8] = match ram.file("/init") {
         Some(bytes) => {
-            #[cfg(target_arch = "aarch64")]
-            crate::serial_println!("initramfs: found /init");
-            #[cfg(not(target_arch = "aarch64"))]
             crate::serial_println!("initramfs: found /init ({} bytes)", bytes.len());
             bytes
         },
         None => {
-            #[cfg(target_arch = "aarch64")]
-            {
-                crate::serial_println!("kernel: /init not found in initramfs");
-                loop {
-                    A::idle_once();
-                }
-            }
-            #[cfg(not(target_arch = "aarch64"))]
-            {
-                // Acceptance criterion: descriptive panic, not a silent hang.
-                panic!(
-                    "kernel: /init not found in the initramfs.\n\
-                     \n\
-                     To fix:\n\
-                       1. Rebuild the initramfs:  cargo xtask build-init\n\
-                       2. Verify that userspace/init was compiled successfully.\n\
-                       3. Ensure the CPIO archive contains `./init` at the root\n\
-                          with execute permission (mode 0755).\n\
-                     \n\
-                     Boot cannot continue without PID 1."
-                )
-            }
+            // Acceptance criterion: descriptive panic, not a silent hang.
+            panic!(
+                "kernel: /init not found in the initramfs.\n\
+                 \n\
+                 To fix:\n\
+                   1. Rebuild the initramfs:  cargo xtask build-init\n\
+                   2. Verify that userspace/init was compiled successfully.\n\
+                   3. Ensure the CPIO archive contains `./init` at the root\n\
+                      with execute permission (mode 0755).\n\
+                 \n\
+                 Boot cannot continue without PID 1."
+            )
         },
     };
 

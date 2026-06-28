@@ -452,21 +452,21 @@ unsafe fn load_initrd_via_loadfile2(bs: &EfiBootServices) -> Option<BootRange> {
 }
 
 #[cfg(not(feature = "boot_minimal"))]
-unsafe fn load_embedded_initramfs(_bs: &EfiBootServices) -> Option<BootRange> {
+unsafe fn load_embedded_initramfs(bs: &EfiBootServices) -> Option<BootRange> {
     let bytes = crate::embedded_initramfs::INITRAMFS;
     if bytes.is_empty() {
         return None;
     }
 
-    // Keep the userspace_boot initramfs in the kernel image on AArch64.
-    // Pool allocations made before ExitBootServices are not guaranteed to be
-    // covered by the narrow userspace_boot mappings, and dereferencing that
-    // pool-backed CPIO slice faulted before /init spawn. The embedded bytes
-    // live in kernel .rodata, which remains executable/readable after the EFI
-    // handoff and is safe for the early zero-copy CPIO parser.
-    let start = bytes.as_ptr() as usize;
-    crate::init::initramfs::set_initramfs_range(start, bytes.len());
-    Some(BootRange::new(start, bytes.len()))
+    let mut initrd_buf: *mut u8 = core::ptr::null_mut();
+    let alloc_status = (bs.allocate_pool)(EFI_LOADER_DATA, bytes.len(), &mut initrd_buf);
+    if alloc_status != EFI_SUCCESS || initrd_buf.is_null() {
+        return None;
+    }
+
+    core::ptr::copy_nonoverlapping(bytes.as_ptr(), initrd_buf, bytes.len());
+    crate::init::initramfs::set_initramfs_range(initrd_buf as usize, bytes.len());
+    Some(BootRange::new(initrd_buf as usize, bytes.len()))
 }
 
 unsafe fn efi_print(con_out: *mut EfiSimpleTextOutput, s: &str) {
