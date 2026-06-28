@@ -255,7 +255,6 @@ fn init_main() -> ! {
 #[no_mangle]
 #[unsafe(naked)]
 unsafe extern "C" fn _start() -> ! {
-    #[cfg(target_arch = "x86_64")]
     naked_asm!(
         // Align the stack to 16 bytes as required by the SysV ABI before
         // calling into Rust code (CALL pushes 8 bytes, so AND -16 aligns).
@@ -268,16 +267,6 @@ unsafe extern "C" fn _start() -> ! {
         "mov rdi, 1",
         "mov rax, 231",   // SYS_exit_group
         "syscall",
-        entry = sym init_main,
-    );
-    #[cfg(target_arch = "aarch64")]
-    naked_asm!(
-        "mov x29, xzr",
-        "bl {entry}",
-        "mov x0, #1",
-        "mov x8, #94",
-        "svc #0",
-        "b .",
         entry = sym init_main,
     );
 }
