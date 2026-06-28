@@ -158,8 +158,12 @@ pub fn enter<A: UserspaceBootArch>(boot_info: &'static BootInfo) -> ! {
     // We call `load()` + `file()` directly on the raw CPIO bytes rather than
     // going through the VFS.  This avoids a second allocation round-trip and
     // means we don't depend on the VFS being fully operational at this point.
+    #[cfg(target_arch = "aarch64")]
+    crate::serial_println!("initramfs: loading raw cpio");
     let ram = crate::init::initramfs::load();
 
+    #[cfg(target_arch = "aarch64")]
+    crate::serial_println!("initramfs: looking for /init");
     let init_elf: &[u8] = match ram.file("/init") {
         Some(bytes) => {
             crate::serial_println!("initramfs: found /init ({} bytes)", bytes.len());
@@ -193,6 +197,14 @@ pub fn enter<A: UserspaceBootArch>(boot_info: &'static BootInfo) -> ! {
         crate::proc::exec::spawn_user_process_from_bytes("/init", init_elf, &["/init"], &[]);
 
     if !spawned {
+        #[cfg(target_arch = "aarch64")]
+        {
+            crate::serial_println!("kernel: failed to exec /init");
+            loop {
+                A::idle_once();
+            }
+        }
+        #[cfg(not(target_arch = "aarch64"))]
         panic!(
             "kernel: failed to exec /init — ELF load error.\n\
              \n\
