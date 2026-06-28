@@ -13,8 +13,8 @@ use crate::fs::{
 };
 use crate::io_uring::syscall::{sys_io_uring_enter, sys_io_uring_register, sys_io_uring_setup};
 use crate::ipc::msg::{msgget, msgrcv, msgsnd};
+use crate::kmtest::{register, KmTestResult};
 use crate::net::socket::{sys_recv, sys_send, sys_socket, sys_socketpair};
-use kmtest::{register, KmTestResult};
 
 const AF_UNIX: i32 = 1;
 const SOCK_STREAM: i32 = 1;

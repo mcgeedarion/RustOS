@@ -15,7 +15,7 @@ use crate::fs::{
     stat_syscalls::sys_lseek,
     stat_syscalls::{sys_rename, sys_stat, sys_unlink},
 };
-use kmtest::{register, KmTestResult};
+use crate::kmtest::{register, KmTestResult};
 
 // O_* and S_* flag literals (matching Linux ABI).
 const O_RDONLY: u32 = 0;

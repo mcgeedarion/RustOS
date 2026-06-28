@@ -7,6 +7,7 @@
 //!   process teardown: FDs closed, VMAs freed, zombie reaped
 //!   getpid / getppid consistency across fork
 
+use crate::kmtest::{register, KmTestResult};
 use crate::proc::{
     exec::sys_execve,
     exit::sys_exit,
@@ -16,7 +17,6 @@ use crate::proc::{
     wait::sys_waitpid,
 };
 use crate::syscall::nr::{SYS_GETPID, SYS_GETPPID, SYS_KILL};
-use kmtest::{register, KmTestResult};
 
 const SIGCHLD: u32 = 17;
 const SIGUSR1: u32 = 10;
