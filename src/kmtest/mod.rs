@@ -52,6 +52,7 @@ pub(crate) use register;
 /// Register all suites with the kmtest harness.
 /// Called once from kernel_main when `feature = "kmtest"` is active.
 pub fn init() {
+    reset_registry();
     mm::register();
     proc::register();
     fs::register();
