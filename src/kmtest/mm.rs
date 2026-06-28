@@ -7,8 +7,8 @@
 //!   double-unmap / out-of-range unmap error paths
 //!   OOM behaviour (graceful ENOMEM, no kernel panic)
 
+use crate::kmtest::{register, KmTestResult};
 use crate::mm::mmap::{sys_mmap, sys_mprotect, sys_munmap};
-use kmtest::{register, KmTestResult};
 
 const PROT_NONE: u32 = 0x0;
 const PROT_READ: u32 = 0x1;
