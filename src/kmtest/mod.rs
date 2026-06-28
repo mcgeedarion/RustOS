@@ -36,17 +36,9 @@ pub fn register_entry(name: &'static str, run: fn() -> KmTestResult) {
     REGISTRY.lock().push(KmTestEntry { name, run });
 }
 
-pub fn reset_registry() {
-    REGISTRY.lock().clear();
-}
-
 pub fn with_registry<R>(f: impl FnOnce(&[KmTestEntry]) -> R) -> R {
     let registry = REGISTRY.lock();
     f(&registry)
-}
-
-pub fn registry_snapshot() -> Vec<KmTestEntry> {
-    REGISTRY.lock().clone()
 }
 
 macro_rules! register {
