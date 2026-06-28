@@ -3,32 +3,29 @@
 //! Boot sequence
 //! -------------
 //! 1. Arch-specific early console init.
-//! 2. [`crate::fs::initramfs::mount_initramfs`] — parse the CPIO archive and
-//!    populate the initial VFS ramfs tree so that PID 1 and its children can
-//!    call `open(2)` on any file that was packed into the archive.
-//! 3. Locate `/init` in the raw archive bytes via
-//!    [`crate::init::initramfs::load`] + [`InitramfsHandle::file`].  This is a
-//!    zero-copy `&[u8]` slice — no heap allocation.
-//! 4. [`crate::proc::exec::spawn_user_process_from_bytes`] — parse the ELF,
-//!    build the page table, allocate a PCB (PID 1, PPID 0), and enqueue it
-//!    on the run-queue.
-//! 5. The boot CPU enters its idle loop; the scheduler dispatches PID 1 on
-//!    the next tick.
+//! 2. [`crate::fs::initramfs::mount_initramfs`] — parse the CPIO archive and populate the initial
+//!    VFS ramfs tree so that PID 1 and its children can call `open(2)` on any file that was packed
+//!    into the archive.
+//! 3. Locate `/init` in the raw archive bytes via [`crate::init::initramfs::load`] +
+//!    [`InitramfsHandle::file`].  This is a zero-copy `&[u8]` slice — no heap allocation.
+//! 4. [`crate::proc::exec::spawn_user_process_from_bytes`] — parse the ELF, build the page table,
+//!    allocate a PCB (PID 1, PPID 0), and enqueue it on the run-queue.
+//! 5. The boot CPU enters its idle loop; the scheduler dispatches PID 1 on the next tick.
 //!
 //! ## Initramfs format: CPIO newc (SVR4, uncompressed)
 //!
 //! **Why CPIO newc?**
 //!
-//! * It is the Linux kernel's own initramfs wire format; every boot loader
-//!   and QEMU `-initrd` flag already understands it.
-//! * The 110-byte ASCII-hex header is trivially parseable in `no_std` without
-//!   heap allocation — see [`crate::init::initramfs`].
-//! * Sequential layout matches the streaming [`CpioIter`] perfectly; no
-//!   random-access index is required.
+//! * It is the Linux kernel's own initramfs wire format; every boot loader and QEMU `-initrd` flag
+//!   already understands it.
+//! * The 110-byte ASCII-hex header is trivially parseable in `no_std` without heap allocation — see
+//!   [`crate::init::initramfs`].
+//! * Sequential layout matches the streaming [`CpioIter`] perfectly; no random-access index is
+//!   required.
 //!
 //! **Why uncompressed?**
 //!
-//! The kernel does not yet include a decompressor.  `cargo xtask mkinitramfs`
+//! The kernel does not yet include a decompressor.  `cargo xtask build-init`
 //! and `scripts/pack-initramfs.sh` both emit uncompressed archives, and QEMU
 //! passes the raw bytes to `set_initramfs_range()` via `LoadFile2` (x86-64
 //! UEFI) or the FDT `/chosen` node (AArch64).
@@ -75,12 +72,7 @@ unsafe impl GlobalAlloc for EarlyBumpAllocator {
             if next > HEAP_SIZE {
                 return core::ptr::null_mut();
             }
-            match HEAP_NEXT.compare_exchange(
-                current,
-                next,
-                Ordering::SeqCst,
-                Ordering::Relaxed,
-            ) {
+            match HEAP_NEXT.compare_exchange(current, next, Ordering::SeqCst, Ordering::Relaxed) {
                 Ok(_) => {
                     let base = core::ptr::addr_of_mut!(HEAP.0) as *mut u8;
                     return base.add(aligned);
@@ -158,10 +150,7 @@ pub fn enter<A: UserspaceBootArch>(boot_info: &'static BootInfo) -> ! {
 
     let init_elf: &[u8] = match ram.file("/init") {
         Some(bytes) => {
-            crate::serial_println!(
-                "initramfs: found /init ({} bytes)",
-                bytes.len()
-            );
+            crate::serial_println!("initramfs: found /init ({} bytes)", bytes.len());
             bytes
         },
         None => {
@@ -170,7 +159,7 @@ pub fn enter<A: UserspaceBootArch>(boot_info: &'static BootInfo) -> ! {
                 "kernel: /init not found in the initramfs.\n\
                  \n\
                  To fix:\n\
-                   1. Rebuild the initramfs:  cargo xtask mkinitramfs\n\
+                   1. Rebuild the initramfs:  cargo xtask build-init\n\
                    2. Verify that userspace/init was compiled successfully.\n\
                    3. Ensure the CPIO archive contains `./init` at the root\n\
                       with execute permission (mode 0755).\n\
@@ -188,12 +177,8 @@ pub fn enter<A: UserspaceBootArch>(boot_info: &'static BootInfo) -> ! {
     // the thread on the global run-queue.
     crate::serial_println!("userspace: spawning /init as PID 1");
 
-    let spawned = crate::proc::exec::spawn_user_process_from_bytes(
-        "/init",
-        init_elf,
-        &["/init"],
-        &[],
-    );
+    let spawned =
+        crate::proc::exec::spawn_user_process_from_bytes("/init", init_elf, &["/init"], &[]);
 
     if !spawned {
         panic!(
@@ -204,7 +189,7 @@ pub fn enter<A: UserspaceBootArch>(boot_info: &'static BootInfo) -> ! {
                • Target architecture must match the running kernel.\n\
                • /init must have execute permission (mode 0755) in the\n\
                  CPIO archive.\n\
-               • Rebuild with:  cargo xtask mkinitramfs --arch <arch>"
+               • Rebuild with:  cargo xtask build-init --arch <arch>"
         );
     }
 
@@ -217,7 +202,7 @@ pub fn enter<A: UserspaceBootArch>(boot_info: &'static BootInfo) -> ! {
     // closest observable proxy for "execve returned / first userspace tick".
     crate::boot_mark!("BOOT_INIT_EXEC");
 
-    crate::serial_println!("FULL_OS_USERSPACE_OK");
+    crate::serial_println!("userspace: PID 1 accepted; waiting for userspace sentinel");
 
     // ── Step 4: become the idle thread ──────────────────────────────────────
     //

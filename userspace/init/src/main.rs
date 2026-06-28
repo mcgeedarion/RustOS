@@ -19,7 +19,7 @@
 #![no_main]
 #![allow(clippy::missing_safety_doc)]
 
-use core::arch::asm;
+use core::arch::{asm, naked_asm};
 
 // ── Linux x86-64 syscall numbers ──────────────────────────────────────────
 const SYS_READ: usize = 0;
@@ -152,13 +152,17 @@ fn init_main() -> ! {
     write_usize(STDOUT, b"[init] brk(0) -> 0x", brk_addr);
     // A non-zero brk return means the kernel handled the syscall.
     if brk_addr == 0 {
-        write_all(STDERR, b"[init] WARNING: brk(0) returned 0 — heap syscall may be unimplemented\n");
+        write_all(
+            STDERR,
+            b"[init] WARNING: brk(0) returned 0 - heap syscall may be unimplemented\n",
+        );
     }
 
     // ── 3. Smoke marker (scanned by scripts/ci/run_qemu.sh --smoke) ───────
     // The CI harness looks for this exact line on the serial output.
     write_all(STDOUT, b"SMOKE OK: userspace_init\n");
     write_all(STDOUT, b"[init] TEST PASS: userspace_init\n");
+    write_all(STDOUT, b"FULL_OS_USERSPACE_OK\n");
 
     // ── 4. Clean exit ─────────────────────────────────────────────────────
     // Using exit_group (not exit) so the kernel's PID-1 reaper path is
@@ -179,9 +183,9 @@ fn init_main() -> ! {
 /// We ignore all of those for now (init takes no arguments) and simply
 /// call into `init_main()`.
 #[no_mangle]
-#[naked]
+#[unsafe(naked)]
 unsafe extern "C" fn _start() -> ! {
-    asm!(
+    naked_asm!(
         // Align the stack to 16 bytes as required by the SysV ABI before
         // calling into Rust code (CALL pushes 8 bytes, so AND -16 aligns).
         "and rsp, -16",
@@ -194,7 +198,6 @@ unsafe extern "C" fn _start() -> ! {
         "mov rax, 231",   // SYS_exit_group
         "syscall",
         entry = sym init_main,
-        options(noreturn),
     );
 }
 
