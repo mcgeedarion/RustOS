@@ -126,6 +126,16 @@ pub fn try_open(path: &str, _flags: u32) -> Option<usize> {
     }
 }
 
+/// Open the built-in minimal device nodes that are required before the full
+/// devfs/VFS stack is complete.
+pub fn try_open(path: &str, _flags: u32) -> Option<usize> {
+    match path {
+        "/dev/null" | "dev/null" => Some(alloc_synth_fd(SyntheticDev::Null)),
+        "/dev/zero" | "dev/zero" => Some(alloc_synth_fd(SyntheticDev::Zero)),
+        _ => None,
+    }
+}
+
 /// fd -> device lookup used by the syscall dispatch path.
 pub fn get_dev_fd(fd: usize) -> Option<()> {
     if SYNTH_DEV_FDS.lock().contains_key(&fd) {
