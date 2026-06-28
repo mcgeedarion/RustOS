@@ -216,14 +216,14 @@ pub unsafe extern "efiapi" fn efi_main(
 ) -> ! {
     // Null-check: non-conformant firmware or misconfigured QEMU can pass NULL.
     if system_table.is_null() {
-        #[cfg(not(feature = "boot_minimal"))]
+        #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
         crate::arch::aarch64::hal::init();
         kernel_main_jump(&BOOT_INFO);
     }
 
     let st = &*system_table;
     if st.boot_services.is_null() {
-        #[cfg(not(feature = "boot_minimal"))]
+        #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
         crate::arch::aarch64::hal::init();
         kernel_main_jump(&BOOT_INFO);
     }
@@ -236,10 +236,10 @@ pub unsafe extern "efiapi" fn efi_main(
     );
 
     // 2. Capture GOP framebuffer — graceful fallback if firmware has no GOP.
-    #[cfg(not(feature = "boot_minimal"))]
+    #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
     let gop_ok =
         crate::drivers::gop::capture_from_boot_services(st.boot_services as *mut core::ffi::c_void);
-    #[cfg(feature = "boot_minimal")]
+    #[cfg(any(feature = "boot_minimal", feature = "userspace_boot"))]
     let gop_ok = false;
     if !gop_ok {
         efi_print(
@@ -272,6 +272,15 @@ pub unsafe extern "efiapi" fn efi_main(
     // 4a. LoadFile2 protocol initramfs (systemd-boot / GRUB2 on real hardware).
     if !ovmf_initrd_found {
         if let Some(range) = load_initrd_via_loadfile2(bs) {
+            initramfs = range;
+        }
+    }
+
+    // 4b. xtask fallback: embed initramfs.cpio into the EFI image for QEMU/OVMF
+    // runs where fw_cfg/LoadFile2 is not surfaced as an EFI initrd handle.
+    #[cfg(not(feature = "boot_minimal"))]
+    if initramfs.is_empty() {
+        if let Some(range) = load_embedded_initramfs(bs) {
             initramfs = range;
         }
     }
@@ -353,7 +362,7 @@ pub unsafe extern "efiapi" fn efi_main(
     }
 
     // 6. Switch to kernel boot stack and tail-call kernel_main.
-    #[cfg(not(feature = "boot_minimal"))]
+    #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
     crate::arch::aarch64::hal::init();
     kernel_main_jump(&BOOT_INFO);
 }
@@ -440,6 +449,24 @@ unsafe fn load_initrd_via_loadfile2(bs: &EfiBootServices) -> Option<BootRange> {
         return Some(BootRange::new(initrd_buf as usize, initrd_size));
     }
     None
+}
+
+#[cfg(not(feature = "boot_minimal"))]
+unsafe fn load_embedded_initramfs(bs: &EfiBootServices) -> Option<BootRange> {
+    let bytes = crate::embedded_initramfs::INITRAMFS;
+    if bytes.is_empty() {
+        return None;
+    }
+
+    let mut initrd_buf: *mut u8 = core::ptr::null_mut();
+    let alloc_status = (bs.allocate_pool)(EFI_LOADER_DATA, bytes.len(), &mut initrd_buf);
+    if alloc_status != EFI_SUCCESS || initrd_buf.is_null() {
+        return None;
+    }
+
+    core::ptr::copy_nonoverlapping(bytes.as_ptr(), initrd_buf, bytes.len());
+    crate::init::initramfs::set_initramfs_range(initrd_buf as usize, bytes.len());
+    Some(BootRange::new(initrd_buf as usize, bytes.len()))
 }
 
 unsafe fn efi_print(con_out: *mut EfiSimpleTextOutput, s: &str) {
