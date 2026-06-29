@@ -93,10 +93,6 @@ enum SyntheticDev {
 static SYNTH_DEV_FDS: Mutex<BTreeMap<usize, SyntheticDev>> = Mutex::new(BTreeMap::new());
 static NEXT_SYNTH_DEV_FD: Mutex<usize> = Mutex::new(0xD000_0000);
 
-const O_CREAT: u32 = 0o100;
-const O_EXCL: u32 = 0o200;
-const O_DIRECTORY: u32 = 0o200000;
-
 fn alloc_synth_fd(kind: SyntheticDev) -> usize {
     let mut next = NEXT_SYNTH_DEV_FD.lock();
     let fd = *next;
@@ -122,21 +118,22 @@ pub fn init() {
 
 /// Open the built-in minimal device nodes that are required before the full
 /// devfs/VFS stack is complete.
-pub fn try_open(path: &str, flags: u32) -> Result<Option<usize>, isize> {
-    let kind = match path {
-        "/dev/null" | "dev/null" => SyntheticDev::Null,
-        "/dev/zero" | "dev/zero" => SyntheticDev::Zero,
-        _ => return Ok(None),
-    };
-
-    if flags & O_DIRECTORY != 0 {
-        return Err(-20); // ENOTDIR
+pub fn try_open(path: &str, _flags: u32) -> Option<usize> {
+    match path {
+        "/dev/null" | "dev/null" => Some(alloc_synth_fd(SyntheticDev::Null)),
+        "/dev/zero" | "dev/zero" => Some(alloc_synth_fd(SyntheticDev::Zero)),
+        _ => None,
     }
-    if flags & O_CREAT != 0 && flags & O_EXCL != 0 {
-        return Err(-17); // EEXIST
-    }
+}
 
-    Ok(Some(alloc_synth_fd(kind)))
+/// Open the built-in minimal device nodes that are required before the full
+/// devfs/VFS stack is complete.
+pub fn try_open(path: &str, _flags: u32) -> Option<usize> {
+    match path {
+        "/dev/null" | "dev/null" => Some(alloc_synth_fd(SyntheticDev::Null)),
+        "/dev/zero" | "dev/zero" => Some(alloc_synth_fd(SyntheticDev::Zero)),
+        _ => None,
+    }
 }
 
 /// fd -> device lookup used by the syscall dispatch path.
