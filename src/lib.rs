@@ -54,6 +54,12 @@ pub use init::initramfs;
 /// Core kernel utilities — panic handler, rand, uaccess, architecture info.
 pub mod kernel;
 
+/// Compatibility alias for full-kernel modules that still import user-copy
+/// helpers from `crate::uaccess` while the canonical home is
+/// `crate::kernel::uaccess`.
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
+pub use kernel::uaccess;
+
 /// Symmetric multi-processing — per-CPU blocks, IPI send/dispatch.
 #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod smp;
@@ -95,6 +101,11 @@ pub mod block;
 #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 #[path = "core/mod.rs"]
 pub mod kcore;
+
+/// Compatibility alias for full-kernel modules that still refer to
+/// `crate::core::...` while the canonical module name remains `kcore`.
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
+pub use kcore as core;
 
 /// Debug subsystem — oops, backtraces, GDB RSP stub.
 #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
