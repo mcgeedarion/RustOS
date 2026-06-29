@@ -310,33 +310,38 @@ pub fn proc_fd_open(pid: usize, path: &str, flags: u32, _mode: u32) -> isize {
                     (errno, None)
                 },
             }
-        } else if let Some(fd) = crate::fs::devfs::try_open(path, flags) {
-            (fd as isize, None)
-        } else if path.starts_with("/proc") {
-            let fd = crate::fs::procfs::procfs_open(path, flags);
-            (fd, Some(path.into()))
-        } else if path.starts_with("/sys/fs/cgroup") {
-            let fd = crate::fs::cgroupfs::cgroupfs_open(path);
-            (fd, Some(path.into()))
-        } else if path.starts_with("/sys") {
-            let fd = crate::fs::sysfs::sysfs_open(path, flags);
-            (fd, Some(path.into()))
         } else {
-            match crate::fs::vfs::open(path, flags) {
-                Ok(fd) => (fd as isize, Some(path.into())),
-                Err(e) => {
-                    if flags & O_CREAT != 0 && e == -2 {
-                        if crate::fs::vfs::create(path).is_ok() {
-                            match crate::fs::vfs::open(path, flags & !O_CREAT) {
-                                Ok(fd) => (fd as isize, Some(path.into())),
-                                Err(e2) => (e2, None),
+            match crate::fs::devfs::try_open(path, flags) {
+                Ok(Some(fd)) => (fd as isize, None),
+                Err(e) => (e, None),
+                Ok(None) if path.starts_with("/proc") => {
+                    let fd = crate::fs::procfs::procfs_open(path, flags);
+                    (fd, Some(path.into()))
+                },
+                Ok(None) if path.starts_with("/sys/fs/cgroup") => {
+                    let fd = crate::fs::cgroupfs::cgroupfs_open(path);
+                    (fd, Some(path.into()))
+                },
+                Ok(None) if path.starts_with("/sys") => {
+                    let fd = crate::fs::sysfs::sysfs_open(path, flags);
+                    (fd, Some(path.into()))
+                },
+                Ok(None) => match crate::fs::vfs::open(path, flags) {
+                    Ok(fd) => (fd as isize, Some(path.into())),
+                    Err(e) => {
+                        if flags & O_CREAT != 0 && e == -2 {
+                            if crate::fs::vfs::create(path).is_ok() {
+                                match crate::fs::vfs::open(path, flags & !O_CREAT) {
+                                    Ok(fd) => (fd as isize, Some(path.into())),
+                                    Err(e2) => (e2, None),
+                                }
+                            } else {
+                                (-13, None)
                             }
                         } else {
-                            (-13, None)
+                            (e, None)
                         }
-                    } else {
-                        (e, None)
-                    }
+                    },
                 },
             }
         };
