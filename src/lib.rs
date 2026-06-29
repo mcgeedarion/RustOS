@@ -96,6 +96,11 @@ pub mod block;
 #[path = "core/mod.rs"]
 pub mod kcore;
 
+/// Compatibility alias for full-kernel modules that still refer to
+/// `crate::core::...` while the canonical module name remains `kcore`.
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
+pub use kcore as core;
+
 /// Debug subsystem — oops, backtraces, GDB RSP stub.
 #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod debug;
