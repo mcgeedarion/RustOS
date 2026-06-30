@@ -133,10 +133,6 @@ pub fn sys_read(fd: usize, buf_va: usize, count: usize) -> isize {
         n => n as usize,
     };
 
-    if !fd_allows_read(fd) {
-        return -9; // EBADF
-    }
-
     // Standard descriptors are direction-specific in the early console path:
     // fd 0 is stdin only, while fd 1/2 are write-only stdout/stderr.
     if bfd == 1 || bfd == 2 {
@@ -205,10 +201,6 @@ pub fn sys_write(fd: usize, buf_va: usize, count: usize) -> isize {
         n if n < 0 => return n,
         n => n as usize,
     };
-
-    if !fd_allows_write(fd) {
-        return -9; // EBADF
-    }
 
     // fd 0 is stdin; writes to it should fail instead of falling through to
     // VFS fd 0 or another unrelated backing object.
@@ -458,9 +450,6 @@ pub fn sys_writev(fd: usize, iov_va: usize, iovcnt: usize) -> isize {
     if !fd_allows_write(fd) {
         return -9;
     }
-    if bfd == 0 {
-        return -9;
-    }
     let iov_size = core::mem::size_of::<IoVec>();
     if !validate_user_ptr(iov_va, iovcnt * iov_size) {
         return -14;
@@ -526,9 +515,6 @@ pub fn sys_readv(fd: usize, iov_va: usize, iovcnt: usize) -> isize {
         n => n as usize,
     };
     if !fd_allows_read(fd) {
-        return -9;
-    }
-    if bfd == 1 || bfd == 2 {
         return -9;
     }
     let iov_size = core::mem::size_of::<IoVec>();
