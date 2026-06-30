@@ -60,11 +60,6 @@ pub mod kernel;
 #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub use kernel::uaccess;
 
-/// Compatibility alias for full-kernel modules that still import RNG helpers
-/// from `crate::rand` while the canonical home is `crate::kernel::rand`.
-#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
-pub use kernel::rand;
-
 /// Symmetric multi-processing — per-CPU blocks, IPI send/dispatch.
 #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod smp;
