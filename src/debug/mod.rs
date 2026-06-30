@@ -17,7 +17,7 @@ pub mod trace;
 #[cfg(feature = "trace")]
 pub mod ftrace;
 
-#[cfg(feature = "debug")]
+#[cfg(any(feature = "debug", feature = "kmtest"))]
 pub mod oops;
 
 /// REPL commands: `info mem`, `info proc`, `bt`, `dump`.

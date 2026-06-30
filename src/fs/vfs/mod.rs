@@ -3,6 +3,13 @@
 extern crate alloc;
 
 pub mod fd;
+pub mod inode_ref;
+pub mod link;
+pub mod open_check;
+pub mod perm;
+pub mod rename;
+pub mod symlink;
+pub mod unlink;
 pub mod ops;
 pub mod uring;
 

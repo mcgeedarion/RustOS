@@ -7,6 +7,7 @@
 //!   process teardown: FDs closed, VMAs freed, zombie reaped
 //!   getpid / getppid consistency across fork
 
+use crate::kmtest::{register, KmTestResult};
 use crate::proc::{
     exec::sys_execve,
     exit::sys_exit,
@@ -16,7 +17,6 @@ use crate::proc::{
     wait::sys_waitpid,
 };
 use crate::syscall::nr::{SYS_GETPID, SYS_GETPPID, SYS_KILL};
-use kmtest::{register, KmTestResult};
 
 const SIGCHLD: u32 = 17;
 const SIGUSR1: u32 = 10;
@@ -98,6 +98,34 @@ fn proc_waitpid_wnohang() -> KmTestResult {
     Ok(())
 }
 
+/// An invalid wait status pointer returns EFAULT and must not reap the child.
+fn proc_waitpid_bad_status_preserves_zombie() -> KmTestResult {
+    let pid = sys_fork();
+    if pid < 0 {
+        return Err("fork failed (bad status pointer)");
+    }
+    if pid == 0 {
+        sys_exit(33);
+        unreachable!();
+    }
+
+    let bad = sys_waitpid(pid as isize, 1, 0);
+    if bad != -14 {
+        return Err("waitpid bad status pointer did not return EFAULT");
+    }
+
+    let mut status = 0i32;
+    let waited = sys_waitpid(pid as isize, &mut status as *mut i32 as usize, 0);
+    if waited != pid as isize {
+        return Err("waitpid did not preserve child after EFAULT");
+    }
+    if ((status >> 8) & 0xFF) != 33 {
+        return Err("child status changed after waitpid EFAULT");
+    }
+
+    Ok(())
+}
+
 /// Self-send SIGUSR1 with SIG_IGN handler; must not crash.
 fn proc_signal_self_ignore() -> KmTestResult {
     // Install SIG_IGN (handler = 1).
@@ -151,6 +179,10 @@ pub fn register() {
     register!("proc_fork_pid_semantics", proc_fork_pid_semantics);
     register!("proc_fork_multiple", proc_fork_multiple);
     register!("proc_waitpid_wnohang", proc_waitpid_wnohang);
+    register!(
+        "proc_waitpid_bad_status_preserves_zombie",
+        proc_waitpid_bad_status_preserves_zombie
+    );
     register!("proc_signal_self_ignore", proc_signal_self_ignore);
     register!("proc_getpid_stable", proc_getpid_stable);
     register!("proc_getppid_correct", proc_getppid_correct);
