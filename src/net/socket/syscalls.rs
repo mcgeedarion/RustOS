@@ -6,6 +6,34 @@ use super::types::{SocketState, AF_UNIX, MSG_DONTWAIT, SOCK_STREAM};
 use crate::uaccess::{copy_from_user, copy_to_user};
 use alloc::vec::Vec;
 
+/// send(2)-style compatibility wrapper over the socket write path.
+pub fn sys_send(fd: usize, buf_va: usize, len: usize, _flags: u32) -> isize {
+    if len == 0 {
+        return 0;
+    }
+    let mut buf = alloc::vec![0u8; len];
+    if copy_from_user(buf.as_mut_ptr(), buf_va, len).is_err() {
+        return -14; // EFAULT
+    }
+    super::poll::socket_write(fd, &buf)
+}
+
+/// recv(2)-style compatibility wrapper over the socket read path.
+pub fn sys_recv(fd: usize, buf_va: usize, len: usize, flags: u32) -> isize {
+    if len == 0 {
+        return 0;
+    }
+    let mut buf = alloc::vec![0u8; len];
+    let n = super::poll::socket_read(fd, &mut buf, flags);
+    if n <= 0 {
+        return n;
+    }
+    if copy_to_user(buf_va, buf.as_ptr(), n as usize).is_err() {
+        return -14; // EFAULT
+    }
+    n
+}
+
 pub fn sys_sendmsg(fd: usize, msg_va: usize, _flags: u32) -> isize {
     // Read msghdr: {*name, namelen, *iov, iovlen, ...}
     let mut hdr = [0u8; 48];

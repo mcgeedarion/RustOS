@@ -142,9 +142,13 @@ pub mod firmware;
 #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod fs;
 
-/// Evdev / virtio-input event subsystem (requires `--features input_events`).
+/// Evdev / virtio-input event subsystem.
+///
+/// `input_events` enables the real device path; `kmtest` also compiles this
+/// module so full-kernel tests that exercise `/dev/input/event*` helpers keep
+/// their historical `crate::input` surface available.
 #[cfg(all(
-    feature = "input_events",
+    any(feature = "input_events", feature = "kmtest"),
     not(any(feature = "boot_minimal", feature = "userspace_boot"))
 ))]
 pub mod input;
