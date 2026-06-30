@@ -20,8 +20,11 @@
 #![allow(dead_code)]
 
 use crate::fs::vfs_ops::FileOps;
+#[cfg(feature = "input_events")]
 use crate::input::{device_count, EventNode};
+use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
+use spin::Mutex;
 
 const MAX_MAJOR: usize = 256;
 const MAX_MINOR: usize = 256;
@@ -81,24 +84,94 @@ pub fn devfs_open(path: &str) -> Option<Arc<dyn FileOps + Send + Sync>> {
 /// Input subsystem major number (matches Linux).
 pub const INPUT_MAJOR: usize = 13;
 
-/// Initialise the devfs layer.
-pub fn init() {
-    let count = device_count();
-    for minor in 0..count {
-        let node = Arc::new(EventNode::new(minor)) as Arc<dyn FileOps + Send + Sync>;
-        register_char_device(INPUT_MAJOR, minor, node);
-        log::info!("devfs: registered /dev/input/event{}", minor);
-    }
-
-    crate::fs::vfs::ensure_dir("/dev/input");
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SyntheticDev {
+    Null,
+    Zero,
 }
 
-// ===== GUESS: fd -> device FileOps lookup =====
-pub fn get_dev_fd(_fd: i32) -> Option<alloc::sync::Arc<dyn FileOps + Send + Sync>> {
-    // GUESS: we don't currently store a per-fd kind tag distinguishing
-    // devfs entries from regular file entries. Treat all fds as
-    // non-devfs to preserve existing branch behaviour in callers.
-    None
+static SYNTH_DEV_FDS: Mutex<BTreeMap<usize, SyntheticDev>> = Mutex::new(BTreeMap::new());
+static NEXT_SYNTH_DEV_FD: Mutex<usize> = Mutex::new(0xD000_0000);
+
+const O_CREAT: u32 = 0o100;
+const O_EXCL: u32 = 0o200;
+const O_DIRECTORY: u32 = 0o200000;
+
+fn alloc_synth_fd(kind: SyntheticDev) -> usize {
+    let mut next = NEXT_SYNTH_DEV_FD.lock();
+    let fd = *next;
+    *next = next.saturating_add(1);
+    SYNTH_DEV_FDS.lock().insert(fd, kind);
+    fd
+}
+
+/// Initialise the devfs layer.
+pub fn init() {
+    #[cfg(feature = "input_events")]
+    {
+        let count = device_count();
+        for minor in 0..count {
+            let node = Arc::new(EventNode::new(minor)) as Arc<dyn FileOps + Send + Sync>;
+            register_char_device(INPUT_MAJOR, minor, node);
+            log::info!("devfs: registered /dev/input/event{}", minor);
+        }
+
+        crate::fs::vfs::ensure_dir("/dev/input");
+    }
+}
+
+/// Open the built-in minimal device nodes that are required before the full
+/// devfs/VFS stack is complete.
+pub fn try_open(path: &str, flags: u32) -> Result<Option<usize>, isize> {
+    let kind = match path {
+        "/dev/null" | "dev/null" => SyntheticDev::Null,
+        "/dev/zero" | "dev/zero" => SyntheticDev::Zero,
+        _ => return Ok(None),
+    };
+
+    if flags & O_DIRECTORY != 0 {
+        return Err(-20); // ENOTDIR
+    }
+    if flags & O_CREAT != 0 && flags & O_EXCL != 0 {
+        return Err(-17); // EEXIST
+    }
+
+    Ok(Some(alloc_synth_fd(kind)))
+}
+
+/// fd -> device lookup used by the syscall dispatch path.
+pub fn get_dev_fd(fd: usize) -> Option<()> {
+    if SYNTH_DEV_FDS.lock().contains_key(&fd) {
+        Some(())
+    } else {
+        None
+    }
+}
+
+pub fn read(fd: usize, buf: &mut [u8]) -> isize {
+    match SYNTH_DEV_FDS.lock().get(&fd).copied() {
+        Some(SyntheticDev::Null) => 0,
+        Some(SyntheticDev::Zero) => {
+            buf.fill(0);
+            buf.len() as isize
+        },
+        None => -9,
+    }
+}
+
+pub fn write(fd: usize, buf: &[u8]) -> isize {
+    match SYNTH_DEV_FDS.lock().get(&fd).copied() {
+        Some(SyntheticDev::Null) | Some(SyntheticDev::Zero) => buf.len() as isize,
+        None => -9,
+    }
+}
+
+pub fn close(fd: usize) -> isize {
+    if SYNTH_DEV_FDS.lock().remove(&fd).is_some() {
+        0
+    } else {
+        -9
+    }
 }
 
 // ===== GUESS: stat alias for devfs entries =====

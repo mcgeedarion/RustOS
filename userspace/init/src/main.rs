@@ -27,7 +27,17 @@ const SYS_READ: usize = 0;
 #[cfg(target_arch = "x86_64")]
 const SYS_WRITE: usize = 1;
 #[cfg(target_arch = "x86_64")]
+const SYS_OPEN: usize = 2;
+#[cfg(target_arch = "x86_64")]
+const SYS_CLOSE: usize = 3;
+#[cfg(target_arch = "x86_64")]
 const SYS_BRK: usize = 12;
+#[cfg(target_arch = "x86_64")]
+const SYS_FORK: usize = 57;
+#[cfg(target_arch = "x86_64")]
+const SYS_EXECVE: usize = 59;
+#[cfg(target_arch = "x86_64")]
+const SYS_WAIT4: usize = 61;
 #[cfg(target_arch = "x86_64")]
 const SYS_EXIT_GROUP: usize = 231;
 
@@ -36,7 +46,17 @@ const SYS_READ: usize = 63;
 #[cfg(target_arch = "aarch64")]
 const SYS_WRITE: usize = 64;
 #[cfg(target_arch = "aarch64")]
+const SYS_OPEN: usize = 56;
+#[cfg(target_arch = "aarch64")]
+const SYS_CLOSE: usize = 57;
+#[cfg(target_arch = "aarch64")]
 const SYS_BRK: usize = 214;
+#[cfg(target_arch = "aarch64")]
+const SYS_FORK: usize = usize::MAX;
+#[cfg(target_arch = "aarch64")]
+const SYS_EXECVE: usize = 221;
+#[cfg(target_arch = "aarch64")]
+const SYS_WAIT4: usize = 260;
 #[cfg(target_arch = "aarch64")]
 const SYS_EXIT_GROUP: usize = 94;
 
@@ -113,6 +133,73 @@ unsafe fn sys_read(fd: usize, buf: *mut u8, count: usize) -> isize {
     }
 }
 
+/// `open(path, flags, mode)` → fd (or negative errno).
+#[inline(always)]
+unsafe fn sys_open(path: *const u8, flags: usize, mode: usize) -> isize {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let ret: isize;
+        asm!(
+            "syscall",
+            in("rax") SYS_OPEN,
+            in("rdi") path,
+            in("rsi") flags,
+            in("rdx") mode,
+            out("rcx") _,
+            out("r11") _,
+            lateout("rax") ret,
+            options(nostack),
+        );
+        ret
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        let ret: isize;
+        asm!(
+            "svc #0",
+            in("x8") SYS_OPEN,
+            in("x0") -100isize, // AT_FDCWD; aarch64 exposes openat, not open.
+            in("x1") path,
+            in("x2") flags,
+            in("x3") mode,
+            lateout("x0") ret,
+            options(nostack),
+        );
+        ret
+    }
+}
+
+/// `close(fd)` → 0 or negative errno.
+#[inline(always)]
+unsafe fn sys_close(fd: usize) -> isize {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let ret: isize;
+        asm!(
+            "syscall",
+            in("rax") SYS_CLOSE,
+            in("rdi") fd,
+            out("rcx") _,
+            out("r11") _,
+            lateout("rax") ret,
+            options(nostack),
+        );
+        ret
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        let ret: isize;
+        asm!(
+            "svc #0",
+            in("x8") SYS_CLOSE,
+            in("x0") fd,
+            lateout("x0") ret,
+            options(nostack),
+        );
+        ret
+    }
+}
+
 /// `brk(addr)` — returns current program break; brk(0) is a harmless probe.
 #[inline(always)]
 unsafe fn sys_brk(addr: usize) -> usize {
@@ -137,6 +224,97 @@ unsafe fn sys_brk(addr: usize) -> usize {
             "svc #0",
             in("x8") SYS_BRK,
             in("x0") addr,
+            lateout("x0") ret,
+            options(nostack),
+        );
+        ret
+    }
+}
+
+#[inline(always)]
+unsafe fn sys_fork() -> isize {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let ret: isize;
+        asm!(
+            "syscall",
+            in("rax") SYS_FORK,
+            out("rcx") _,
+            out("r11") _,
+            lateout("rax") ret,
+            options(nostack),
+        );
+        ret
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        -38
+    }
+}
+
+#[inline(always)]
+unsafe fn sys_wait4(pid: isize, status: *mut i32, options: usize, rusage: usize) -> isize {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let ret: isize;
+        asm!(
+            "syscall",
+            in("rax") SYS_WAIT4,
+            in("rdi") pid,
+            in("rsi") status,
+            in("rdx") options,
+            in("r10") rusage,
+            out("rcx") _,
+            out("r11") _,
+            lateout("rax") ret,
+            options(nostack),
+        );
+        ret
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        let ret: isize;
+        asm!(
+            "svc #0",
+            in("x8") SYS_WAIT4,
+            in("x0") pid,
+            in("x1") status,
+            in("x2") options,
+            in("x3") rusage,
+            lateout("x0") ret,
+            options(nostack),
+        );
+        ret
+    }
+}
+
+#[inline(always)]
+unsafe fn sys_execve(path: *const u8, argv: *const usize, envp: *const usize) -> isize {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let ret: isize;
+        asm!(
+            "syscall",
+            in("rax") SYS_EXECVE,
+            in("rdi") path,
+            in("rsi") argv,
+            in("rdx") envp,
+            out("rcx") _,
+            out("r11") _,
+            lateout("rax") ret,
+            options(nostack),
+        );
+        ret
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        let ret: isize;
+        asm!(
+            "svc #0",
+            in("x8") SYS_EXECVE,
+            in("x0") path,
+            in("x1") argv,
+            in("x2") envp,
             lateout("x0") ret,
             options(nostack),
         );
@@ -200,6 +378,134 @@ fn write_usize(fd: usize, prefix: &[u8], value: usize) {
     write_all(fd, b"\n");
 }
 
+fn expect_eq(name: &[u8], got: isize, want: isize) {
+    if got != want {
+        write_all(2, b"[init] TEST FAIL: ");
+        write_all(2, name);
+        write_all(2, b"\n");
+        unsafe { sys_exit_group(1) };
+    }
+    write_all(1, b"[init] TEST PASS: ");
+    write_all(1, name);
+    write_all(1, b"\n");
+}
+
+fn expect_nonnegative(name: &[u8], got: isize) -> usize {
+    if got < 0 {
+        write_all(2, b"[init] TEST FAIL: ");
+        write_all(2, name);
+        write_all(2, b"\n");
+        unsafe { sys_exit_group(1) };
+    }
+    write_all(1, b"[init] TEST PASS: ");
+    write_all(1, name);
+    write_all(1, b"\n");
+    got as usize
+}
+
+fn run_syscall_tests() {
+    expect_eq(
+        b"write invalid fd returns EBADF",
+        unsafe { sys_write(99, b"x".as_ptr(), 1) },
+        -9,
+    );
+    let mut byte = [0u8; 1];
+    expect_eq(
+        b"read invalid fd returns EBADF",
+        unsafe { sys_read(99, byte.as_mut_ptr(), byte.len()) },
+        -9,
+    );
+    expect_eq(
+        b"write invalid pointer returns EFAULT",
+        unsafe { sys_write(1, 1 as *const u8, 1) },
+        -14,
+    );
+    expect_eq(
+        b"read invalid pointer returns EFAULT",
+        unsafe { sys_read(0, 1 as *mut u8, 1) },
+        -14,
+    );
+    expect_eq(
+        b"close invalid fd returns EBADF",
+        unsafe { sys_close(99) },
+        -9,
+    );
+    expect_eq(
+        b"execve invalid pointer returns EFAULT",
+        unsafe { sys_execve(1 as *const u8, core::ptr::null(), core::ptr::null()) },
+        -14,
+    );
+    expect_eq(
+        b"open /dev/null O_DIRECTORY returns ENOTDIR",
+        unsafe { sys_open(c"/dev/null".as_ptr() as *const u8, 0o200000, 0) },
+        -20,
+    );
+    expect_eq(
+        b"open /dev/zero O_CREAT|O_EXCL returns EEXIST",
+        unsafe { sys_open(c"/dev/zero".as_ptr() as *const u8, 0o100 | 0o200, 0) },
+        -17,
+    );
+
+    let null_fd = expect_nonnegative(b"open /dev/null", unsafe {
+        sys_open(c"/dev/null".as_ptr() as *const u8, 1, 0)
+    });
+    expect_eq(
+        b"write /dev/null",
+        unsafe { sys_write(null_fd, b"discard".as_ptr(), 7) },
+        7,
+    );
+    let mut sink = [0u8; 1];
+    expect_eq(
+        b"read write-only /dev/null returns EBADF",
+        unsafe { sys_read(null_fd, sink.as_mut_ptr(), sink.len()) },
+        -9,
+    );
+    expect_eq(b"close /dev/null", unsafe { sys_close(null_fd) }, 0);
+
+    let zero_fd = expect_nonnegative(b"open /dev/zero", unsafe {
+        sys_open(c"/dev/zero".as_ptr() as *const u8, 0, 0)
+    });
+    let mut zeros = [0xAAu8; 8];
+    expect_eq(
+        b"read /dev/zero",
+        unsafe { sys_read(zero_fd, zeros.as_mut_ptr(), zeros.len()) },
+        zeros.len() as isize,
+    );
+    for byte in zeros {
+        if byte != 0 {
+            write_all(2, b"[init] TEST FAIL: /dev/zero returned nonzero byte\n");
+            unsafe { sys_exit_group(1) };
+        }
+    }
+    expect_eq(
+        b"write read-only /dev/zero returns EBADF",
+        unsafe { sys_write(zero_fd, b"x".as_ptr(), 1) },
+        -9,
+    );
+    expect_eq(b"close /dev/zero", unsafe { sys_close(zero_fd) }, 0);
+
+    #[cfg(target_arch = "x86_64")]
+    {
+        let child = unsafe { sys_fork() };
+        if child == 0 {
+            write_all(1, b"[init-child] exiting with status 42\n");
+            unsafe { sys_exit_group(42) };
+        }
+        let child_pid = expect_nonnegative(b"fork child", child);
+        let mut status = 0i32;
+        expect_eq(
+            b"wait4 child",
+            unsafe { sys_wait4(child_pid as isize, &mut status as *mut i32, 0, 0) },
+            child_pid as isize,
+        );
+        if ((status >> 8) & 0xff) != 42 {
+            write_all(2, b"[init] TEST FAIL: child exit status mismatch\n");
+            unsafe { sys_exit_group(1) };
+        }
+        write_all(1, b"[init] TEST PASS: child exit status 42\n");
+    }
+}
+
 // ── Entry point ────────────────────────────────────────────────────────────
 
 /// Rust entry point called from `_start` below.
@@ -227,6 +533,8 @@ fn init_main() -> ! {
             b"[init] WARNING: brk(0) returned 0 - heap syscall may be unimplemented\n",
         );
     }
+
+    run_syscall_tests();
 
     // ── 3. Smoke marker (scanned by scripts/ci/run_qemu.sh --smoke) ───────
     // The CI harness looks for this exact line on the serial output.
