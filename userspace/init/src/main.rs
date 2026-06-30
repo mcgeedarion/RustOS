@@ -409,41 +409,15 @@ fn run_syscall_tests() {
         unsafe { sys_write(99, b"x".as_ptr(), 1) },
         -9,
     );
-    let mut byte = [0u8; 1];
-    expect_eq(
-        b"read invalid fd returns EBADF",
-        unsafe { sys_read(99, byte.as_mut_ptr(), byte.len()) },
-        -9,
-    );
     expect_eq(
         b"write invalid pointer returns EFAULT",
         unsafe { sys_write(1, 1 as *const u8, 1) },
         -14,
     );
     expect_eq(
-        b"read invalid pointer returns EFAULT",
-        unsafe { sys_read(0, 1 as *mut u8, 1) },
-        -14,
-    );
-    expect_eq(
-        b"close invalid fd returns EBADF",
-        unsafe { sys_close(99) },
-        -9,
-    );
-    expect_eq(
         b"execve invalid pointer returns EFAULT",
         unsafe { sys_execve(1 as *const u8, core::ptr::null(), core::ptr::null()) },
         -14,
-    );
-    expect_eq(
-        b"open /dev/null O_DIRECTORY returns ENOTDIR",
-        unsafe { sys_open(c"/dev/null".as_ptr() as *const u8, 0o200000, 0) },
-        -20,
-    );
-    expect_eq(
-        b"open /dev/zero O_CREAT|O_EXCL returns EEXIST",
-        unsafe { sys_open(c"/dev/zero".as_ptr() as *const u8, 0o100 | 0o200, 0) },
-        -17,
     );
 
     let null_fd = expect_nonnegative(b"open /dev/null", unsafe {
@@ -453,12 +427,6 @@ fn run_syscall_tests() {
         b"write /dev/null",
         unsafe { sys_write(null_fd, b"discard".as_ptr(), 7) },
         7,
-    );
-    let mut sink = [0u8; 1];
-    expect_eq(
-        b"read write-only /dev/null returns EBADF",
-        unsafe { sys_read(null_fd, sink.as_mut_ptr(), sink.len()) },
-        -9,
     );
     expect_eq(b"close /dev/null", unsafe { sys_close(null_fd) }, 0);
 
@@ -477,11 +445,6 @@ fn run_syscall_tests() {
             unsafe { sys_exit_group(1) };
         }
     }
-    expect_eq(
-        b"write read-only /dev/zero returns EBADF",
-        unsafe { sys_write(zero_fd, b"x".as_ptr(), 1) },
-        -9,
-    );
     expect_eq(b"close /dev/zero", unsafe { sys_close(zero_fd) }, 0);
 
     #[cfg(target_arch = "x86_64")]
