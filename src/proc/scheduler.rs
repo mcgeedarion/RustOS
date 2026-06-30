@@ -657,6 +657,14 @@ pub fn schedule() {
     }
 }
 
+/// Voluntarily yield the current CPU to the scheduler.
+///
+/// This is a small compatibility wrapper for callers/tests that use the
+/// conventional `yield_cpu` name.
+pub fn yield_cpu() {
+    schedule();
+}
+
 fn schedule_early() {
     let next_pid_val = proc_table::with_procs_ro(|pl_vec| {
         pl_vec
