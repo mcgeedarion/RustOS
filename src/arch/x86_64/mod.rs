@@ -39,7 +39,7 @@ pub mod uentry;
 pub mod xsave;
 
 /// x86_64 early/kernel boot hook used by the common entry point.
-#[cfg(not(feature = "boot_minimal"))]
+#[cfg(any(not(feature = "boot_minimal"), feature = "userspace_boot"))]
 pub fn init(boot_info: &'static crate::init::boot_info::BootInfo) -> ! {
     #[cfg(feature = "userspace_boot")]
     {
@@ -67,15 +67,15 @@ impl crate::userspace_boot::UserspaceBootArch for UserspaceBootArch {
     }
 }
 
-#[cfg(feature = "boot_minimal")]
+#[cfg(all(feature = "boot_minimal", not(feature = "userspace_boot")))]
 pub fn init(boot_info: &'static crate::init::boot_info::BootInfo) -> ! {
     crate::boot_minimal::enter::<MinimalArch>(boot_info)
 }
 
-#[cfg(feature = "boot_minimal")]
+#[cfg(all(feature = "boot_minimal", not(feature = "userspace_boot")))]
 struct MinimalArch;
 
-#[cfg(feature = "boot_minimal")]
+#[cfg(all(feature = "boot_minimal", not(feature = "userspace_boot")))]
 impl crate::boot_minimal::MinimalBootArch for MinimalArch {
     const NAME: &'static str = "x86_64";
 

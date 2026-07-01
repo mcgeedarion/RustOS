@@ -7,7 +7,7 @@
 //!
 //! | Features active              | Profile                     |
 //! |------------------------------|-----------------------------|
-//! | `boot_minimal`               | First-stage boot only       |
+//! | `boot_minimal` without `userspace_boot` | First-stage boot only |
 //! | `userspace_boot`             | Boot + thin userspace shims |
 //! | neither (default / release)  | Full kernel                 |
 //!
@@ -73,7 +73,7 @@ pub mod smp;
 
 /// Shared first-stage boot path; includes the bump-allocator
 /// `#[global_allocator]` for minimal images.
-#[cfg(feature = "boot_minimal")]
+#[cfg(all(feature = "boot_minimal", not(feature = "userspace_boot")))]
 pub mod boot_minimal;
 
 // ---------------------------------------------------------------------------
