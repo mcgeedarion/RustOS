@@ -15,8 +15,8 @@
 //! compile under all three profiles because the panic handler, early console,
 //! and BootInfo parser are needed everywhere.
 
-#![no_std]
-#![no_main]
+#![cfg_attr(not(test), no_std)]
+#![cfg_attr(not(test), no_main)]
 #![allow(dead_code)]
 #![allow(unused_imports)]
 #![feature(alloc_error_handler)]
