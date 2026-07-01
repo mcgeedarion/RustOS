@@ -77,6 +77,7 @@ fn halt_loop() -> ! {
 // Panic handler
 // ---------------------------------------------------------------------------
 
+#[cfg(not(test))]
 #[panic_handler]
 #[cold]
 fn panic(info: &core::panic::PanicInfo) -> ! {
@@ -151,6 +152,7 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 // OOM handler
 // ---------------------------------------------------------------------------
 
+#[cfg(not(test))]
 #[alloc_error_handler]
 #[cold]
 fn alloc_error(layout: core::alloc::Layout) -> ! {

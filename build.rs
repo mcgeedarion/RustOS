@@ -49,7 +49,6 @@ fn main() {
         };
         if !script.is_empty() {
             println!("cargo:rerun-if-changed={script}");
-            println!("cargo:rustc-link-arg=-T{script}");
         }
 
         // CRT stubs are only needed for bare-metal ELF builds.
@@ -144,18 +143,4 @@ fn command_exists(name: &str) -> bool {
         .status()
         .map(|status| status.success())
         .unwrap_or(false)
-}
-
-fn run_command(mut cmd: Command, context: &str) -> bool {
-    match cmd.status() {
-        Ok(status) if status.success() => true,
-        Ok(status) => {
-            println!("cargo:warning={context} failed with status {status}");
-            false
-        },
-        Err(e) => {
-            println!("cargo:warning={context} failed: {e}");
-            false
-        },
-    }
 }
