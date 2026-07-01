@@ -36,6 +36,11 @@ xtask = "run -Z build-std=std,panic_abort --target x86_64-unknown-linux-gnu -p x
 #   cargo xtask run --arch x86_64
 #   cargo xtask run --arch aarch64
 #
+# To run host-side Rust unit tests, use xtask instead of raw `cargo test`.
+# Raw `cargo test` inherits the default UEFI target below, which does not
+# provide the standard `test` runtime:
+#   cargo xtask test
+#
 # See docs/getting-started.md for the full guide.
 # ============================================================
 

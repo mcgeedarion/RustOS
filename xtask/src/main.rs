@@ -427,6 +427,22 @@ fn check_kernel(root: &Path, opts: &BuildOpts) -> Result<()> {
     run(&mut cmd)
 }
 
+fn test_host(root: &Path) -> Result<()> {
+    let mut cmd = cargo();
+    cmd.current_dir(root).args([
+        "test",
+        "--lib",
+        "--target",
+        "x86_64-unknown-linux-gnu",
+        "-Z",
+        "build-std=std,test",
+        "--no-default-features",
+        "--features",
+        "userspace_boot",
+    ]);
+    run(&mut cmd)
+}
+
 fn ci_local(root: &Path) -> Result<()> {
     log("ci-local: checking canonical boot-minimal x86_64 build");
     let opts = BuildOpts::default();
@@ -1218,6 +1234,13 @@ fn main() {
             }
         },
 
+        "test" => {
+            if let Err(e) = test_host(&root) {
+                eprintln!("[xtask] test failed: {e:#}");
+                exit(1);
+            }
+        },
+
         "image" => {
             let opts = parse_build_args(&args);
             if let Err(e) = (|| -> Result<()> {
@@ -1354,6 +1377,9 @@ SUBCOMMANDS:
 
   check    [--arch <arch>] [--boot <boot>] [--profile <p>] [--features <f>]
              Type-check the kernel using the same target/feature handling as build.
+
+  test
+             Run host-side Rust unit tests with the std test runtime.
 
   image    [--arch <arch>] [--boot <boot>] [--profile <p>] [--features <f>]
              Build kernel + stage ESP + assemble FAT disk image.

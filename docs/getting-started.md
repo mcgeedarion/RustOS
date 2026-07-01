@@ -145,7 +145,14 @@ cargo xtask roadmap-check
 
 # Type-check a specific milestone
 cargo xtask check --arch x86_64 --features boot_minimal
+
+# Run host-side Rust unit tests
+cargo xtask test
 ```
+
+Use `cargo xtask test` instead of raw `cargo test`: this repository's default
+Cargo target is the lean x86_64 UEFI image, while Rust's standard unit-test
+runtime is a host-side `std` runtime.
 
 Subsystem maturity and the current improvement roadmap live in
 [`docs/status.md`](status.md).
