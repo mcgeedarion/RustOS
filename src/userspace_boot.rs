@@ -85,7 +85,7 @@ unsafe impl GlobalAlloc for EarlyBumpAllocator {
     unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {}
 }
 
-#[global_allocator]
+#[cfg_attr(not(test), global_allocator)]
 static GLOBAL_ALLOCATOR: EarlyBumpAllocator = EarlyBumpAllocator;
 
 // ---------------------------------------------------------------------------

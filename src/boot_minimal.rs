@@ -77,7 +77,7 @@ struct Heap([u8; HEAP_SIZE]);
 static mut HEAP: Heap = Heap([0; HEAP_SIZE]);
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 
-#[global_allocator]
+#[cfg_attr(not(test), global_allocator)]
 static GLOBAL_ALLOCATOR: BootMinimalAllocator = BootMinimalAllocator;
 
 unsafe impl GlobalAlloc for BootMinimalAllocator {

@@ -73,10 +73,10 @@ pub type Arch = ArchImpl;
 pub fn init(boot_info: &'static crate::init::boot_info::BootInfo) -> ! {
     #[cfg(target_arch = "x86_64")]
     {
-        return x86_64::init(boot_info);
+        x86_64::init(boot_info)
     }
     #[cfg(target_arch = "aarch64")]
     {
-        return aarch64::init(boot_info);
+        aarch64::init(boot_info)
     }
 }
