@@ -33,20 +33,12 @@ pub struct KmTestEntry {
 static REGISTRY: Mutex<Vec<KmTestEntry>> = Mutex::new(Vec::new());
 
 pub fn register_entry(name: &'static str, run: fn() -> KmTestResult) {
-    let mut registry = REGISTRY.lock();
-    if let Some(entry) = registry.iter_mut().find(|entry| entry.name == name) {
-        entry.run = run;
-        return;
-    }
-    registry.push(KmTestEntry { name, run });
+    REGISTRY.lock().push(KmTestEntry { name, run });
 }
 
-pub fn reset_registry() {
-    REGISTRY.lock().clear();
-}
-
-pub fn registry_snapshot() -> Vec<KmTestEntry> {
-    REGISTRY.lock().clone()
+pub fn with_registry<R>(f: impl FnOnce(&[KmTestEntry]) -> R) -> R {
+    let registry = REGISTRY.lock();
+    f(&registry)
 }
 
 macro_rules! register {
