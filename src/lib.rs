@@ -7,7 +7,7 @@
 //!
 //! | Features active              | Profile                     |
 //! |------------------------------|-----------------------------|
-//! | `boot_minimal`               | First-stage boot only       |
+//! | `boot_minimal` without `userspace_boot` | First-stage boot only |
 //! | `userspace_boot`             | Boot + thin userspace shims |
 //! | neither (default / release)  | Full kernel                 |
 //!
@@ -15,12 +15,16 @@
 //! compile under all three profiles because the panic handler, early console,
 //! and BootInfo parser are needed everywhere.
 
-#![no_std]
-#![no_main]
+#![cfg_attr(any(not(test), target_os = "uefi"), no_std)]
+#![cfg_attr(any(not(test), target_os = "uefi"), no_main)]
 #![allow(dead_code)]
 #![allow(unused_imports)]
-#![feature(alloc_error_handler)]
-#![feature(naked_functions)]
+#![cfg_attr(any(not(test), target_os = "uefi"), feature(alloc_error_handler))]
+
+#[cfg(all(test, target_os = "uefi"))]
+compile_error!(
+    "raw `cargo test` inherits the default UEFI target; use `cargo xtask test` for host-side unit tests"
+);
 
 extern crate alloc;
 
@@ -58,11 +62,11 @@ pub use init::initramfs;
 /// Core kernel utilities — panic handler, rand, uaccess, architecture info.
 pub mod kernel;
 
-/// Compatibility alias for full-kernel modules that still import user-copy
-/// helpers from `crate::uaccess` while the canonical home is
-/// `crate::kernel::uaccess`.
+/// Compatibility aliases for full-kernel modules that still import helpers from
+/// their historical crate-root paths while the canonical home is under
+/// `crate::kernel`.
 #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
-pub use kernel::uaccess;
+pub use kernel::{rand, uaccess};
 
 /// Symmetric multi-processing — per-CPU blocks, IPI send/dispatch.
 #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
@@ -74,7 +78,7 @@ pub mod smp;
 
 /// Shared first-stage boot path; includes the bump-allocator
 /// `#[global_allocator]` for minimal images.
-#[cfg(feature = "boot_minimal")]
+#[cfg(all(feature = "boot_minimal", not(feature = "userspace_boot")))]
 pub mod boot_minimal;
 
 // ---------------------------------------------------------------------------

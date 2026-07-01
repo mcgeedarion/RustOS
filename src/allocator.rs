@@ -20,7 +20,7 @@ static INITIALISED: AtomicBool = AtomicBool::new(false);
 
 pub struct KernelBumpAllocator;
 
-#[global_allocator]
+#[cfg_attr(not(test), global_allocator)]
 static GLOBAL_ALLOCATOR: KernelBumpAllocator = KernelBumpAllocator;
 
 /// Initialise the fallback heap cursor.
