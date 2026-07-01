@@ -390,16 +390,15 @@ fn kernel_cargo_command(root: &Path, opts: &BuildOpts, subcommand: &str) -> Resu
                     .filter(|feature| !feature.is_empty())
                     .collect();
 
-                let lean_boot = requested.iter().any(|feature| {
-                    matches!(*feature, "boot_minimal" | "uefi_boot")
-                        || (*feature == "input_events" && !requested.contains(&"userspace_boot"))
-                });
+                let lean_boot = requested
+                    .iter()
+                    .any(|feature| matches!(*feature, "boot_minimal" | "uefi_boot"));
                 if lean_boot {
                     cmd.arg("--no-default-features");
                 }
 
                 let mut effective_features = features.to_string();
-                if lean_boot && !requested.contains(&"boot_minimal") {
+                if requested.contains(&"uefi_boot") && !requested.contains(&"boot_minimal") {
                     effective_features.push_str(",boot_minimal");
                 }
 
@@ -428,7 +427,7 @@ fn check_kernel(root: &Path, opts: &BuildOpts) -> Result<()> {
     run(&mut cmd)
 }
 
-fn test_host(root: &Path, passthrough_args: &[String]) -> Result<()> {
+fn test_host(root: &Path) -> Result<()> {
     let mut cmd = cargo();
     cmd.current_dir(root).args([
         "test",
@@ -441,7 +440,6 @@ fn test_host(root: &Path, passthrough_args: &[String]) -> Result<()> {
         "--features",
         "userspace_boot",
     ]);
-    cmd.args(passthrough_args);
     run(&mut cmd)
 }
 
@@ -1240,7 +1238,7 @@ fn main() {
         },
 
         "test" => {
-            if let Err(e) = test_host(&root, &args) {
+            if let Err(e) = test_host(&root) {
                 eprintln!("[xtask] test failed: {e:#}");
                 exit(1);
             }
@@ -1383,9 +1381,8 @@ SUBCOMMANDS:
   check    [--arch <arch>] [--boot <boot>] [--profile <p>] [--features <f>]
              Type-check the kernel using the same target/feature handling as build.
 
-  test     [cargo-test-args...]
+  test
              Run host-side Rust unit tests with the std test runtime.
-             Extra args are forwarded to `cargo test` (for example: -- --list).
 
   image    [--arch <arch>] [--boot <boot>] [--profile <p>] [--features <f>]
              Build kernel + stage ESP + assemble FAT disk image.

@@ -15,16 +15,11 @@
 //! compile under all three profiles because the panic handler, early console,
 //! and BootInfo parser are needed everywhere.
 
-#![cfg_attr(any(not(test), target_os = "uefi"), no_std)]
-#![cfg_attr(any(not(test), target_os = "uefi"), no_main)]
+#![cfg_attr(not(test), no_std)]
+#![cfg_attr(not(test), no_main)]
 #![allow(dead_code)]
 #![allow(unused_imports)]
-#![cfg_attr(any(not(test), target_os = "uefi"), feature(alloc_error_handler))]
-
-#[cfg(all(test, target_os = "uefi"))]
-compile_error!(
-    "raw `cargo test` inherits the default UEFI target; use `cargo xtask test` for host-side unit tests"
-);
+#![feature(alloc_error_handler)]
 
 extern crate alloc;
 
