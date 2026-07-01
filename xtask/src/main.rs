@@ -373,17 +373,33 @@ fn kernel_cargo_command(root: &Path, opts: &BuildOpts, subcommand: &str) -> Resu
             cmd.args(["--profile", "release-boot"]);
             // Lean feature set: no default debug / test / profiling features.
             cmd.arg("--no-default-features");
-            cmd.arg("--features").arg("release-boot");
+            cmd.arg("--features").arg("release-boot,boot_minimal");
         },
     }
 
     if !matches!(opts.profile, BuildProfile::ReleaseBoot) {
         match &opts.features {
             Some(features) => {
-                if features.split(',').any(|f| f.trim() == "boot_minimal") {
+                let requested: Vec<&str> = features
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|feature| !feature.is_empty())
+                    .collect();
+
+                let lean_boot = requested.iter().any(|feature| {
+                    matches!(*feature, "boot_minimal" | "uefi_boot")
+                        || (*feature == "input_events" && !requested.contains(&"userspace_boot"))
+                });
+                if lean_boot {
                     cmd.arg("--no-default-features");
                 }
-                cmd.arg("--features").arg(features);
+
+                let mut effective_features = features.to_string();
+                if lean_boot && !requested.contains(&"boot_minimal") {
+                    effective_features.push_str(",boot_minimal");
+                }
+
+                cmd.arg("--features").arg(effective_features);
             },
             None => {
                 // Keep the default developer boot path on the known-good

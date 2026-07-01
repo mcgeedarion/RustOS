@@ -103,11 +103,9 @@ pub enum ScdcRegister {
     UpdateFlags0 = 0x10,
     UpdateFlags1 = 0x11,
     TmdsBitClockRatio = 0x20,
-    ScrambleEnable = 0x20, // alias
     ConfigControl0 = 0x30,
     StatusFlags0 = 0x40,
     StatusFlags1 = 0x41,
-    FrlStart = 0x30,
     FrlRate = 0x31,
     TestConfig0 = 0xC0,
 }
