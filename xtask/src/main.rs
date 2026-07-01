@@ -386,16 +386,15 @@ fn kernel_cargo_command(root: &Path, opts: &BuildOpts, subcommand: &str) -> Resu
                     .filter(|feature| !feature.is_empty())
                     .collect();
 
-                let lean_boot = requested.iter().any(|feature| {
-                    matches!(*feature, "boot_minimal" | "uefi_boot")
-                        || (*feature == "input_events" && !requested.contains(&"userspace_boot"))
-                });
+                let lean_boot = requested
+                    .iter()
+                    .any(|feature| matches!(*feature, "boot_minimal" | "uefi_boot"));
                 if lean_boot {
                     cmd.arg("--no-default-features");
                 }
 
                 let mut effective_features = features.to_string();
-                if lean_boot && !requested.contains(&"boot_minimal") {
+                if requested.contains(&"uefi_boot") && !requested.contains(&"boot_minimal") {
                     effective_features.push_str(",boot_minimal");
                 }
 
