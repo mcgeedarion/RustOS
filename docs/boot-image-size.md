@@ -1,84 +1,58 @@
-# Boot image size
+# Boot Image Size
 
-This document tracks the size of RustOS boot images for different profiles and architectures.
+_Last reviewed: 2026-07-01._
 
-The goal of the `release-boot` profile is to provide a lean, production-like
-boot image for normal boots and CI smoke tests:
+This document tracks how to measure RustOS boot image size. The repository has a
+`release-boot` profile intended for lean smoke/normal boot images, but the size
+baseline must be refreshed on the machine/toolchain that is used for release or
+CI reporting.
 
-- No kernel-mode test harness (`kmtest` feature disabled)
-- No fault injection framework (`fault-inject` feature disabled)
-- No syscall profiling / tracing hooks (`syscall-trace` feature disabled)
-- No GDB RSP stub or trace ring buffer (`debug`, `gdbstub`, `trace` features off)
-- Debug symbols and DWARF sections removed from the boot image
-- Codegen tuned for size: `opt-level = "z"`, `lto = "fat"`, `codegen-units = 1`
+## Current build intent
 
-## Methodology
+| Profile | Intent | Feature expectations |
+|---|---|---|
+| `dev` / `debug` | Developer build with symbols | Useful for GDB/debugging |
+| `release` | Optimized developer/integration build | Full optimization, symbols not stripped by profile |
+| `release-boot` | Lean boot image | `opt-level = "z"`, fat LTO, one codegen unit, debuginfo stripped |
 
-Unless otherwise noted, measurements are taken on:
+The default feature path is `uefi_boot`, which enables `boot_minimal`.
 
-- Host: x86_64 Linux (Ubuntu 24.04)
-- Toolchain: Rust nightly pinned in `rust-toolchain.toml`
-- Target: `x86_64-unknown-uefi` (UEFI loader)
-
-The following tools are used:
-
-- `du -b <file>` — total image size in bytes
-- `llvm-size -A <file>` — per-section sizes for the kernel ELF
-
-Commands:
+## Measurement commands
 
 ```bash
-# Debug/dev UEFI image (Phase 1 golden path)
-cargo xtask build --arch x86_64 --profile dev --boot uefi
+# Build default x86_64 UEFI images
+cargo xtask build --arch x86_64 --profile dev
+cargo xtask build --arch x86_64 --profile release
+cargo xtask build --arch x86_64 --profile release-boot
 
-# Lean release-boot UEFI image (Phase 5)
-cargo xtask build --arch x86_64 --profile release-boot --boot uefi
+# Compare byte sizes
+stat -c '%n %s' \
+  target/x86_64-unknown-uefi/debug/rustos.efi \
+  target/x86_64-unknown-uefi/release/rustos.efi \
+  target/x86_64-unknown-uefi/release-boot/rustos.efi
 
-# Inspect sizes
-llvm-size -A target/x86_64-unknown-uefi/debug/rustos.efi
+# Optional section inspection when llvm tools are installed
 llvm-size -A target/x86_64-unknown-uefi/release-boot/rustos.efi
-
-du -b target/x86_64-unknown-uefi/debug/rustos.efi
-du -b target/x86_64-unknown-uefi/release-boot/rustos.efi
 ```
 
-## Current measurements (x86_64 UEFI)
+## Current baseline
 
-> NOTE: The exact numbers will vary slightly between nightly toolchains and
-> small code changes. This table is updated when `release-boot` is introduced
-> and should be refreshed when making large architectural changes.
+No fresh checked-in byte baseline is claimed in this repository state. Record a
+new table here after running the commands above in a reproducible environment.
 
-| Profile       | Path                                             | Total size (bytes) | Notes                              |
-|---------------|--------------------------------------------------|--------------------:|------------------------------------|
-| dev           | `target/x86_64-unknown-uefi/debug/rustos.efi`   | _TBD_              | Full debug, tests, verbose logging |
-| release       | `target/x86_64-unknown-uefi/release/rustos.efi` | _TBD_              | Optimised + debug features         |
-| release-boot  | `target/x86_64-unknown-uefi/release-boot/rustos.efi` | _TBD_          | Lean CI/normal boot image          |
+| Profile | Path | Total size (bytes) | Status |
+|---|---|---:|---|
+| dev | `target/x86_64-unknown-uefi/debug/rustos.efi` | _measure locally_ | pending refresh |
+| release | `target/x86_64-unknown-uefi/release/rustos.efi` | _measure locally_ | pending refresh |
+| release-boot | `target/x86_64-unknown-uefi/release-boot/rustos.efi` | _measure locally_ | pending refresh |
 
-## Section breakdown example
+## Update rule
 
-```text
-$ llvm-size -A target/x86_64-unknown-uefi/debug/rustos.efi
-   section                    size         addr
-   .text                    XXXXXXX   0x00000000
-   .rodata                  XXXXXXX   0x00000000
-   .data                    XXXXXXX   0x00000000
-   .bss                     XXXXXXX   0x00000000
-   .debug_info              XXXXXXX   0x00000000
-   .debug_line              XXXXXXX   0x00000000
-   ...
+When changing boot code, linker scripts, features, or profiles in a way that may
+materially change image size:
 
-$ llvm-size -A target/x86_64-unknown-uefi/release-boot/rustos.efi
-   section                    size         addr
-   .text                    YYYYYYY   0x00000000
-   .rodata                  YYYYYYY   0x00000000
-   .data                    YYYYYYY   0x00000000
-   .bss                     YYYYYYY   0x00000000
-   # No .debug_* sections in release-boot
-```
-
-The `release-boot` image should be measurably smaller than the dev/debug
-image, primarily due to:
-
-- Removal of `.debug_*` sections and symbol tables
-- Exclusion of kmtest, fault-inject, syscall-trace, and debug/tracing code
-- More aggressive cross-crate optimisation and code layout for size
+1. Rebuild the affected profiles.
+2. Update the baseline table with exact byte counts and the host/toolchain if
+   the numbers are meant to be compared over time.
+3. Keep `release-boot` free of `kmtest`, `fault-inject`, `syscall-trace`,
+   `debug`, `gdbstub`, and `trace` unless explicitly measuring those features.

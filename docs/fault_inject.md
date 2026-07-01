@@ -1,6 +1,6 @@
 # Fault Injection Framework
 
-> **Phase 3 — Stabilize core kernel behavior**
+_Last reviewed: 2026-07-01._
 
 The fault injection framework lets you deliberately introduce failures into
 critical kernel subsystems during testing to verify that every error path
@@ -8,20 +8,17 @@ returns a proper `Err(…)` rather than panicking or silently corrupting state.
 
 ## Compile-time gate
 
-The entire framework is gated behind the `fault-inject` Cargo feature.  It
-compiles to **absolute zero overhead** in production builds:
+The framework is gated behind the `fault-inject` Cargo feature and is compiled only in the full-kernel graph. Production-oriented boot builds should leave the feature disabled:
 
 ```toml
 # Development / CI (fault injection enabled)
-cargo build --features "fault-inject,kmtest" --target x86_64-unknown-none
+cargo xtask check --arch x86_64 --features fault-inject,kmtest
 
 # Production (framework completely absent)
-cargo build --release --target x86_64-unknown-none
+cargo xtask build --arch x86_64 --profile release-boot
 ```
 
-The `[profile.release]` section in `Cargo.toml` does **not** include
-`fault-inject` in its default features, so a plain `cargo build --release`
-is always clean.
+The default feature set does not include `fault-inject`; enable it only for targeted full-kernel error-path validation.
 
 ---
 
@@ -135,8 +132,7 @@ crate::syscall::fault::check_resource()?;
 
 ## Test suite
 
-All tests live in `src/kmtest/fault_inject_tests.rs` and are compiled only
-when **both** `fault-inject` and `kmtest` features are enabled.
+Fault-injection tests live in `src/kmtest/fault_inject_tests.rs` and compile when both `fault-inject` and `kmtest` are enabled in the full-kernel graph.
 
 | Test | Scenario covered |
 |---|---|

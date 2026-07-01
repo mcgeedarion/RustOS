@@ -449,7 +449,7 @@ fn ci_local(root: &Path) -> Result<()> {
     check_kernel(root, &opts)?;
 
     log("ci-local: running host unit tests");
-    test_host(root, &[])?;
+    test_host(root)?;
 
     log("ci-local: checking module hygiene");
     lint_modules(root)?;
