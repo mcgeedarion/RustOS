@@ -137,7 +137,7 @@ target specifications and build-std flags, so `cargo xtask check` supplies the
 nightly `-Z` options consistently.
 
 ```bash
-# Fast pre-push check
+# Fast pre-push check (kernel check, host tests, module/doc guards)
 cargo xtask ci-local
 
 # Validate the full roadmap/documentation contract
@@ -145,7 +145,22 @@ cargo xtask roadmap-check
 
 # Type-check a specific milestone
 cargo xtask check --arch x86_64 --features boot_minimal
+
+# Run host-side Rust unit tests
+cargo xtask test
+
+# List host-side unit tests (extra args are forwarded to cargo test)
+cargo xtask test -- --list
 ```
+
+Use `cargo xtask test` instead of raw `cargo test`: this repository's default
+Cargo target is the lean x86_64 UEFI image, while Rust's standard unit-test
+runtime is a host-side `std` runtime.
+
+Likewise, invoke automation with `cargo xtask ...` rather than raw
+`cargo run -p xtask -- ...`. The repo-level Cargo config enables freestanding
+`build-std` defaults for kernel builds, and the `xtask` alias supplies the
+matching host-side `std` build flags for the automation binary.
 
 Subsystem maturity and the current improvement roadmap live in
 [`docs/status.md`](status.md).

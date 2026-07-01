@@ -82,7 +82,7 @@ cgroups = []
 gdbstub = []
 
 # Build as a UEFI loader/application.
-uefi_boot = []
+uefi_boot = ["boot_minimal"]
 
 
 # Full debug build: GDB RSP stub + rich oops/backtrace + trace drain.
