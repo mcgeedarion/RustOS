@@ -44,6 +44,8 @@ const KNOB_FILES: &[&str] = &[
 
 #[derive(Clone)]
 struct CgFd {
+    cgid: cgroup::CgroupId,
+    file: Option<String>,
     content: Vec<u8>,
     offset: usize,
 }
@@ -81,12 +83,12 @@ pub fn cgroupfs_open(path: &str) -> isize {
     };
 
     // Read the knob content (or synthesise a directory listing).
-    let content: Vec<u8> = if file.is_empty() || file == "/" {
+    let (file_name, content): (Option<String>, Vec<u8>) = if file.is_empty() || file == "/" {
         // Opening the directory itself — return sorted entry names.
-        dir_listing_bytes(cgid)
+        (None, dir_listing_bytes(cgid))
     } else if KNOB_FILES.contains(&file) {
         match cgroup::read_knob(cgid, file) {
-            Some(s) => s.into_bytes(),
+            Some(s) => (Some(file.to_string()), s.into_bytes()),
             None => return -2,
         }
     } else {
@@ -94,7 +96,15 @@ pub fn cgroupfs_open(path: &str) -> isize {
     };
 
     let fdno = next_cgfs_fd();
-    CGFS_FDS.lock().insert(fdno, CgFd { content, offset: 0 });
+    CGFS_FDS.lock().insert(
+        fdno,
+        CgFd {
+            cgid,
+            file: file_name,
+            content,
+            offset: 0,
+        },
+    );
     fdno as isize
 }
 
@@ -111,6 +121,42 @@ pub fn cgroupfs_read(fdno: usize, buf: &mut [u8]) -> isize {
     buf[..n].copy_from_slice(&avail[..n]);
     fd.offset += n;
     n as isize
+}
+
+/// Write bytes to a cgroupfs synthetic fd.
+pub fn cgroupfs_write(fdno: usize, buf: &[u8]) -> isize {
+    let (cgid, file) = {
+        let guard = CGFS_FDS.lock();
+        let fd = match guard.get(&fdno) {
+            Some(f) => f,
+            None => return -9, // EBADF
+        };
+        let file = match fd.file.clone() {
+            Some(file) => file,
+            None => return -21, // EISDIR
+        };
+        (fd.cgid, file)
+    };
+
+    let value = match core::str::from_utf8(buf) {
+        Ok(value) => value,
+        Err(_) => return -22, // EINVAL
+    };
+    let rc = cgroup::write_knob(cgid, &file, value);
+    if rc < 0 {
+        return rc;
+    }
+
+    let mut guard = CGFS_FDS.lock();
+    let fd = match guard.get_mut(&fdno) {
+        Some(f) => f,
+        None => return -9, // EBADF
+    };
+    fd.content = cgroup::read_knob(cgid, &file)
+        .map(String::into_bytes)
+        .unwrap_or_else(|| buf.to_vec());
+    fd.offset = fd.content.len();
+    buf.len() as isize
 }
 
 /// Release a cgroupfs synthetic fd.

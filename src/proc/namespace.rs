@@ -310,6 +310,16 @@ pub fn ns_fd_open(pid: usize, name: &str) -> Option<usize> {
     Some(fd)
 }
 
+/// Returns true if `fd` is a synthetic namespace fd.
+pub fn is_ns_fd(fd: usize) -> bool {
+    NSFD_TABLE.lock().contains_key(&fd)
+}
+
+/// Close and forget a synthetic namespace fd.
+pub fn ns_fd_close(fd: usize) {
+    NSFD_TABLE.lock().remove(&fd);
+}
+
 /// Resolve a namespace fd back to (ns_type_name, NsId).
 pub fn nsfd_to_ns_id(fd: usize) -> Option<(String, NsId)> {
     NSFD_TABLE.lock().get(&fd).cloned()

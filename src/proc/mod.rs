@@ -90,8 +90,8 @@ pub mod user_ns;
 
 pub mod wait;
 
-// CoW page-fault handler re-exported from mm.
-pub use crate::mm::cow_fault;
+// CoW page-fault handler.
+pub mod cow_fault;
 
 /// Returns the effective credentials of the currently-running task as a
 /// `perm::Creds` value ready for VFS DAC checks.
@@ -107,4 +107,16 @@ pub fn current_creds() -> crate::fs::vfs::perm::Creds {
         egid: p.egid,
     })
     .unwrap_or(crate::fs::vfs::perm::Creds { uid: 0, gid: 0, euid: 0, egid: 0 })
+}
+
+/// Best-effort task label for panic/oops reporting.
+pub fn current_task_info() -> Option<(alloc::string::String, usize)> {
+    let pid = crate::proc::scheduler::current_pid() as usize;
+    crate::proc::scheduler::with_proc(pid, |p| {
+        let name = p
+            .exe_path
+            .clone()
+            .unwrap_or_else(|| alloc::format!("pid{}", p.pid));
+        (name, p.pid)
+    })
 }
