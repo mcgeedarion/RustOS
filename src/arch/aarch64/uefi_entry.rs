@@ -210,7 +210,7 @@ static mut BOOT_STACK: BootStackStorage = BootStackStorage([0u8; 32768]);
 pub static BOOT_STACK_TOP: [u8; 0] = [];
 
 #[no_mangle]
-pub unsafe extern "efiapi" fn efi_main(
+unsafe extern "efiapi" fn efi_main(
     image_handle: EfiHandle,
     system_table: *mut EfiSystemTable,
 ) -> ! {
@@ -218,14 +218,14 @@ pub unsafe extern "efiapi" fn efi_main(
     if system_table.is_null() {
         #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
         crate::arch::aarch64::hal::init();
-        kernel_main_jump(&BOOT_INFO);
+        kernel_main_jump(&raw const BOOT_INFO);
     }
 
     let st = &*system_table;
     if st.boot_services.is_null() {
         #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
         crate::arch::aarch64::hal::init();
-        kernel_main_jump(&BOOT_INFO);
+        kernel_main_jump(&raw const BOOT_INFO);
     }
     let bs = &*st.boot_services;
 
@@ -364,7 +364,7 @@ pub unsafe extern "efiapi" fn efi_main(
     // 6. Switch to kernel boot stack and tail-call kernel_main.
     #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
     crate::arch::aarch64::hal::init();
-    kernel_main_jump(&BOOT_INFO);
+    kernel_main_jump(&raw const BOOT_INFO);
 }
 
 /// Switch to the static kernel boot stack, then jump to `kernel_main`.
@@ -373,13 +373,13 @@ pub unsafe extern "efiapi" fn efi_main(
 /// then branch to the common entry.  We use `sym` operands so the
 /// assembler emits PC-relative ADR instructions (no GOT needed).
 #[inline(never)]
-unsafe fn kernel_main_jump(boot_info: &'static BootInfo) -> ! {
+unsafe fn kernel_main_jump(boot_info: *const BootInfo) -> ! {
     extern "C" {
         fn kernel_main(boot_info: &'static BootInfo) -> !;
     }
     #[cfg(feature = "boot_minimal")]
     {
-        kernel_main(boot_info)
+        kernel_main(&*boot_info)
     }
     #[cfg(not(feature = "boot_minimal"))]
     asm!(
@@ -391,7 +391,7 @@ unsafe fn kernel_main_jump(boot_info: &'static BootInfo) -> ! {
         "br  x10",
         stack_top = sym BOOT_STACK_TOP,
         km = sym kernel_main,
-        in("x0") boot_info as *const BootInfo,
+        in("x0") boot_info,
         options(noreturn),
     );
 }

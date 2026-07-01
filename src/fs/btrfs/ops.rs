@@ -67,13 +67,6 @@ impl BtrfsFs {
         items.iter().map(|(k, _)| k.objectid).max().unwrap_or(255) + 1
     }
 
-    fn alloc_logical_block(&mut self, size: usize) -> u64 {
-        let ns = self.superblock.nodesize as u64;
-        let aligned = (self.alloc_cursor + ns - 1) & !(ns - 1);
-        self.alloc_cursor = aligned + size as u64;
-        aligned
-    }
-
     pub(crate) fn insert_dirent(
         &self,
         parent_ino: u64,

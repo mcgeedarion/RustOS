@@ -145,17 +145,3 @@ fn command_exists(name: &str) -> bool {
         .map(|status| status.success())
         .unwrap_or(false)
 }
-
-fn run_command(mut cmd: Command, context: &str) -> bool {
-    match cmd.status() {
-        Ok(status) if status.success() => true,
-        Ok(status) => {
-            println!("cargo:warning={context} failed with status {status}");
-            false
-        },
-        Err(e) => {
-            println!("cargo:warning={context} failed: {e}");
-            false
-        },
-    }
-}

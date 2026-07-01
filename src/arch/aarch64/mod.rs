@@ -39,7 +39,9 @@ pub mod uentry;
 #[cfg(not(feature = "boot_minimal"))]
 pub fn init(boot_info: &'static crate::init::boot_info::BootInfo) -> ! {
     #[cfg(feature = "userspace_boot")]
-    return crate::userspace_boot::enter::<UserspaceBootArch>(boot_info);
+    {
+        crate::userspace_boot::enter::<UserspaceBootArch>(boot_info)
+    }
     #[cfg(not(feature = "userspace_boot"))]
     kernel_main::init(boot_info)
 }
