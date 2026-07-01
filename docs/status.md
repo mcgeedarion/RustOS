@@ -1,148 +1,142 @@
 # RustOS Subsystem Status
 
-This file is the authoritative registry of every subsystem's implementation
-state. Update it alongside any code change that promotes or demotes a module.
+_Last reviewed: 2026-07-01._
 
-**Legend**
+This file is the authoritative high-level status registry. The repository is in
+a **boot-first stabilization** state: default builds exercise the UEFI minimal
+boot path, `userspace_boot` provides a deliberately thin handoff profile, and
+the full kernel graph is available for integration work when both
+`boot_minimal` and `userspace_boot` are disabled.
+
+## Legend
 
 | Status | Meaning |
-|--------|---------|
-| `real` | Implemented, tested, and CI-gated |
-| `partial` | Core path works; edge cases / error paths incomplete |
-| `stub` | API surface exists; returns fixed values or `ENOSYS` |
-| `experimental` | Works in isolation; not yet integrated or CI-gated |
-| `planned` | Tracked; no code yet |
+|---|---|
+| `real` | Implemented and used by a supported validation path |
+| `partial` | Core path exists; important edge cases or integration work remain |
+| `stub` | API/module surface exists but returns fixed values, no-op behavior, or `ENOSYS`-style placeholders |
+| `experimental` | Substantial code exists but it is not part of the default smoke contract |
+| `planned` | Tracked but not implemented in this repository yet |
 
----
+## Build profiles
+
+| Feature selection | Status | Notes |
+|---|---|---|
+| default `uefi_boot` | real | Enables `boot_minimal`; this is the default local/CI smoke path |
+| `boot_minimal` | real | Firmware handoff, `BootInfo`, early console, boot markers, idle loop |
+| `userspace_boot` | partial | Uses `src/userspace_shims.rs` for minimal fs/proc surfaces |
+| full kernel graph | experimental | Active when neither `boot_minimal` nor `userspace_boot` is selected |
+| `release-boot` profile/feature | partial | Lean image profile exists; size baselines still need to be refreshed |
 
 ## Boot & Init
 
 | Module | Status | Feature gate | Notes |
-|--------|--------|--------------|-------|
-| `src/boot_minimal.rs` | real | `boot_minimal` | Emits `BOOT_MINIMAL_OK` sentinel |
-| `src/userspace_boot.rs` | partial | `userspace_boot` | Thin shims while mm/fs/proc stabilise |
-| `src/kernel_main.rs` | partial | _(default)_ | Full init sequence not yet complete |
-| `src/firmware/` | partial | _(default)_ | UEFI + SBI boot paths; multiboot2 stub |
-| `src/init/` | partial | `userspace_boot` | Kernel-side init launcher |
+|---|---|---|---|
+| `src/boot_minimal.rs` | real | `boot_minimal` | Emits the minimal boot success path and parks the CPU |
+| `src/kernel_main.rs` | partial | all profiles | Common architecture-independent entry dispatcher and boot markers |
+| `src/init/` | partial | all profiles | `BootInfo`, initramfs metadata, loader/scheme scaffolding |
+| `src/userspace_boot.rs` | partial | `userspace_boot` | Handoff marker path with thin shim services |
+| `src/userspace_shims.rs` | stub | `userspace_boot` | Intentional temporary fs/proc surface for M2 work |
+
+## Architecture
+
+| Module | Status | Notes |
+|---|---|---|
+| `src/arch/x86_64/` | partial | Primary UEFI boot path; syscall/interrupt/paging code exists for full-kernel work |
+| `src/arch/aarch64/` | partial | UEFI and bare-metal paths exist; kept aligned with shared boot contracts |
+| RISC-V | planned | No target spec or `src/arch/riscv64/` module currently exists |
 
 ## Memory Management
 
-| Module | Status | Feature gate | Notes |
-|--------|--------|--------------|-------|
-| `src/mm/` PMM | real | _(default)_ | Bitmap allocator; fault-inject gated |
-| `src/mm/` VMM | partial | _(default)_ | 4-level paging x86_64; aarch64 partial |
-| `src/mm/` slab | partial | _(default)_ | Basic slab; no per-CPU caches yet |
-| `src/mm/` COW | stub | `full-kernel` | `copy_on_write()` returns `ENOSYS` |
+| Module | Status | Notes |
+|---|---|---|
+| `src/mm/` physical memory | partial | Allocator and boot-memory code exist; integration remains full-kernel only |
+| `src/mm/` virtual memory/mmap | partial | VMA, mmap, page-fault, and protection modules exist; edge-case correctness remains under development |
+| `src/mm/` slab/heap | partial | Kernel allocation code exists; production hardening remains |
+| COW/swap/mlock/pkeys/KASAN helpers | experimental | Code exists but is not part of the default smoke contract |
 
-## Syscall
+## Syscalls
 
-| Module | Status | Feature gate | Notes |
-|--------|--------|--------------|-------|
-| `src/syscall/` dispatch | partial | _(default)_ | x86_64 SYSCALL/SYSRET; EFAULT not uniform |
-| `write` (fd 1/2) | partial | _(default)_ | Console path only; no file-backed write |
-| `open` / `close` | stub | `userspace_boot` | Returns fd 0–2 only |
-| `fork` | partial | `userspace_boot` | Minimal PID creation path smoke-tested |
-| `execve` | partial | `userspace_boot` | Static ELF path smoke-tested; complex argv/envp pending |
-| `exit` / `exit_group` | partial | _(default)_ | Process teardown incomplete |
-| `waitpid` / `wait4` | partial | `userspace_boot` | Child exit collection smoke-tested; options pending |
-| `mmap` / `munmap` | partial | `full-kernel` | Anonymous mmap; file-backed stub |
-| `brk` | partial | `full-kernel` | — |
-| Syscall-trace counters | real | `syscall-trace` | Per-syscall ns timing via /proc/syscall_stats |
+| Module | Status | Notes |
+|---|---|---|
+| `src/syscall/` dispatcher/routers | partial | Full-kernel-only syscall surface with Linux-number routing tables |
+| `src/syscall/stubs.rs` | stub | Explicit placeholder handling remains documented and guarded |
+| `src/syscall/profile.rs` | partial | `syscall-trace` counters exist; performance numbers need fresh collection |
+| POSIX compatibility modules | partial | `posix_full`, `musl_compat`, `openat2_mincore`, signal/fault helpers exist |
 
-## File System
+See `docs/syscalls.md` for syscall-by-syscall status.
 
-| Module | Status | Feature gate | Notes |
-|--------|--------|--------------|-------|
-| `src/fs/` VFS | partial | `full-kernel` | Inode/dentry layer incomplete |
-| initramfs (cpio newc) | partial | `userspace_boot` | Boot-protocol range first; no ESP scan required |
-| ext2 | experimental | `full-kernel` | Read-only; not CI-gated |
-| ext4 | planned | `full-kernel` | — |
-| devfs | stub | `userspace_boot` | `/dev/null`, `/dev/zero` stubs only |
-| procfs | stub | `userspace_boot` | Returns static strings; WARN emitted at runtime |
+## Filesystems & I/O
 
-## Process & IPC
+| Module | Status | Notes |
+|---|---|---|
+| `src/fs/vfs/` | partial | VFS data structures and POSIX operation helpers exist |
+| `src/fs/initramfs.rs` | partial | Initramfs support exists for boot handoff work |
+| `src/fs/devfs.rs`, `src/fs/procfs.rs`, `src/fs/sysfs.rs` | partial | Kernel pseudo-filesystem scaffolding exists; not fully validated as production interfaces |
+| `src/fs/ext2/`, `src/fs/ext4.rs`, `src/fs/fat32.rs` | experimental | Filesystem implementations exist but are not default-smoke requirements |
+| Btrfs/exFAT/NTFS/NFS/CDFS/overlayfs modules | experimental | Code exists for bring-up/integration, not a supported compatibility claim |
+| `src/io_uring/` | experimental | Ring and operation modules exist; not part of current milestone gates |
 
-| Module | Status | Feature gate | Notes |
-|--------|--------|--------------|-------|
-| `src/proc/` | stub | `userspace_boot` | Process table stub; emits WARN at runtime |
-| `src/ipc/` pipe | stub | `full-kernel` | `pipe()` returns `ENOSYS` |
-| `src/ipc/` socket | planned | `full-kernel` | — |
-| Scheduler | partial | _(default)_ | Round-robin; no priority or CFS |
+## Process, IPC, and Scheduling
+
+| Module | Status | Notes |
+|---|---|---|
+| `src/proc/` | partial | Process, task, fork/exec/wait/signal/scheduler modules exist; full POSIX behavior is incomplete |
+| `src/proc/futex.rs` | partial | Futex code exists; correctness/performance validation remains |
+| `src/fs/pipe.rs`, `src/net/socket/unix/` | partial | Pipe and Unix-socket code exists but is not fully milestone-gated |
+| `src/smp/` | partial | Full-kernel SMP scaffolding exists; not part of minimal boot profile |
 
 ## Drivers & Devices
 
-| Module | Status | Feature gate | Notes |
-|--------|--------|--------------|-------|
-| `src/drivers/` VirtIO | partial | _(default)_ | Block + net devices; GPU stub |
-| `src/drivers/` AHCI | experimental | `full-kernel` | Not CI-gated |
-| `src/drivers/` NVMe | planned | `full-kernel` | — |
-| `src/tty/` | partial | _(default)_ | Serial console; PTY stub |
-| `src/input/` | stub | `full-kernel` | Returns no events |
-
-## Display & Compositor
-
-| Module | Status | Feature gate | Notes |
-|--------|--------|--------------|-------|
-| `src/display/` DRM/KMS | experimental | `wayland-compositor` | Not CI-gated; no privilege drop yet |
-| Wayland compositor | experimental | `wayland-compositor` | MVP feature set; seccomp/focus/ping missing |
+| Module | Status | Notes |
+|---|---|---|
+| `src/drivers/virtio/`, `src/drivers/virtio_blk.rs` | partial | VirtIO infrastructure and block code exist |
+| `src/drivers/net/` | experimental | VirtIO/e1000e/NIC code exists; not a supported network milestone yet |
+| `src/drivers/block/` | experimental | AHCI/NVMe modules exist; not CI-gated as storage support |
+| `src/drivers/gpu/` | experimental | GOP/VGA/virtio/DRM/AMDGPU scaffolding exists; no supported Wayland compositor path yet |
+| `src/drivers/input/`, `src/input/` | experimental | Input/event modules exist; real path requires optional feature/testing |
+| `src/tty/` | partial | TTY and serial-console code exists in the full kernel graph |
 
 ## Networking
 
+| Module | Status | Notes |
+|---|---|---|
+| `src/net/` Ethernet/IP/ARP/ICMP/UDP/TCP/DHCP/DNS | experimental | Protocol code exists but is not yet a supported M5 network claim |
+| `src/net/socket/` | experimental | TCP/UDP/Unix socket modules exist; syscall integration remains partial |
+
+## Security & Namespaces
+
+| Module | Status | Notes |
+|---|---|---|
+| `src/security/` | experimental | Capabilities, seccomp, namespaces, LSM, ASLR, BPF, Landlock, cgroups scaffolding exists |
+| `src/proc/*_ns.rs`, `src/security/ns/` | partial | Namespace-related code exists but is not complete compatibility support |
+
+## Debugging, Tests, and Fault Injection
+
 | Module | Status | Feature gate | Notes |
-|--------|--------|--------------|-------|
-| `src/net/` | experimental | `net` | VirtIO NIC; no TCP/IP stack yet |
+|---|---|---|---|
+| `src/debug/` | partial | `debug`, `gdbstub`, `trace` | GDB RSP, trace, oops/debug console modules exist |
+| `src/kmtest/` | partial | `kmtest` | In-kernel tests exist for selected subsystems |
+| `src/fault_inject/` | partial | `fault-inject` | PMM/VMM/syscall fault points exist for controlled error-path testing |
+| `scripts/ci/check-stubs.sh` | real | n/a | Local documented-stub guard |
+| `cargo xtask roadmap-check` | real | n/a | Documentation contract guard |
 
-## Security
+## Current improvement roadmap
 
-| Module | Status | Feature gate | Notes |
-|--------|--------|--------------|-------|
-| `src/security/` | stub | `full-kernel` | LSM hooks wired; no policy engine |
-| seccomp | planned | `full-kernel` | — |
+| Priority | Work item | Validation |
+|---:|---|---|
+| 1 | Keep x86_64 minimal UEFI smoke green | `cargo xtask smoke --arch x86_64` |
+| 2 | Keep AArch64 boot contracts buildable/smokeable where firmware exists | `cargo xtask smoke --arch aarch64` |
+| 3 | Replace `userspace_boot` shims with real fs/proc/mm paths | `FULL_OS_USERSPACE_OK` plus syscall tests |
+| 4 | Make minimum init syscalls real and EFAULT-safe | `docs/syscalls.md` plus kmtest coverage |
+| 5 | Refresh boot-image and boot-performance baselines | commands in `docs/boot-image-size.md` and `docs/boot-perf.md` |
+| 6 | Promote selected full-kernel subsystems from experimental to supported | subsystem-specific tests and smoke sentinels |
 
-## Fault Injection
+## Contribution rules
 
-| Module | Status | Feature gate | Notes |
-|--------|--------|--------------|-------|
-| `src/fault_inject/` PMM OOM | real | `fault-inject` | CI-gated via fault-inject workflow |
-| `src/fault_inject/` VMM map | real | `fault-inject` | — |
-| `src/fault_inject/` syscall | partial | `fault-inject` | EMFILE path done; fork/exec alloc paths pending |
-
----
-
-## CI stub guard
-
-`scripts/ci/check-stubs.sh` enforces that no module whose status is `stub`
-appears in a `full-kernel` feature build. Run it locally with:
-
-```sh
-bash scripts/ci/check-stubs.sh
-```
-
----
-
-## Improvement Roadmap
-
-Use this section to connect subsystem status to concrete work items. Each new
-feature should identify the milestone it advances and update the table above if
-it promotes a stub or experimental path.
-
-| Improvement | First code path | Validation |
-|-------------|-----------------|------------|
-| Reliable developer workflow | `cargo xtask smoke` | Single documented local validation command passes before push |
-| Boot smoke stability | `cargo xtask smoke` | Serial log contains `BOOT_MINIMAL_OK`, `FULL_OS_USERSPACE_OK`, or `entering cpu_idle` |
-| Syscall correctness | `src/syscall/` | `/init` minimum syscalls return data or errno, never kernel panic |
-| Fault injection | `fault-inject` + `kmtest` | OOM/map/syscall resource failures produce controlled errors |
-| Boot performance | `docs/boot-optimization-checklist.md` | Measurements exist before optimization claims |
-| Userspace display hardening | Wayland compositor | Pointer/focus/ping/seccomp/privilege-drop tasks are tracked before trust expansion |
-| Stub visibility | `docs/status.md` and feature gates | Stubs stay documented and cannot silently become full-kernel dependencies |
-| Architecture policy | x86_64 and aarch64 milestones | Each arch has an explicit build/smoke expectation |
-
-## Contribution Rules
-
-1. New functionality should identify which milestone it advances.
-2. Stubs must be named or documented as stubs and feature-gated when possible.
-3. Boot success must be decided by serial sentinels, not by fixed sleeps.
-4. Raw `cargo check` against JSON target specs is discouraged; use `cargo xtask check` so nightly `-Z` flags and target settings stay consistent.
-5. Performance work must add or update a measurement before claiming an improvement.
-6. Run `cargo xtask roadmap-check` when changing status, syscall, milestone, architecture, or fault-injection documentation.
-7. Run `bash scripts/ci/check-stubs.sh` when changing module gates or stub classifications.
+1. Update this file when promoting or demoting a subsystem.
+2. Update `docs/syscalls.md` with syscall semantic changes.
+3. Boot success must be decided by serial sentinels, not fixed sleeps.
+4. Prefer `cargo xtask check`, `cargo xtask smoke`, and `cargo xtask ci-local`
+   over raw `cargo` commands for validation.
+5. Performance docs must distinguish measured data from planned work.
