@@ -1,5 +1,5 @@
 [alias]
-xtask = "run --target x86_64-unknown-linux-gnu -p xtask --"
+xtask = "run -Z build-std=std,panic_abort --target x86_64-unknown-linux-gnu -p xtask --"
 
 # ============================================================
 # Boot target overview
@@ -24,7 +24,7 @@ xtask = "run --target x86_64-unknown-linux-gnu -p xtask --"
 # Developer on-ramp
 # ============================================================
 #
-# Plain `cargo build` builds the x86_64 UEFI image (PRIMARY).
+# Plain `cargo build` builds the lean x86_64 UEFI image (PRIMARY).
 #
 # To build the aarch64 UEFI image:
 #   cargo xtask build --arch aarch64
@@ -39,8 +39,11 @@ xtask = "run --target x86_64-unknown-linux-gnu -p xtask --"
 # ============================================================
 
 [build]
-target = "targets/x86_64-uefi-loader.json"
+target = "x86_64-unknown-uefi"
 
-# Freestanding kernel builds require -Z build-std. xtask injects
-# those flags only for kernel cargo invocations so the host xtask
-# binary can compile with the normal std toolchain.
+# Freestanding kernel builds require build-std on nightly. Keeping the
+# defaults here makes plain `cargo check` / `cargo build` exercise the same
+# lean x86_64 UEFI image as `cargo xtask check --arch x86_64`.
+[unstable]
+build-std = ["core", "alloc", "compiler_builtins"]
+build-std-features = ["compiler-builtins-mem"]
