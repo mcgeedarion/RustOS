@@ -10,9 +10,10 @@ use alloc::{
     collections::BTreeMap,
     format,
     string::{String, ToString},
-    sync::Arc,
     vec::Vec,
 };
+#[cfg(feature = "input_events")]
+use alloc::sync::Arc;
 use core::sync::atomic::{AtomicU64, Ordering};
 use spin::Mutex;
 
@@ -468,6 +469,7 @@ enum DevSchemeKind {
         data: Vec<u8>,
         offset: usize,
     },
+    #[cfg(feature = "input_events")]
     InputEvent {
         minor: usize,
         nonblock: bool,
@@ -500,6 +502,7 @@ fn dev_scheme_path(path: &str) -> String {
     }
 }
 
+#[cfg(feature = "input_events")]
 fn dev_parse_input_minor(path: &str) -> Option<usize> {
     let rel = path.strip_prefix("/dev/input/event")?;
     rel.parse::<usize>().ok()
@@ -510,6 +513,7 @@ fn dev_dir_listing(path: &str) -> Option<Vec<u8>> {
         return Some(b"input\n".to_vec());
     }
 
+    #[cfg(feature = "input_events")]
     if path == "/dev/input" || path == "/dev/input/" {
         let mut out = Vec::new();
         for minor in 0..crate::input::device_count() {
@@ -529,6 +533,7 @@ fn dev_read_dir(data: &[u8], offset: &mut usize, buf: &mut [u8]) -> usize {
     n
 }
 
+#[cfg(feature = "input_events")]
 fn dev_read_input_event(
     minor: usize,
     nonblock: bool,
@@ -604,10 +609,12 @@ fn dev_read_input_event(
     }
 }
 
+#[cfg(feature = "input_events")]
 fn dev_input_ready_mask() -> crate::sync::ReadyMask {
     crate::fs::poll::POLLIN | crate::fs::poll::POLLRDNORM
 }
 
+#[cfg(feature = "input_events")]
 fn dev_clear_input_readiness_if_empty(dev: &crate::input::InputDevice) {
     let ready = dev_input_ready_mask();
 
@@ -643,13 +650,21 @@ impl Scheme for DevFs {
 
             DevSchemeKind::Directory { data, offset: 0 }
         } else {
-            let minor = dev_parse_input_minor(&full_path).ok_or(SchemeError::NotFound)?;
-            let ops = crate::fs::devfs::devfs_open(&full_path).ok_or(SchemeError::NotFound)?;
+            #[cfg(feature = "input_events")]
+            {
+                let minor = dev_parse_input_minor(&full_path).ok_or(SchemeError::NotFound)?;
+                let ops = crate::fs::devfs::devfs_open(&full_path).ok_or(SchemeError::NotFound)?;
 
-            DevSchemeKind::InputEvent {
-                minor,
-                nonblock: flags.contains(OpenFlags::NON_BLOCK),
-                ops,
+                DevSchemeKind::InputEvent {
+                    minor,
+                    nonblock: flags.contains(OpenFlags::NON_BLOCK),
+                    ops,
+                }
+            }
+            #[cfg(not(feature = "input_events"))]
+            {
+                let _ = full_path;
+                return Err(SchemeError::NotFound);
             }
         };
 
@@ -667,13 +682,22 @@ impl Scheme for DevFs {
                 DevSchemeKind::Directory { data, offset } => {
                     return Ok(dev_read_dir(data, offset, buf));
                 },
+                #[cfg(feature = "input_events")]
                 DevSchemeKind::InputEvent {
                     minor, nonblock, ..
                 } => (*minor, *nonblock),
             }
         };
 
-        dev_read_input_event(minor, nonblock, buf)
+        #[cfg(feature = "input_events")]
+        {
+            dev_read_input_event(minor, nonblock, buf)
+        }
+        #[cfg(not(feature = "input_events"))]
+        {
+            let _ = (minor, nonblock, buf);
+            Err(SchemeError::NotFound)
+        }
     }
 
     fn ioctl(&self, fid: SchemeFileId, cmd: u64, arg: usize) -> Result<usize, SchemeError> {
@@ -682,7 +706,10 @@ impl Scheme for DevFs {
             let fd = fds.get(&fid.0).ok_or(SchemeError::NotFound)?;
 
             match fd {
+                #[cfg(feature = "input_events")]
                 DevSchemeKind::InputEvent { ops, .. } => Arc::clone(ops),
+                #[cfg(not(feature = "input_events"))]
+                _ => return Err(SchemeError::NotFound),
                 DevSchemeKind::Directory { .. } => return Err(SchemeError::InvalidArg),
             }
         };

@@ -304,10 +304,14 @@ fn parse_build_args(args: &[String]) -> BuildOpts {
             "--debug" => opts.profile = BuildProfile::Dev,
             "--profile" => {
                 i += 1;
-                opts.profile = match args.get(i).map(String::as_str) {
+                opts.profile = match args
+                    .get(i)
+                    .map(|profile| profile.to_ascii_lowercase().replace('_', "-"))
+                    .as_deref()
+                {
                     Some("dev") | Some("debug") => BuildProfile::Dev,
                     Some("release") => BuildProfile::Release,
-                    Some("release-boot") => BuildProfile::ReleaseBoot,
+                    Some("release-boot") | Some("releaseboot") => BuildProfile::ReleaseBoot,
                     other => {
                         eprintln!("[xtask] unknown --profile: {:?}", other);
                         exit(1);
@@ -373,17 +377,33 @@ fn kernel_cargo_command(root: &Path, opts: &BuildOpts, subcommand: &str) -> Resu
             cmd.args(["--profile", "release-boot"]);
             // Lean feature set: no default debug / test / profiling features.
             cmd.arg("--no-default-features");
-            cmd.arg("--features").arg("release-boot");
+            cmd.arg("--features").arg("release-boot,boot_minimal");
         },
     }
 
     if !matches!(opts.profile, BuildProfile::ReleaseBoot) {
         match &opts.features {
             Some(features) => {
-                if features.split(',').any(|f| f.trim() == "boot_minimal") {
+                let requested: Vec<&str> = features
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|feature| !feature.is_empty())
+                    .collect();
+
+                let lean_boot = requested.iter().any(|feature| {
+                    matches!(*feature, "boot_minimal" | "uefi_boot")
+                        || (*feature == "input_events" && !requested.contains(&"userspace_boot"))
+                });
+                if lean_boot {
                     cmd.arg("--no-default-features");
                 }
-                cmd.arg("--features").arg(features);
+
+                let mut effective_features = features.to_string();
+                if lean_boot && !requested.contains(&"boot_minimal") {
+                    effective_features.push_str(",boot_minimal");
+                }
+
+                cmd.arg("--features").arg(effective_features);
             },
             None => {
                 // Keep the default developer boot path on the known-good
