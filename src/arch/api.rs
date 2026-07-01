@@ -143,20 +143,3 @@ pub fn is_user_addr(addr: usize) -> bool {
 pub fn is_valid_addr(addr: usize) -> bool {
     crate::arch::hal::is_valid_addr(addr)
 }
-
-#[inline]
-pub const fn page_size() -> usize {
-    4096
-}
-
-#[inline]
-pub const fn name() -> &'static str {
-    #[cfg(target_arch = "x86_64")]
-    {
-        "x86_64"
-    }
-    #[cfg(target_arch = "aarch64")]
-    {
-        "aarch64"
-    }
-}
