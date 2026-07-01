@@ -448,6 +448,9 @@ fn ci_local(root: &Path) -> Result<()> {
     let opts = BuildOpts::default();
     check_kernel(root, &opts)?;
 
+    log("ci-local: running host unit tests");
+    test_host(root, &[])?;
+
     log("ci-local: checking module hygiene");
     lint_modules(root)?;
 
@@ -1406,7 +1409,8 @@ SUBCOMMANDS:
              Validate status, syscall, milestone, architecture, and fault docs.
 
   ci-local
-             Run the fast local CI gate: check, lint-modules, stub guard, roadmap-check.
+             Run the fast local CI gate: check, host tests, lint-modules,
+             stub guard, roadmap-check.
 
   help       Print this message.
 

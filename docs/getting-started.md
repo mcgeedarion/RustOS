@@ -137,7 +137,7 @@ target specifications and build-std flags, so `cargo xtask check` supplies the
 nightly `-Z` options consistently.
 
 ```bash
-# Fast pre-push check
+# Fast pre-push check (kernel check, host tests, module/doc guards)
 cargo xtask ci-local
 
 # Validate the full roadmap/documentation contract
