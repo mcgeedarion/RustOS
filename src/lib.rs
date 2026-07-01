@@ -31,6 +31,10 @@ extern crate alloc;
 /// Architecture dispatch layer — cfg-routes to x86_64 or aarch64.
 pub mod arch;
 
+/// Full-kernel global allocator compatibility wiring.
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
+pub mod allocator;
+
 /// Boot performance markers — `boot_mark!` macro, `read_hw_counter()`.
 pub mod boot_perf;
 
@@ -53,6 +57,17 @@ pub use init::initramfs;
 
 /// Core kernel utilities — panic handler, rand, uaccess, architecture info.
 pub mod kernel;
+
+/// Compatibility alias for full-kernel modules that still import user-copy
+/// helpers from `crate::uaccess` while the canonical home is
+/// `crate::kernel::uaccess`.
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
+pub use kernel::uaccess;
+
+/// Compatibility alias for full-kernel modules that still import RNG helpers
+/// from `crate::rand` while the canonical home is `crate::kernel::rand`.
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
+pub use kernel::rand;
 
 /// Symmetric multi-processing — per-CPU blocks, IPI send/dispatch.
 #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
@@ -96,6 +111,11 @@ pub mod block;
 #[path = "core/mod.rs"]
 pub mod kcore;
 
+/// Compatibility alias for full-kernel modules that still refer to
+/// `crate::core::...` while the canonical module name remains `kcore`.
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
+pub use kcore as core;
+
 /// Debug subsystem — oops, backtraces, GDB RSP stub.
 #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod debug;
@@ -131,9 +151,13 @@ pub mod firmware;
 #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod fs;
 
-/// Evdev / virtio-input event subsystem (requires `--features input_events`).
+/// Evdev / virtio-input event subsystem.
+///
+/// `input_events` enables the real device path; `kmtest` also compiles this
+/// module so full-kernel tests that exercise `/dev/input/event*` helpers keep
+/// their historical `crate::input` surface available.
 #[cfg(all(
-    feature = "input_events",
+    any(feature = "input_events", feature = "kmtest"),
     not(any(feature = "boot_minimal", feature = "userspace_boot"))
 ))]
 pub mod input;

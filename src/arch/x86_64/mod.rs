@@ -28,6 +28,11 @@ pub mod syscall;
 pub mod uefi_boot_stack;
 #[cfg(any(feature = "uefi_boot", feature = "boot_minimal"))]
 pub mod uefi_entry;
+#[cfg(not(any(feature = "uefi_boot", feature = "boot_minimal")))]
+pub mod uefi_entry {
+    /// Compatibility RSDP placeholder for non-UEFI diagnostic builds.
+    pub static mut RSDP_PHYS: u64 = 0;
+}
 #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod uentry;
 #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]

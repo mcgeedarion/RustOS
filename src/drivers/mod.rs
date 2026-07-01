@@ -19,6 +19,7 @@ pub mod gpu;
 pub use gpu::vga;
 pub use gpu::{drm, gop, virtio_gpu};
 pub mod input;
+pub mod keyboard;
 pub mod net;
 // Compatibility re-export for `crate::drivers::nic::*` callers.
 pub use net::nic;

@@ -18,9 +18,16 @@ pub mod superblock;
 pub mod symlink;
 
 pub use api::{
-    create_file, mount, read_file, readdir, set_times, sys_chmod, sys_chown, sys_link, sys_lstat,
+    create_file, mount, read_file, readdir, set_times, stat, sys_chmod, sys_chown, sys_link, sys_lstat,
     sys_mkdir, sys_readlink, sys_rename, sys_rmdir, sys_stat, sys_statfs, sys_symlink,
     sys_truncate, sys_unlink, write_file,
 };
 pub use inode::Ext2DirEntry;
 pub use superblock::{Ext2Stat, Ext2Statfs};
+
+/// Return whether `path` resolves to an ext2 directory.
+pub fn is_dir(path: &str) -> bool {
+    stat(path)
+        .map(|st| (st.mode & 0o170000) == 0o040000)
+        .unwrap_or(false)
+}

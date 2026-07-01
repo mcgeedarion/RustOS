@@ -38,6 +38,7 @@ pub use core::{
 };
 pub use poll::{is_socket_fd, socket_poll, socket_read, socket_write};
 pub use syscalls::{
-    socket_close, socket_dup, sys_close_socket, sys_recvmsg, sys_sendmsg, sys_socketpair,
+    socket_close, socket_dup, sys_close_socket, sys_recv, sys_recvmsg, sys_send, sys_sendmsg,
+    sys_socketpair,
 };
 pub use traits::{sys_getsockopt, sys_setsockopt, sys_shutdown};

@@ -14,6 +14,7 @@
 //! ```
 
 pub mod aslr;
+pub mod bpf;
 pub mod canary;
 pub mod capset;
 // GUESS: callers use crate::security::CapSet; canonical is capset::CapSet.
@@ -28,6 +29,7 @@ impl Cap {
 }
 pub mod dac;
 pub mod lsm;
+pub mod landlock;
 pub mod ns;
 pub mod pti;
 pub mod seccomp;
