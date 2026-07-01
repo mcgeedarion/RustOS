@@ -24,6 +24,7 @@
 pub mod e1000e;
 pub mod nic;
 pub mod virtio_net;
+pub mod virtio_net_mmio;
 
 const VENDOR_INTEL: u16 = 0x8086;
 const DEV_E1000E_82574L: u16 = 0x10D3;

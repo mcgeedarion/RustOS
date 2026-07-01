@@ -251,6 +251,10 @@ pub struct Pcb {
     pub supp_groups: Vec<u32>,
 }
 
+/// Compatibility alias for call sites that still use the older `Process`
+/// type name for the canonical process-control block.
+pub type Process = Pcb;
+
 // SAFETY: Pcb is accessed only under ProcLock::inner (spin::Mutex).
 unsafe impl Send for Pcb {}
 unsafe impl Sync for Pcb {}
