@@ -429,9 +429,28 @@ pub fn sys_pwrite64(fd: usize, buf_va: usize, count: usize, offset: i64) -> isiz
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 struct IoVec {
     base: usize,
     len: usize,
+}
+
+fn load_iovecs(iov_va: usize, iovcnt: usize) -> Result<Vec<IoVec>, isize> {
+    let iov_size = core::mem::size_of::<IoVec>();
+    if !validate_user_ptr(iov_va, iovcnt * iov_size) {
+        return Err(-14);
+    }
+
+    let mut iovecs = Vec::with_capacity(iovcnt);
+    for i in 0..iovcnt {
+        let mut raw = [0u8; core::mem::size_of::<IoVec>()];
+        if copy_from_user(&mut raw, iov_va + i * iov_size).is_err() {
+            return Err(-14);
+        }
+        let iov: IoVec = unsafe { core::mem::transmute(raw) };
+        iovecs.push(iov);
+    }
+    Ok(iovecs)
 }
 
 /// sys_writev(fd, iov_va, iovcnt)  [NR 20]
@@ -450,18 +469,12 @@ pub fn sys_writev(fd: usize, iov_va: usize, iovcnt: usize) -> isize {
     if !fd_allows_write(fd) {
         return -9;
     }
-    let iov_size = core::mem::size_of::<IoVec>();
-    if !validate_user_ptr(iov_va, iovcnt * iov_size) {
-        return -14;
-    }
-
+    let iovecs = match load_iovecs(iov_va, iovcnt) {
+        Ok(iovecs) => iovecs,
+        Err(e) => return e,
+    };
     let mut total_len: usize = 0;
-    for i in 0..iovcnt {
-        let mut raw = [0u8; 16];
-        if copy_from_user(&mut raw, iov_va + i * iov_size).is_err() {
-            return -14;
-        }
-        let iov: IoVec = unsafe { core::mem::transmute(raw) };
+    for iov in &iovecs {
         total_len = total_len.saturating_add(iov.len);
     }
 
@@ -487,12 +500,7 @@ pub fn sys_writev(fd: usize, iov_va: usize, iovcnt: usize) -> isize {
     }
 
     let mut written = 0isize;
-    for i in 0..iovcnt {
-        let mut raw = [0u8; 16];
-        if copy_from_user(&mut raw, iov_va + i * iov_size).is_err() {
-            return -14;
-        }
-        let iov: IoVec = unsafe { core::mem::transmute(raw) };
+    for iov in iovecs {
         if iov.len == 0 {
             continue;
         }
@@ -510,6 +518,9 @@ pub fn sys_readv(fd: usize, iov_va: usize, iovcnt: usize) -> isize {
     if iovcnt == 0 {
         return 0;
     }
+    if iovcnt > 1024 {
+        return -22;
+    }
     let bfd = match resolve(fd) {
         n if n < 0 => return n,
         n => n as usize,
@@ -517,15 +528,12 @@ pub fn sys_readv(fd: usize, iov_va: usize, iovcnt: usize) -> isize {
     if !fd_allows_read(fd) {
         return -9;
     }
-    let iov_size = core::mem::size_of::<IoVec>();
+    let iovecs = match load_iovecs(iov_va, iovcnt) {
+        Ok(iovecs) => iovecs,
+        Err(e) => return e,
+    };
     let mut total = 0isize;
-    for i in 0..iovcnt {
-        let ptr = iov_va + i * iov_size;
-        let mut raw = [0u8; 16];
-        if copy_from_user(&mut raw, ptr).is_err() {
-            return -14;
-        }
-        let iov: IoVec = unsafe { core::mem::transmute(raw) };
+    for iov in iovecs {
         if iov.len == 0 {
             continue;
         }
