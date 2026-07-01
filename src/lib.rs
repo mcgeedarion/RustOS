@@ -20,7 +20,6 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 #![feature(alloc_error_handler)]
-#![feature(naked_functions)]
 
 extern crate alloc;
 
@@ -58,11 +57,11 @@ pub use init::initramfs;
 /// Core kernel utilities — panic handler, rand, uaccess, architecture info.
 pub mod kernel;
 
-/// Compatibility alias for full-kernel modules that still import user-copy
-/// helpers from `crate::uaccess` while the canonical home is
-/// `crate::kernel::uaccess`.
+/// Compatibility aliases for full-kernel modules that still import helpers from
+/// their historical crate-root paths while the canonical home is under
+/// `crate::kernel`.
 #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
-pub use kernel::uaccess;
+pub use kernel::{rand, uaccess};
 
 /// Symmetric multi-processing — per-CPU blocks, IPI send/dispatch.
 #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
