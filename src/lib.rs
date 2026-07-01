@@ -31,6 +31,10 @@ extern crate alloc;
 /// Architecture dispatch layer — cfg-routes to x86_64 or aarch64.
 pub mod arch;
 
+/// Full-kernel global allocator compatibility wiring.
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
+pub mod allocator;
+
 /// Boot performance markers — `boot_mark!` macro, `read_hw_counter()`.
 pub mod boot_perf;
 

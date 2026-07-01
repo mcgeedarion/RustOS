@@ -34,6 +34,7 @@ pub mod mlock;
 pub mod mmap;
 pub mod page_fault;
 pub mod phys;
+pub mod pkeys;
 pub mod pmm;
 pub mod rss;
 pub mod slab;
