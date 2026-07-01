@@ -373,7 +373,7 @@ fn kernel_cargo_command(root: &Path, opts: &BuildOpts, subcommand: &str) -> Resu
             cmd.args(["--profile", "release-boot"]);
             // Lean feature set: no default debug / test / profiling features.
             cmd.arg("--no-default-features");
-            cmd.arg("--features").arg("release-boot");
+            cmd.arg("--features").arg("release-boot,boot_minimal");
         },
     }
 
