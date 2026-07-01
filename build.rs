@@ -49,7 +49,6 @@ fn main() {
         };
         if !script.is_empty() {
             println!("cargo:rerun-if-changed={script}");
-            println!("cargo:rustc-link-arg=-T{script}");
         }
 
         // CRT stubs are only needed for bare-metal ELF builds.

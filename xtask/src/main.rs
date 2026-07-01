@@ -304,10 +304,14 @@ fn parse_build_args(args: &[String]) -> BuildOpts {
             "--debug" => opts.profile = BuildProfile::Dev,
             "--profile" => {
                 i += 1;
-                opts.profile = match args.get(i).map(String::as_str) {
+                opts.profile = match args
+                    .get(i)
+                    .map(|profile| profile.to_ascii_lowercase().replace('_', "-"))
+                    .as_deref()
+                {
                     Some("dev") | Some("debug") => BuildProfile::Dev,
                     Some("release") => BuildProfile::Release,
-                    Some("release-boot") => BuildProfile::ReleaseBoot,
+                    Some("release-boot") | Some("releaseboot") => BuildProfile::ReleaseBoot,
                     other => {
                         eprintln!("[xtask] unknown --profile: {:?}", other);
                         exit(1);
