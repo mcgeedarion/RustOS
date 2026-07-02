@@ -32,6 +32,8 @@ use std::{
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::{exit, Command},
+    thread,
+    time::{Duration, Instant},
 };
 
 const OS_RELEASE_CONTENT: &[u8] =
@@ -996,6 +998,51 @@ fn smoke_marker_regex() -> &'static str {
     "BOOT_MINIMAL_OK|FULL_OS_USERSPACE_OK|entering cpu_idle"
 }
 
+fn serial_has_smoke_marker(log_path: &Path) -> Result<bool> {
+    match fs::read_to_string(log_path) {
+        Ok(serial) => Ok(serial.contains("BOOT_MINIMAL_OK")
+            || serial.contains("FULL_OS_USERSPACE_OK")
+            || serial.contains("entering cpu_idle")),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err).with_context(|| format!("read smoke log {}", log_path.display())),
+    }
+}
+
+fn run_until_smoke_marker(cmd: &mut Command, log_path: &Path, timeout: Duration) -> Result<()> {
+    log(format!("running: {:?}", cmd));
+    let mut child = cmd.spawn().context("failed to spawn QEMU")?;
+    let deadline = Instant::now() + timeout;
+
+    loop {
+        if serial_has_smoke_marker(log_path)? {
+            let _ = child.kill();
+            let _ = child.wait();
+            log(format!("smoke marker found in {}", log_path.display()));
+            return Ok(());
+        }
+
+        if let Some(status) = child.try_wait().context("poll QEMU status")? {
+            if status.success() && serial_has_smoke_marker(log_path)? {
+                log(format!("smoke marker found in {}", log_path.display()));
+                return Ok(());
+            }
+            bail!("QEMU exited before smoke marker appeared with {status}");
+        }
+
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!(
+                "smoke marker not found in {} before timeout; expected {}",
+                log_path.display(),
+                smoke_marker_regex()
+            );
+        }
+
+        thread::sleep(Duration::from_millis(100));
+    }
+}
+
 fn run_smoke(root: &Path, opts: &BuildOpts) -> Result<()> {
     ensure_qemu_for_arch(opts.arch)?;
 
@@ -1011,8 +1058,8 @@ fn run_smoke(root: &Path, opts: &BuildOpts) -> Result<()> {
     match opts.arch {
         Arch::X86_64 => {
             let ovmf = ensure_ovmf(root)?;
-            let mut cmd = Command::new("timeout");
-            cmd.arg("60").arg("qemu-system-x86_64").args([
+            let mut cmd = Command::new("qemu-system-x86_64");
+            cmd.args([
                 "-machine",
                 "q35",
                 "-cpu",
@@ -1033,7 +1080,7 @@ fn run_smoke(root: &Path, opts: &BuildOpts) -> Result<()> {
             if let Some(initrd) = initrd.as_deref() {
                 cmd.arg("-initrd").arg(initrd);
             }
-            run_allow_timeout(&mut cmd)?;
+            run_until_smoke_marker(&mut cmd, &log_path, Duration::from_secs(60))?;
         },
         Arch::AArch64 => {
             let fw_candidates = [
@@ -1051,8 +1098,8 @@ fn run_smoke(root: &Path, opts: &BuildOpts) -> Result<()> {
                         "AArch64 UEFI firmware not found; install qemu-efi-aarch64 or set QEMU_EFI"
                     )
                 })?;
-            let mut cmd = Command::new("timeout");
-            cmd.arg("45").arg("qemu-system-aarch64").args([
+            let mut cmd = Command::new("qemu-system-aarch64");
+            cmd.args([
                 "-machine",
                 "virt",
                 "-cpu",
@@ -1075,35 +1122,10 @@ fn run_smoke(root: &Path, opts: &BuildOpts) -> Result<()> {
             if let Some(initrd) = initrd.as_deref() {
                 cmd.arg("-initrd").arg(initrd);
             }
-            run_allow_timeout(&mut cmd)?;
+            run_until_smoke_marker(&mut cmd, &log_path, Duration::from_secs(45))?;
         },
     }
-
-    let serial = fs::read_to_string(&log_path)
-        .with_context(|| format!("read smoke log {}", log_path.display()))?;
-    if serial.contains("BOOT_MINIMAL_OK")
-        || serial.contains("FULL_OS_USERSPACE_OK")
-        || serial.contains("entering cpu_idle")
-    {
-        log(format!("smoke marker found in {}", log_path.display()));
-        Ok(())
-    } else {
-        bail!(
-            "smoke marker not found in {}; expected {}",
-            log_path.display(),
-            smoke_marker_regex()
-        )
-    }
-}
-
-fn run_allow_timeout(cmd: &mut Command) -> Result<()> {
-    log(format!("running: {:?}", cmd));
-    let status = cmd.status().context("failed to spawn command")?;
-    if status.success() || status.code() == Some(124) {
-        Ok(())
-    } else {
-        bail!("command failed with {status}")
-    }
+    Ok(())
 }
 
 // ── initramfs / userspace build ────────────────────────────────────────────
