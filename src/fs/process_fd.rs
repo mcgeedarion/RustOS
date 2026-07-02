@@ -134,11 +134,19 @@ fn dup_backing(bfd: usize) -> usize {
     } else if crate::net::socket::is_socket_fd(bfd) {
         crate::net::socket::socket_dup(bfd);
         bfd
+    } else if crate::security::landlock::is_landlock_fd(bfd) {
+        crate::security::landlock::dup_landlock_fd(bfd)
+    } else if crate::security::bpf::is_bpf_fd(bfd) {
+        crate::security::bpf::dup_bpf_fd(bfd);
+        bfd
     } else if crate::fs::eventfd::is_eventfd(bfd) {
         crate::fs::eventfd::efd_dup(bfd);
         bfd
     } else if crate::fs::timerfd::is_timerfd(bfd) {
         crate::fs::timerfd::tfd_dup(bfd);
+        bfd
+    } else if crate::fs::signalfd::is_signalfd(bfd) {
+        crate::fs::signalfd::sfd_dup(bfd);
         bfd
     } else if crate::fs::inotify::is_inotify_fd(bfd) {
         crate::fs::inotify::inotify_dup(bfd);
@@ -514,6 +522,10 @@ fn close_backing(bfd: usize) {
         crate::fs::inotify::inotify_close(bfd);
     } else if crate::fs::fanotify::is_fanotify_fd(bfd) {
         crate::fs::fanotify::fanotify_close(bfd);
+    } else if crate::security::landlock::is_landlock_fd(bfd) {
+        crate::security::landlock::close_landlock_fd(bfd);
+    } else if crate::security::bpf::is_bpf_fd(bfd) {
+        crate::security::bpf::close_bpf_fd(bfd);
     } else if crate::fs::eventfd::is_eventfd(bfd) {
         crate::fs::eventfd::sys_close_efd(bfd);
     } else if crate::fs::timerfd::is_timerfd(bfd) {

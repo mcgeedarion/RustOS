@@ -323,4 +323,5 @@ macro_rules! lsm_check {
 
 pub fn lsm_init() {
     register_lsm(&crate::security::dac::DAC_MODULE);
+    register_lsm(&crate::security::landlock::LANDLOCK_LSM);
 }

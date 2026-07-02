@@ -153,6 +153,14 @@ pub fn close_fd_no_meta(fd: usize) {
         crate::fs::timerfd::sys_close_tfd(fd);
         return;
     }
+    if crate::security::landlock::is_landlock_fd(fd) {
+        crate::security::landlock::close_landlock_fd(fd);
+        return;
+    }
+    if crate::security::bpf::is_bpf_fd(fd) {
+        crate::security::bpf::close_bpf_fd(fd);
+        return;
+    }
     if crate::fs::signalfd::is_signalfd(fd) {
         crate::fs::signalfd::sys_close_sfd(fd);
         return;

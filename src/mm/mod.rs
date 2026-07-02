@@ -39,6 +39,7 @@ pub mod pmm;
 pub mod rss;
 pub mod slab;
 pub mod swap;
+pub mod vm_rw;
 pub mod vma;
 
 /// Initialise memory subsystems that require explicit boot-time setup.
