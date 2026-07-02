@@ -1,76 +1,81 @@
 # RustOS Syscall Correctness Matrix
 
-This table tracks every syscall by its Linux x86_64 number, current
-implementation status, test coverage, and whether it safely returns `-EFAULT`
-on bad user pointers rather than panicking.
+_Last reviewed: 2026-07-01._
 
-**Status legend**
+Syscall code currently lives in the **full kernel graph** and is not compiled by
+the default `uefi_boot`/`boot_minimal` profile. The table below reflects the
+current implementation maturity of the syscall surface, not a Linux
+compatibility claim.
+
+## Status legend
 
 | Status | Meaning |
-|--------|---------|
-| `real` | Correct implementation, in-kernel test exists |
-| `partial` | Happy path works; error paths or edge cases missing |
-| `stub` | Returns `ENOSYS` (or a fixed success value) |
-| `planned` | Tracked; no code yet |
+|---|---|
+| `real` | Correct implementation with in-kernel or host-side coverage |
+| `partial` | Main path exists, but semantics, edge cases, or bad-pointer handling are incomplete |
+| `stub` | Routed to a fixed result or `ENOSYS`/similar placeholder |
+| `planned` | Not implemented yet |
 
-**EFAULT-safe**: `✓` means the syscall returns `-EFAULT` on any bad userspace
-pointer rather than panicking or triple-faulting.
+**EFAULT-safe** means every userspace pointer is validated and the syscall
+returns `-EFAULT` instead of panicking or faulting the kernel. A `partial` value
+means some pointer paths are guarded but the syscall has not been fully audited.
 
----
+## Current syscall infrastructure
+
+| Component | Status | Notes |
+|---|---|---|
+| `src/syscall/routers.rs` | partial | Routing layer exists for the full-kernel graph |
+| `src/syscall/nr.rs` | partial | Linux syscall number definitions exist |
+| `src/syscall/stubs.rs` | stub | Explicit placeholder routes remain part of the current state |
+| `src/syscall/fault.rs` | partial | Fault-injection hooks for resource/fd-table errors |
+| `src/syscall/profile.rs` | partial | Optional `syscall-trace` counters and timing hooks |
+| `src/arch/x86_64/syscall.rs` | partial | x86_64 syscall entry glue exists |
+| `src/arch/aarch64/syscall.rs` | partial | AArch64 syscall entry glue exists |
 
 ## Minimum init syscall set (M3 gate)
 
-These seven syscalls are required before `/init` can run a real workload.
-All must be `real` and `EFAULT-safe` before M3 is closed.
+All rows in this section must become `real` and EFAULT-safe before M3 can be
+closed.
 
-| Syscall | Number | Status | In-kernel test | EFAULT-safe | Notes |
-|---------|--------|--------|---------------|-------------|-------|
-| `write` | 1 | partial | ✗ | ✗ | Console fd 1/2 only; no file-backed |
-| `open` | 2 | stub | ✗ | ✗ | Returns fd 0-2 only |
-| `close` | 3 | stub | ✗ | ✗ | — |
-| `fork` | 57 | stub | ✗ | ✗ | Returns ENOSYS |
-| `execve` | 59 | partial | ✗ | ✗ | ELF loader wired; arg passing incomplete |
-| `exit` | 60 | partial | ✗ | n/a | Process teardown incomplete |
-| `wait4` | 61 | stub | ✗ | ✗ | Returns ECHILD |
+| Syscall | Linux x86_64 number | Status | EFAULT-safe | Notes |
+|---|---:|---|---|---|
+| `read` | 0 | partial | partial | File/socket/pipe paths exist in the tree; semantics need full audit |
+| `write` | 1 | partial | partial | Console/file-backed behavior is still being unified |
+| `open` / `openat` | 2 / 257 | partial | partial | VFS/open helpers exist; compatibility and edge cases remain |
+| `close` | 3 | partial | n/a | fd lifecycle exists but needs broader coverage |
+| `fork` / `clone` | 57 / 56 | partial | n/a | Process/task creation code exists; POSIX semantics incomplete |
+| `execve` | 59 | partial | partial | ELF loader path exists; argv/envp/auxv correctness remains |
+| `exit` / `exit_group` | 60 / 231 | partial | n/a | Teardown paths exist; group semantics need validation |
+| `wait4` | 61 | partial | partial | Wait/child collection code exists; options/status edge cases remain |
 
-## Extended syscall set (M4 gate)
+## Extended M4/M5 syscall areas
 
-| Syscall | Number | Status | In-kernel test | EFAULT-safe | Notes |
-|---------|--------|--------|---------------|-------------|-------|
-| `read` | 0 | partial | ✗ | ✗ | — |
-| `mmap` | 9 | partial | ✗ | ✗ | Anonymous only |
-| `mprotect` | 10 | stub | ✗ | ✗ | — |
-| `munmap` | 11 | partial | ✗ | ✗ | — |
-| `brk` | 12 | partial | ✗ | n/a | — |
-| `ioctl` | 16 | stub | ✗ | ✗ | Returns ENOTTY |
-| `pipe` | 22 | stub | ✗ | ✗ | Returns ENOSYS |
-| `dup` / `dup2` | 32/33 | stub | ✗ | ✗ | — |
-| `getpid` | 39 | stub | ✗ | n/a | Returns 1 |
-| `socket` | 41 | stub | ✗ | ✗ | Returns ENOSYS |
-| `exit_group` | 231 | partial | ✗ | n/a | — |
-
----
+| Area | Representative syscalls | Status | Notes |
+|---|---|---|---|
+| Memory mapping | `mmap`, `mprotect`, `munmap`, `brk`, `mincore` | partial | VMA/mmap modules exist; file-backed and protection edge cases remain |
+| File metadata/directories | `stat`, `fstat`, `getdents`, `fcntl`, `ioctl` | partial | VFS helpers exist but compatibility is incomplete |
+| Polling and events | `poll`, `eventfd`, `timerfd`, `signalfd`, `inotify`, `fanotify` | partial | Modules exist; userspace ABI coverage is incomplete |
+| Pipes and fd movement | `pipe`, `dup`, `dup2`, `splice`, `close_range` | partial | Implementations/scaffolding exist with incomplete semantics |
+| Sockets | `socket`, `bind`, `listen`, `accept`, `connect`, UDP/TCP ops | experimental | Network/socket modules exist but are not M5-supported yet |
+| Scheduling/time | `nanosleep`, futex, rusage/rlimit/time helpers | partial | Core modules exist; conformance needs tests |
+| Security/namespaces | seccomp/capability/namespace-related calls | experimental | Security scaffolding exists; policy semantics are incomplete |
+| io_uring | setup/enter/register and selected ops | experimental | Ring and op modules exist; not a compatibility guarantee |
 
 ## Safety invariants
 
-1. **No panic on bad user pointer.** Every syscall that reads from or writes
-   to a userspace address must validate it through the architecture's user-access
-   helpers and return `-EFAULT` on failure.  
-   Tracking issue: add `validate_user_ptr()` helper and audit all syscalls.
+1. No syscall should panic on a bad userspace pointer.
+2. Malformed arguments (`fd < 0`, invalid flags, zero lengths, null pointers
+   where not allowed) must return errno values instead of `unwrap()`/`expect()`.
+3. `syscall-trace` must stay off by default and must not add overhead to normal
+   smoke or release-boot images.
+4. New syscall work should add or update `kmtest` coverage before changing a
+   row to `real`.
 
-2. **No panic on malformed arguments.** Syscalls must handle `fd < 0`,
-   `len == 0`, `NULL` pointers, and out-of-range flags without calling
-   `unwrap()` or `expect()`.
+## Adding or promoting a syscall
 
-3. **`syscall-trace` feature only in profiling builds.** The per-syscall
-   counter and cycle-timing path is `#[cfg(feature = "syscall-trace")]` only;
-   release and smoke builds must not pay the overhead.
-
----
-
-## Adding a new syscall
-
-1. Add the dispatch arm in `src/syscall/dispatch.rs`.
-2. Add an in-kernel test in `src/kmtest/syscall_<name>.rs`.
-3. Mark it `real` in this table only after the test passes in CI.
-4. Confirm EFAULT-safe by adding a bad-pointer test case.
+1. Add/update the router and implementation under `src/syscall/` or the owning
+   subsystem module.
+2. Add bad-pointer and malformed-argument coverage where applicable.
+3. Update this matrix and `docs/status.md` in the same change.
+4. Run `cargo xtask roadmap-check` and the most relevant `cargo xtask check` or
+   smoke command.

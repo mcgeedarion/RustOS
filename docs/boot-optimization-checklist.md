@@ -15,8 +15,8 @@ Before changing anything, establish a timing baseline.
   - `BOOT_INFO_BUILT` — after `BootInfo` is fully populated
   - `KERNEL_MAIN_ENTER` — first line of `kernel_main`
   - `ARCH_INIT_DONE` — after `arch::init()` returns
-- [ ] Emit all timing marks to the serial log in a parseable format, e.g. `[BOOT_PERF] MMAP_CAPTURED +2ms`
-- [ ] Add a CI step in `kernel-test.yml` that greps the serial log for `[BOOT_PERF]` markers and records them as job annotations
+- [ ] Emit all timing marks to the serial log in a parseable format, using the `BOOT_MARK label=<LABEL> ticks=<U64>` format documented in `docs/boot-perf.md`
+- [ ] Add a CI step in `xtask smoke / repository CI` that greps the serial log for `BOOT_MARK` markers and records them as job annotations
 - [ ] Record a cold-boot baseline in `docs/boot-perf-baseline.txt` so future PRs can diff against it
 - [ ] Use identical QEMU flags for every measurement run to eliminate timing noise
 
@@ -35,7 +35,7 @@ Keep the pre-`ExitBootServices()` window as short as possible.
 
 ---
 
-## 3. BootInfo Construction (`src/init/boot_info.rs`)
+## 3. BootInfo Construction (`src/init/boot_info.rs and related `src/init/` boot handoff code`)
 
 The handoff struct should be built with zero heap allocation and no redundant copies.
 
@@ -57,7 +57,7 @@ Parsing the memory map is often the single most expensive operation during early
 
 ---
 
-## 5. Initramfs Discovery (`src/init/initramfs/mod.rs`)
+## 5. Initramfs Discovery (`src/init/initramfs.rs / src/fs/initramfs.rs`)
 
 - [ ] Use the `LoadFile2` protocol pointer stored by the UEFI stub — do not scan the ESP directory
 - [ ] Confirm `set_initramfs_range()` is called exactly once before the heap is initialised
@@ -80,11 +80,11 @@ Debug output is often the largest single source of boot latency.
 
 A smaller boot image loads faster from the virtual disk.
 
-- [ ] Run `cargo bloat --release --target targets/x86_64-kernel.json` and review the top 20 functions
+- [ ] Run `cargo bloat --release --target x86_64-unknown-uefi` and review the top 20 functions
 - [ ] Strip `.comment` and `.eh_frame` sections (already in `linker/x86_64.ld` — verify they stay stripped on release builds)
 - [ ] Confirm `opt-level = "z"` or `opt-level = 3` is set in `[profile.release]` in the root `Cargo.toml`
 - [ ] Confirm LTO is enabled: `lto = "thin"` at minimum for the release profile
-- [ ] Keep `boot-x86_64.img` under 2 MB for CI; add a size check step to `kernel-test.yml`
+- [ ] Keep `boot-x86_64.img` under 2 MB for CI; add a size check step to `xtask smoke / repository CI`
 
 ---
 
@@ -102,7 +102,7 @@ Reduce overhead in the test environment without masking real-hardware issues.
 
 ## 9. Regression Gate
 
-- [ ] Add a `boot-perf` job to `ci.yml` that fails if any phase exceeds its baseline by more than 20%
+- [ ] Add a `boot-perf` job to `repository CI` that fails if any phase exceeds its baseline by more than 20%
 - [ ] Store the baseline in `docs/boot-perf-baseline.txt` and update it intentionally via a `[perf-update]` commit flag
 - [ ] Run the full smoke boot on every PR, not just pushes to `main`
 

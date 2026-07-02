@@ -1,33 +1,38 @@
 # RustOS Product Milestones
 
-This table is the canonical definition of "done" for each development stage.
-Every milestone maps to a Cargo feature flag and a CI-verifiable serial sentinel.
-Do **not** close a milestone unless the sentinel appears in both `x86_64` and
-`aarch64` QEMU runs (or the arch is explicitly marked best-effort for that
-milestone).
+_Last reviewed: 2026-07-01._
 
-| Milestone | Goal | Feature flag | CI sentinel | Arch required |
-|-----------|------|--------------|-------------|---------------|
-| **M1** | `boot_minimal` boots on x86_64 and aarch64 | `boot_minimal` | `BOOT_MINIMAL_OK` | x86_64 (required), aarch64 (required) |
-| **M2** | `userspace_boot` launches `/init` | `userspace_boot` | `FULL_OS_USERSPACE_OK` | x86_64 (required), aarch64 (best-effort) |
-| **M3** | Syscalls needed by init are real | `userspace_boot` | init completes `open/fork/exec/wait/exit` without ENOSYS | x86_64 (required) |
-| **M4** | VFS + initramfs usable | `full-kernel` | `/init`, `/dev/null`, `/proc/version` accessible | x86_64 (required) |
-| **M5** | Network / display / input demos | `full-kernel` + optional features | Shell or compositor runs as a userspace process | x86_64 (required) |
+The project is currently between **M1** and **M2**: the default UEFI path is a
+minimal boot image, and `userspace_boot` provides a thin userspace handoff path
+while the full mm/fs/proc/syscall graph is stabilized.
 
-## How sentinels work
+| Milestone | Goal | Cargo feature path | CI/local sentinel | Current state |
+|---|---|---|---|---|
+| **M1** | Minimal UEFI boot reaches the idle loop on x86_64 and remains aligned on aarch64 | `boot_minimal` / default `uefi_boot` | `BOOT_MINIMAL_OK` or `entering cpu_idle` | **Current default path** |
+| **M2** | Build an initramfs and reach a userspace handoff marker | `userspace_boot` with `--initrd` when needed | `FULL_OS_USERSPACE_OK` | **Partial**: thin fs/proc shims are intentional |
+| **M3** | Minimum init syscalls have real semantics and bad-pointer safety | full kernel graph, syscall modules | init exercises `open/fork/exec/wait/exit` without `ENOSYS` or panic | **In progress** |
+| **M4** | VFS/initramfs/devfs/procfs are usable enough for real init workloads | full kernel graph | `/init`, `/dev/null`, `/proc/version` accessible | **In progress** |
+| **M5** | Network, display, and input demos run as userspace processes | full kernel graph plus optional device features | shell/compositor/network demo sentinel | **Experimental/planned** |
 
-Sentinels are emitted from a single canonical location — the architecture
-handoff in `kernel_main()` or `boot_minimal::entry()` — over the serial port.
-CI greps for the exact string; no timing heuristics are used.
+## Sentinel contract
 
+Sentinels are emitted on the serial console and are the only supported way to
+decide whether a boot succeeded in automation.
+
+```text
+BOOT_MINIMAL_OK          # minimal boot path reached its success point
+FULL_OS_USERSPACE_OK     # userspace handoff path reached its success point
+entering cpu_idle        # generic idle-loop marker
 ```
-BOOT_MINIMAL_OK          # emitted at end of boot_minimal path
-FULL_OS_USERSPACE_OK     # emitted after /init returns successfully
-```
 
-If a sentinel is missing after the 60-second QEMU timeout, the CI job **fails**.
+`cargo xtask smoke` treats any of the three strings as success and writes the
+serial log under `target/smoke-<arch>.log`.
 
-## Current status
+## Promotion rule
 
-See [docs/status.md](status.md) for the per-subsystem implementation state
-that feeds into each milestone.
+Do not mark a milestone complete unless:
+
+1. `docs/status.md` and `docs/syscalls.md` agree with the code state.
+2. The relevant `cargo xtask smoke` or `cargo xtask check` command succeeds.
+3. Any claimed performance or image-size improvement has a checked-in
+   measurement or a documented command to reproduce it.
