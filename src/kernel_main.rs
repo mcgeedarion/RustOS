@@ -14,10 +14,10 @@ pub extern "C" fn kernel_main(boot_info: &'static BootInfo) -> ! {
     crate::boot_mark!("BOOT_ENTRY");
 
     #[cfg(all(feature = "userspace_boot", target_arch = "aarch64"))]
-    crate::serial_println!("RustOS: boot target [SECONDARY] — entering common kernel_main");
+    crate::serial_println!("RustOS: boot target [SECONDARY] - entering common kernel_main");
     #[cfg(not(all(feature = "userspace_boot", target_arch = "aarch64")))]
     crate::serial_println!(
-        "RustOS: boot target [{}] — entering common kernel_main",
+        "RustOS: boot target [{}] - entering common kernel_main",
         BootInfo::priority().as_str(),
     );
 

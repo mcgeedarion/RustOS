@@ -245,7 +245,7 @@ unsafe extern "efiapi" fn uefi_start(
     if !gop_ok {
         efi_print(
             st.con_out,
-            "rustos: GOP not available — serial-only mode\r\n",
+            "rustos: GOP not available - serial-only mode\r\n",
         );
     }
 

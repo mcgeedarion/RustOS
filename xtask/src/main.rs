@@ -37,12 +37,28 @@ use std::{
 const OS_RELEASE_CONTENT: &[u8] =
     b"NAME=RustOS\nID=rustos\nVERSION=0.1.0\nPRETTY_NAME=\"RustOS 0.1.0\"\n";
 
-/// Fedora mirror for a known-good OVMF build. Only fetched when no system
+/// Known-good OVMF firmware downloads. Only fetched when no system
 /// OVMF is present and OVMF_CODE is not set in the environment.
-/// The file is cached at .ovmf/OVMF_CODE.fd after the first download.
-const OVMF_DOWNLOAD_URL: &str =
-    "https://dl.fedoraproject.org/pub/fedora/linux/releases/40/Everything/x86_64/os/Packages/e/\
-     edk2-ovmf-20231122-6.fc40.noarch.rpm";
+/// The file is cached at .ovmf/OVMF_CODE.fd after the first successful download.
+const OVMF_DOWNLOAD_URLS: &[&str] = &[
+    // Direct firmware image fallback. This avoids requiring rpm2cpio/cpio on
+    // lean developer containers.
+    "https://raw.githubusercontent.com/retrage/edk2-nightly/master/bin/RELEASEX64_OVMF_CODE.fd",
+    // Fedora 42 updates. Prefer this RPM before older release-tree packages
+    // because updates URLs tend to outlive
+    // the release-tree package once the release receives an OVMF update.
+    "https://download-ib01.fedoraproject.org/pub/fedora/linux/updates/42/Everything/x86_64/Packages/e/\
+     edk2-ovmf-20250812-21.fc42.noarch.rpm",
+    // Fedora 43 release tree fallback.
+    "https://dl.fedoraproject.org/pub/fedora/linux/releases/43/Everything/x86_64/os/Packages/e/\
+     edk2-ovmf-20250812-18.fc43.noarch.rpm",
+];
+
+const OVMF_EXTRACTED_CANDIDATES: &[&str] = &[
+    "usr/share/edk2/x64/OVMF_CODE.fd",
+    "usr/share/edk2/ovmf/OVMF_CODE.fd",
+    "usr/share/edk2/ovmf/OVMF_CODE_4M.fd",
+];
 
 /// Well-known system paths where distros install OVMF.
 const OVMF_SYSTEM_CANDIDATES: &[&str] = &[
@@ -794,23 +810,61 @@ fn ensure_ovmf(root: &Path) -> Result<PathBuf> {
     }
 
     // Download
-    log("OVMF not found — downloading from Fedora mirrors (one-time)...");
+    log("OVMF not found — downloading firmware (one-time)...");
     let rpm = root.join(".ovmf/ovmf.rpm");
     fs::create_dir_all(root.join(".ovmf")).context("create .ovmf dir")?;
 
-    run(Command::new("curl")
-        .args(["-fsSL", "-o"])
-        .arg(&rpm)
-        .arg(OVMF_DOWNLOAD_URL))?;
+    let mut downloaded_rpm = false;
+    for url in OVMF_DOWNLOAD_URLS {
+        let direct_fd = url.ends_with(".fd");
+        let download_path = if direct_fd { &cache } else { &rpm };
+        match run(Command::new("curl")
+            .args(["-fsSL", "-o"])
+            .arg(download_path)
+            .arg(url))
+        {
+            Ok(()) => {
+                if direct_fd {
+                    return Ok(cache);
+                }
+                downloaded_rpm = true;
+                break;
+            },
+            Err(err) => {
+                log(format!("OVMF download failed from {url}: {err}"));
+                let _ = fs::remove_file(download_path);
+            },
+        }
+    }
+    if !downloaded_rpm {
+        bail!(
+            "Could not download OVMF from any configured mirror.\n\
+             Install OVMF via your package manager, or set OVMF_CODE=/path/to/OVMF_CODE.fd"
+        );
+    }
 
     // Extract the .fd file from the RPM (requires rpm2cpio + cpio, or bsdtar)
-    if which_first(&["rpm2cpio"]).is_some() {
+    if which_first(&["rpm2cpio"]).is_some() && which_first(&["cpio"]).is_some() {
         run(Command::new("sh")
             .current_dir(root.join(".ovmf"))
             .arg("-c")
             .arg("rpm2cpio ovmf.rpm | cpio -idm --quiet"))?;
-        // Locate OVMF_CODE.fd inside the extracted tree
-        let extracted = root.join(".ovmf/usr/share/edk2/x64/OVMF_CODE.fd");
+    } else if which_first(&["bsdtar"]).is_some() {
+        run(Command::new("bsdtar")
+            .current_dir(root.join(".ovmf"))
+            .args(["-xf", "ovmf.rpm"]))?;
+    } else {
+        bail!(
+            "Could not extract OVMF from RPM because neither rpm2cpio+cpio nor bsdtar is available.\n\
+             Install OVMF via your package manager, install an RPM extraction tool, or set \
+             OVMF_CODE=/path/to/OVMF_CODE.fd"
+        );
+    }
+
+    // Locate the firmware inside the extracted tree. Fedora packages have
+    // used multiple paths across releases.
+    for rel in OVMF_EXTRACTED_CANDIDATES {
+        let extracted = root.join(".ovmf").join(rel);
         if extracted.exists() {
             fs::rename(&extracted, &cache).context("move OVMF_CODE.fd")?;
             return Ok(cache);
