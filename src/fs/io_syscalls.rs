@@ -169,6 +169,8 @@ pub fn sys_read(fd: usize, buf_va: usize, count: usize) -> isize {
         n = crate::fs::eventfd::eventfd_read(bfd, &mut kbuf);
     } else if crate::fs::timerfd::is_timerfd(bfd) {
         n = crate::fs::timerfd::timerfd_read(bfd, &mut kbuf);
+    } else if crate::fs::signalfd::is_signalfd(bfd) {
+        n = crate::fs::signalfd::signalfd_read(bfd, &mut kbuf);
     } else if crate::fs::pipe::is_pipe(bfd) {
         n = crate::fs::pipe::pipe_read(bfd, &mut kbuf);
     } else if crate::net::socket::is_socket_fd(bfd) {
