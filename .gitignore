@@ -18,6 +18,11 @@
 /boot-x86_64.img
 /boot.img
 
+# Initramfs artifacts produced by cargo xtask build-init
+/initramfs.cpio
+/initramfs_root/
+/userspace/init/target/
+
 # Editor / OS clutter
 *.swp
 .DS_Store
