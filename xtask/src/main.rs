@@ -235,11 +235,37 @@ fn which_first(names: &[&str]) -> Option<String> {
     })
 }
 
-fn require_tool(names: &[&str], install_hint: &str) {
-    if which_first(names).is_none() {
-        eprintln!("[xtask] ERROR: none of {:?} found on PATH", names);
-        eprintln!("[xtask] Install with: {install_hint}");
-        exit(1);
+fn qemu_install_hint(arch: Arch) -> &'static str {
+    match arch {
+        Arch::X86_64 => {
+            "Ubuntu/Debian: apt install qemu-system-x86\n\
+             Fedora: dnf install qemu-system-x86\n\
+             Arch: pacman -S qemu-system-x86\n\
+             macOS: brew install qemu"
+        },
+        Arch::AArch64 => {
+            "Ubuntu/Debian: apt install qemu-system-arm qemu-efi-aarch64\n\
+             Fedora: dnf install qemu-system-aarch64 edk2-aarch64\n\
+             Arch: pacman -S qemu-system-aarch64 edk2-aarch64\n\
+             macOS: brew install qemu"
+        },
+    }
+}
+
+fn ensure_qemu_for_arch(arch: Arch) -> Result<()> {
+    let binary = match arch {
+        Arch::X86_64 => "qemu-system-x86_64",
+        Arch::AArch64 => "qemu-system-aarch64",
+    };
+
+    if which_first(&[binary]).is_some() {
+        Ok(())
+    } else {
+        bail!(
+            "{binary} is required to boot RustOS under QEMU, but it was not found on PATH.\n\
+             Install it with one of:\n{}",
+            qemu_install_hint(arch)
+        );
     }
 }
 
@@ -873,7 +899,7 @@ fn launch_qemu_x86_64(
     initrd: Option<&Path>,
     debug_port: Option<u16>,
 ) -> Result<()> {
-    require_tool(&["qemu-system-x86_64"], "apt install qemu-system-x86");
+    ensure_qemu_for_arch(Arch::X86_64)?;
 
     let mut cmd = Command::new("qemu-system-x86_64");
     cmd.args([
@@ -912,7 +938,7 @@ fn launch_qemu_aarch64(
     initrd: Option<&Path>,
     debug_port: Option<u16>,
 ) -> Result<()> {
-    require_tool(&["qemu-system-aarch64"], "apt install qemu-system-arm");
+    ensure_qemu_for_arch(Arch::AArch64)?;
 
     // Locate AArch64 UEFI firmware
     let fw_candidates = [
@@ -971,6 +997,8 @@ fn smoke_marker_regex() -> &'static str {
 }
 
 fn run_smoke(root: &Path, opts: &BuildOpts) -> Result<()> {
+    ensure_qemu_for_arch(opts.arch)?;
+
     let initrd = ensure_initrd(root, opts)?;
     build_kernel(root, opts)?;
     let esp = stage_esp(root, opts)?;
@@ -982,7 +1010,6 @@ fn run_smoke(root: &Path, opts: &BuildOpts) -> Result<()> {
 
     match opts.arch {
         Arch::X86_64 => {
-            require_tool(&["qemu-system-x86_64"], "apt install qemu-system-x86");
             let ovmf = ensure_ovmf(root)?;
             let mut cmd = Command::new("timeout");
             cmd.arg("60").arg("qemu-system-x86_64").args([
@@ -1009,7 +1036,6 @@ fn run_smoke(root: &Path, opts: &BuildOpts) -> Result<()> {
             run_allow_timeout(&mut cmd)?;
         },
         Arch::AArch64 => {
-            require_tool(&["qemu-system-aarch64"], "apt install qemu-system-arm");
             let fw_candidates = [
                 "/usr/share/AAVMF/AAVMF_CODE.fd",
                 "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
@@ -1301,6 +1327,7 @@ fn main() {
         "run" => {
             let opts = parse_build_args(&args);
             if let Err(e) = (|| -> Result<()> {
+                ensure_qemu_for_arch(opts.arch)?;
                 let initrd = ensure_initrd(&root, &opts)?;
                 build_kernel(&root, &opts)?;
                 let esp = stage_esp(&root, &opts)?;
@@ -1332,6 +1359,7 @@ fn main() {
         "debug" => {
             let opts = parse_build_args(&args);
             if let Err(e) = (|| -> Result<()> {
+                ensure_qemu_for_arch(opts.arch)?;
                 let initrd = ensure_initrd(&root, &opts)?;
                 build_kernel(&root, &opts)?;
                 let esp = stage_esp(&root, &opts)?;
