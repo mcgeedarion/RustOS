@@ -206,14 +206,14 @@ pub fn enter<A: UserspaceBootArch>(boot_info: &'static BootInfo) -> ! {
         }
         #[cfg(not(target_arch = "aarch64"))]
         panic!(
-            "kernel: failed to exec /init — ELF load error.\n\
+            "kernel: failed to exec /init - ELF load error.\n\
              \n\
              Checklist:\n\
-               • /init must be a statically-linked ELF64 (no dynamic loader).\n\
-               • Target architecture must match the running kernel.\n\
-               • /init must have execute permission (mode 0755) in the\n\
+               - /init must be a statically-linked ELF64 (no dynamic loader).\n\
+               - Target architecture must match the running kernel.\n\
+               - /init must have execute permission (mode 0755) in the\n\
                  CPIO archive.\n\
-               • Rebuild with:  cargo xtask build-init --arch <arch>"
+               - Rebuild with:  cargo xtask build-init --arch <arch>"
         );
     }
 
