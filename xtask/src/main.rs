@@ -838,7 +838,7 @@ fn ensure_ovmf(root: &Path) -> Result<PathBuf> {
     }
 
     // Extract the .fd file from the RPM (requires rpm2cpio + cpio, or bsdtar)
-    if which_first(&["rpm2cpio"]).is_some() {
+    if which_first(&["rpm2cpio"]).is_some() && which_first(&["cpio"]).is_some() {
         run(Command::new("sh")
             .current_dir(root.join(".ovmf"))
             .arg("-c")
