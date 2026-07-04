@@ -265,6 +265,14 @@ fn duplicate_backing_fd(bfd: usize) -> Result<usize, isize> {
     } else if crate::fs::timerfd::is_timerfd(bfd) {
         crate::fs::timerfd::tfd_dup(bfd);
         Ok(bfd)
+    } else if crate::fs::signalfd::is_signalfd(bfd) {
+        crate::fs::signalfd::sfd_dup(bfd);
+        Ok(bfd)
+    } else if crate::security::bpf::is_bpf_fd(bfd) {
+        crate::security::bpf::dup_bpf_fd(bfd);
+        Ok(bfd)
+    } else if crate::security::landlock::is_landlock_fd(bfd) {
+        Ok(crate::security::landlock::dup_landlock_fd(bfd))
     } else if crate::fs::inotify::is_inotify_fd(bfd) {
         crate::fs::inotify::inotify_dup(bfd);
         Ok(bfd)
