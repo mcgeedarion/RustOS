@@ -56,24 +56,24 @@ const SEGV_ACCERR: i32 = 2;
 const SI_USER: i32 = 0;
 
 /// Signal numbers (Linux ABI).
-pub const SIGHUP: u32    = 1;
-pub const SIGINT: u32    = 2;
-pub const SIGQUIT: u32   = 3;
-pub const SIGILL: u32    = 4;
-pub const SIGTRAP: u32   = 5;
-pub const SIGABRT: u32   = 6;
-pub const SIGBUS: u32    = 7;
-pub const SIGFPE: u32    = 8;
-pub const SIGKILL: u32   = 9;
-pub const SIGUSR1: u32   = 10;
-pub const SIGSEGV: u32   = 11;
-pub const SIGUSR2: u32   = 12;
-pub const SIGPIPE: u32   = 13;
-pub const SIGALRM: u32   = 14;
-pub const SIGTERM: u32   = 15;
-pub const SIGCHLD: u32   = 17;
-pub const SIGCONT: u32   = 18;
-pub const SIGSTOP: u32   = 19;
+pub const SIGHUP: u32 = 1;
+pub const SIGINT: u32 = 2;
+pub const SIGQUIT: u32 = 3;
+pub const SIGILL: u32 = 4;
+pub const SIGTRAP: u32 = 5;
+pub const SIGABRT: u32 = 6;
+pub const SIGBUS: u32 = 7;
+pub const SIGFPE: u32 = 8;
+pub const SIGKILL: u32 = 9;
+pub const SIGUSR1: u32 = 10;
+pub const SIGSEGV: u32 = 11;
+pub const SIGUSR2: u32 = 12;
+pub const SIGPIPE: u32 = 13;
+pub const SIGALRM: u32 = 14;
+pub const SIGTERM: u32 = 15;
+pub const SIGCHLD: u32 = 17;
+pub const SIGCONT: u32 = 18;
+pub const SIGSTOP: u32 = 19;
 
 /// ILL_ILLOPC — illegal opcode.
 const ILL_ILLOPC: i32 = 1;
@@ -91,12 +91,12 @@ const SIG_STOP_DEFAULT: u64 = (1u64 << 19) | (1u64 << 20) | (1u64 << 21) | (1u64
 /// Signals that cannot be caught or masked: SIGKILL(9) and SIGSTOP(19).
 const SIG_UNCATCHABLE: u64 = (1u64 << 8) | (1u64 << 18); // bit = sig - 1
 
-const SA_ONSTACK: u32    = 0x08000000;
-const SA_RESTART: u32    = 0x10000000;
-const SA_RESTORER: u32   = 0x04000000;
-const SA_NODEFER: u32    = 0x40000000;
+const SA_ONSTACK: u32 = 0x08000000;
+const SA_RESTART: u32 = 0x10000000;
+const SA_RESTORER: u32 = 0x04000000;
+const SA_NODEFER: u32 = 0x40000000;
 
-const SIG_BLOCK: u32   = 0;
+const SIG_BLOCK: u32 = 0;
 const SIG_UNBLOCK: u32 = 1;
 const SIG_SETMASK: u32 = 2;
 
@@ -561,19 +561,19 @@ pub fn sys_rt_sigreturn(frame: &mut crate::arch::x86_64::syscall::SyscallFrame) 
         return;
     }
     let sf: SigFrameX86 = unsafe { core::mem::transmute(bytes) };
-    frame.rip    = sf.rip as usize;
+    frame.rip = sf.rip as usize;
     frame.rflags = sf.eflags as usize;
-    frame.rsp    = sf.rsp as usize;
-    frame.rax    = sf.rax as usize;
-    frame.rbx    = sf.rbx as usize;
-    frame.rbp    = sf.rbp as usize;
-    frame.rdi    = sf.rdi as usize;
-    frame.rsi    = sf.rsi as usize;
-    frame.rdx    = sf.rdx as usize;
-    frame.r12    = sf.r12 as usize;
-    frame.r13    = sf.r13 as usize;
-    frame.r14    = sf.r14 as usize;
-    frame.r15    = sf.r15 as usize;
+    frame.rsp = sf.rsp as usize;
+    frame.rax = sf.rax as usize;
+    frame.rbx = sf.rbx as usize;
+    frame.rbp = sf.rbp as usize;
+    frame.rdi = sf.rdi as usize;
+    frame.rsi = sf.rsi as usize;
+    frame.rdx = sf.rdx as usize;
+    frame.r12 = sf.r12 as usize;
+    frame.r13 = sf.r13 as usize;
+    frame.r14 = sf.r14 as usize;
+    frame.r15 = sf.r15 as usize;
     let tid = scheduler::current_pid();
     *SIGMASK.lock().entry(tid).or_insert(0) = sf.sig_mask;
 }
@@ -602,7 +602,10 @@ pub fn check_and_deliver_aarch64(frame: &mut crate::arch::aarch64::interrupts::E
 
         let sa = get_sigaction(tgid, info.sig);
         match sa.handler {
-            0 => { apply_default(tid, &info); return; },
+            0 => {
+                apply_default(tid, &info);
+                return;
+            },
             1 => continue,
             _ => {
                 if !push_sigframe_aarch64(frame, &sa, &info) {
@@ -630,8 +633,8 @@ pub fn sys_rt_sigreturn_aarch64(frame: &mut crate::arch::aarch64::interrupts::Ex
     let sf: SigFrameAarch64 =
         unsafe { core::ptr::read_unaligned(bytes.as_ptr() as *const SigFrameAarch64) };
     frame.x.copy_from_slice(&sf.regs);
-    frame.sp_el0   = sf.sp;
-    frame.elr_el1  = sf.pc;
+    frame.sp_el0 = sf.sp;
+    frame.elr_el1 = sf.pc;
     frame.spsr_el1 = sf.pstate;
     let tid = scheduler::current_pid();
     *SIGMASK.lock().entry(tid).or_insert(0) = sf.sig_mask;
@@ -684,7 +687,7 @@ pub fn sys_rt_sigprocmask(
     }
     if let Some(s) = set {
         match how {
-            SIG_BLOCK   => *current |= s,
+            SIG_BLOCK => *current |= s,
             SIG_UNBLOCK => *current &= !s,
             SIG_SETMASK => *current = s,
             _ => return -22,
@@ -693,6 +696,47 @@ pub fn sys_rt_sigprocmask(
         *current &= !SIG_UNCATCHABLE;
     }
     0
+}
+
+pub fn has_pending_matching(tid: usize, signalfd_mask: u64) -> bool {
+    let tgid = scheduler::with_proc(tid, |p| p.tgid).unwrap_or(tid);
+    {
+        let pend = PENDING.lock();
+        if let Some(q) = pend.get(&tid) {
+            if q.iter().any(|i| signal_in_set(i.sig, signalfd_mask)) {
+                return true;
+            }
+        }
+    }
+    {
+        let gpend = GROUP_PENDING.lock();
+        if let Some(q) = gpend.get(&tgid) {
+            if q.iter().any(|i| signal_in_set(i.sig, signalfd_mask)) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+pub fn take_pending_matching(tid: usize, signalfd_mask: u64) -> Option<SigInfo> {
+    {
+        let mut pend = PENDING.lock();
+        if let Some(q) = pend.get_mut(&tid) {
+            if let Some(index) = q.iter().position(|i| signal_in_set(i.sig, signalfd_mask)) {
+                return q.remove(index);
+            }
+        }
+    }
+    let tgid = scheduler::with_proc(tid, |p| p.tgid).unwrap_or(tid);
+    let mut gpend = GROUP_PENDING.lock();
+    let q = gpend.get_mut(&tgid)?;
+    let index = q.iter().position(|i| signal_in_set(i.sig, signalfd_mask))?;
+    q.remove(index)
+}
+
+fn signal_in_set(sig: u32, mask: u64) -> bool {
+    sig != 0 && sig <= 64 && ((mask >> (sig - 1)) & 1) != 0
 }
 
 pub fn sys_rt_sigpending(pid: usize) -> u64 {
@@ -717,7 +761,11 @@ pub fn send_sigchld(parent_pid: usize, child_pid: usize, exit_code: i32) {
         parent_pid,
         SigInfo {
             sig: SIGCHLD,
-            code: if exit_code >= 0 { CLD_EXITED } else { CLD_KILLED },
+            code: if exit_code >= 0 {
+                CLD_EXITED
+            } else {
+                CLD_KILLED
+            },
             pid: child_pid as u32,
             status: exit_code,
             ..Default::default()
@@ -821,7 +869,11 @@ pub fn sys_kill(pid: isize, sig: i32) -> isize {
     if sig == 0 {
         // Existence check only.
         return if pid > 0 {
-            if scheduler::with_proc(pid as usize, |_| ()).is_some() { 0 } else { -3 }
+            if scheduler::with_proc(pid as usize, |_| ()).is_some() {
+                0
+            } else {
+                -3
+            }
         } else {
             0
         };
@@ -890,7 +942,11 @@ pub fn sys_tkill(tid: usize, sig: i32) -> isize {
         return -22;
     }
     if sig == 0 {
-        return if scheduler::with_proc(tid, |_| ()).is_some() { 0 } else { -3 };
+        return if scheduler::with_proc(tid, |_| ()).is_some() {
+            0
+        } else {
+            -3
+        };
     }
     send_signal(tid, sig)
 }
