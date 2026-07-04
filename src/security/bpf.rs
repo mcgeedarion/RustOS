@@ -62,7 +62,6 @@ struct BpfMap {
     key_size: usize,
     value_size: usize,
     max_entries: usize,
-    refs: usize,
     entries: Vec<(Vec<u8>, Vec<u8>)>,
 }
 
@@ -112,32 +111,13 @@ pub fn is_bpf_fd(fd: usize) -> bool {
 }
 
 pub fn close_bpf_fd(fd: usize) {
-    let should_close = {
-        let mut maps = MAPS.lock();
-        match maps.get_mut(&fd) {
-            Some(map) if map.refs > 1 => {
-                map.refs -= 1;
-                false
-            },
-            Some(_) => {
-                maps.remove(&fd);
-                true
-            },
-            None => false,
-        }
-    };
-    if should_close {
-        let _ = crate::fs::vfs::close(fd);
-    }
+    MAPS.lock().remove(&fd);
+    let _ = crate::fs::vfs::close(fd);
 }
 
 /// Duplicate hook for process-local fd aliases. BPF map state is shared by the
-/// backing fd, so the hook only bumps the backing object's reference count.
-pub fn dup_bpf_fd(fd: usize) {
-    if let Some(map) = MAPS.lock().get_mut(&fd) {
-        map.refs = map.refs.saturating_add(1);
-    }
-}
+/// backing fd, so there is no per-alias state to clone.
+pub fn dup_bpf_fd(_fd: usize) {}
 
 fn map_create(attr: usize, size: u32) -> isize {
     let attr = match copy_attr::<MapCreateAttr>(attr, size) {
@@ -183,7 +163,6 @@ fn map_create(attr: usize, size: u32) -> isize {
             key_size: attr.key_size as usize,
             value_size: attr.value_size as usize,
             max_entries: attr.max_entries as usize,
-            refs: 1,
             entries,
         },
     );

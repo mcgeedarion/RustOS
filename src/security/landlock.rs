@@ -52,7 +52,6 @@ struct Ruleset {
     allowed_access_fs: u64,
     rule_count: usize,
     restricted: bool,
-    refs: usize,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -139,30 +138,21 @@ pub fn is_landlock_fd(fd: usize) -> bool {
 }
 
 pub fn close_landlock_fd(fd: usize) {
-    let should_close = {
-        let mut rulesets = RULESETS.lock();
-        match rulesets.get_mut(&fd) {
-            Some(ruleset) if ruleset.refs > 1 => {
-                ruleset.refs -= 1;
-                false
-            },
-            Some(_) => {
-                rulesets.remove(&fd);
-                true
-            },
-            None => false,
-        }
-    };
-    if should_close {
-        let _ = crate::fs::vfs::close(fd);
-    }
+    RULESETS.lock().remove(&fd);
+    let _ = crate::fs::vfs::close(fd);
 }
 
 pub fn dup_landlock_fd(fd: usize) -> usize {
-    if let Some(ruleset) = RULESETS.lock().get_mut(&fd) {
-        ruleset.refs = ruleset.refs.saturating_add(1);
-    }
-    fd
+    let ruleset = match RULESETS.lock().get(&fd).copied() {
+        Some(ruleset) => ruleset,
+        None => return fd,
+    };
+    let new_fd = match crate::fs::vfs::open_anon(crate::fs::vfs::O_CLOEXEC) {
+        Ok(new_fd) => new_fd,
+        Err(_) => return fd,
+    };
+    RULESETS.lock().insert(new_fd, ruleset);
+    new_fd
 }
 
 pub fn sys_landlock_create_ruleset(attr: usize, size: usize, flags: u32) -> isize {
@@ -202,7 +192,6 @@ pub fn sys_landlock_create_ruleset(attr: usize, size: usize, flags: u32) -> isiz
             allowed_access_fs: 0,
             rule_count: 0,
             restricted: false,
-            refs: 1,
         },
     );
     fd as isize

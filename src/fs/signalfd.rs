@@ -24,7 +24,6 @@ const SIGNALFD_SIGINFO_SIZE: usize = 128;
 struct SignalFd {
     mask: u64,
     nonblock: bool,
-    refs: usize,
 }
 
 /// Fast map is safe here: keys are kernel-assigned fd numbers and iteration
@@ -69,7 +68,6 @@ pub fn signalfd_register(fd: usize, mask: u64, flags: u32) {
         SignalFd {
             mask,
             nonblock: flags & SFD_NONBLOCK != 0,
-            refs: 1,
         },
     );
 }
@@ -81,31 +79,12 @@ pub fn is_signalfd(fd: usize) -> bool {
 
 /// Close and unregister a signalfd backing fd.
 pub fn sys_close_sfd(fd: usize) {
-    let should_close = {
-        let mut map = SIGNALFDS.lock();
-        match map.get_mut(&fd) {
-            Some(sfd) if sfd.refs > 1 => {
-                sfd.refs -= 1;
-                false
-            },
-            Some(_) => {
-                map.remove(&fd);
-                true
-            },
-            None => false,
-        }
-    };
-    if should_close {
-        let _ = crate::fs::vfs::close(fd);
-    }
+    SIGNALFDS.lock().remove(&fd);
+    let _ = crate::fs::vfs::close(fd);
 }
 
 /// Duplicate hook for process-local fd aliases. State is shared by backing fd.
-pub fn sfd_dup(fd: usize) {
-    if let Some(sfd) = SIGNALFDS.lock().get_mut(&fd) {
-        sfd.refs = sfd.refs.saturating_add(1);
-    }
-}
+pub fn sfd_dup(_fd: usize) {}
 
 pub fn sys_signalfd(oldfd: isize, mask_va: usize, sigset_size: usize) -> isize {
     sys_signalfd4(oldfd, mask_va, sigset_size, 0)
