@@ -92,7 +92,8 @@ A smaller boot image loads faster from the virtual disk.
 
 Reduce overhead in the test environment without masking real-hardware issues.
 
-- [ ] Use `-cpu host` when KVM is available; fall back to `-cpu Skylake-Client` for consistency
+- [ ] Keep default smoke/kmtest runs on explicit TCG (`-accel tcg`) for deterministic CI and to avoid host KVM/nested-virtualization exposure; only opt into KVM on patched, trusted hosts.
+- [ ] If a local performance run uses KVM, require `-cpu host`, confirm host kernel KVM fixes are applied, and keep nested virtualization disabled unless a test explicitly needs it.
 - [ ] Add `-m 256M` as the floor; do not allocate more than needed for smoke/kmtest runs
 - [ ] Add `-no-reboot -no-shutdown` so QEMU exits immediately on triple fault rather than waiting
 - [ ] Pass `-serial stdio` and redirect to a log file; do not use `-serial mon:stdio` in CI

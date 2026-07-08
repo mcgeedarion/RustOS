@@ -72,6 +72,7 @@ case "$ARCH" in
         QEMU_CMD=(
             qemu-system-x86_64
             -machine q35
+            -accel tcg
             -cpu qemu64,+xsave,+avx
             -m 256M
             -drive "if=pflash,format=raw,readonly=on,file=${FW_CODE}"
