@@ -19,7 +19,7 @@
 #![cfg_attr(not(test), no_main)]
 #![allow(dead_code)]
 #![allow(unused_imports)]
-#![feature(alloc_error_handler)]
+#![cfg_attr(not(test), feature(alloc_error_handler))]
 
 extern crate alloc;
 
