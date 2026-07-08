@@ -907,6 +907,8 @@ fn launch_qemu_x86_64(
     cmd.args([
         "-machine",
         "q35",
+        "-accel",
+        "tcg",
         "-cpu",
         "qemu64,+xsave,+avx",
         "-m",
@@ -1062,6 +1064,8 @@ fn run_smoke(root: &Path, opts: &BuildOpts) -> Result<()> {
             cmd.args([
                 "-machine",
                 "q35",
+                "-accel",
+                "tcg",
                 "-cpu",
                 "qemu64,+xsave,+avx",
                 "-m",
