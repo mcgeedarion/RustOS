@@ -1,5 +1,5 @@
 /// build.rs
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const CRT_DIR: &str = "src/init/crt";
@@ -63,7 +63,7 @@ fn main() {
     }
 }
 
-fn write_initramfs_embed(out: &PathBuf) {
+fn write_initramfs_embed(out: &Path) {
     let dest = out.join("initramfs_embed.rs");
     let content = match std::env::var("RUSTOS_INITRAMFS") {
         Ok(path) if !path.is_empty() && std::path::Path::new(&path).exists() => {
