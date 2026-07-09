@@ -147,57 +147,55 @@ impl<'a> Iterator for CpioIter<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         let buf = self.data;
 
-        loop {
-            let off = self.offset;
-            if off + HEADER_LEN > buf.len() {
-                return None;
-            }
-            if &buf[off..off + 6] != NEWC_MAGIC {
-                return None;
-            }
-
-            let mode = parse_hex8(&buf[off + 14..off + 22]);
-            let uid = parse_hex8(&buf[off + 22..off + 30]);
-            let gid = parse_hex8(&buf[off + 30..off + 38]);
-            let nlink = parse_hex8(&buf[off + 38..off + 46]);
-            let mtime = parse_hex8(&buf[off + 46..off + 54]);
-            let filesize = parse_hex8(&buf[off + 54..off + 62]) as usize;
-            let namesize = parse_hex8(&buf[off + 94..off + 102]) as usize;
-
-            let name_start = off + HEADER_LEN;
-            let name_end = name_start + namesize;
-            if name_end > buf.len() {
-                return None;
-            }
-
-            let raw_name = core::str::from_utf8(&buf[name_start..name_end])
-                .unwrap_or("")
-                .trim_end_matches('\0');
-            let name = raw_name.trim_start_matches("./").trim_start_matches('/');
-
-            let data_start = align_up(name_end, 4);
-            let data_end = data_start + filesize;
-            if data_end > buf.len() {
-                return None;
-            }
-
-            self.offset = align_up(data_end, 4);
-
-            if name == TRAILER {
-                return None;
-            }
-
-            return Some(CpioEntry {
-                name,
-                data: &buf[data_start..data_end],
-                mode,
-                size: filesize,
-                uid,
-                gid,
-                mtime,
-                nlink,
-            });
+        let off = self.offset;
+        if off + HEADER_LEN > buf.len() {
+            return None;
         }
+        if &buf[off..off + 6] != NEWC_MAGIC {
+            return None;
+        }
+
+        let mode = parse_hex8(&buf[off + 14..off + 22]);
+        let uid = parse_hex8(&buf[off + 22..off + 30]);
+        let gid = parse_hex8(&buf[off + 30..off + 38]);
+        let nlink = parse_hex8(&buf[off + 38..off + 46]);
+        let mtime = parse_hex8(&buf[off + 46..off + 54]);
+        let filesize = parse_hex8(&buf[off + 54..off + 62]) as usize;
+        let namesize = parse_hex8(&buf[off + 94..off + 102]) as usize;
+
+        let name_start = off + HEADER_LEN;
+        let name_end = name_start + namesize;
+        if name_end > buf.len() {
+            return None;
+        }
+
+        let raw_name = core::str::from_utf8(&buf[name_start..name_end])
+            .unwrap_or("")
+            .trim_end_matches('\0');
+        let name = raw_name.trim_start_matches("./").trim_start_matches('/');
+
+        let data_start = align_up(name_end, 4);
+        let data_end = data_start + filesize;
+        if data_end > buf.len() {
+            return None;
+        }
+
+        self.offset = align_up(data_end, 4);
+
+        if name == TRAILER {
+            return None;
+        }
+
+        Some(CpioEntry {
+            name,
+            data: &buf[data_start..data_end],
+            mode,
+            size: filesize,
+            uid,
+            gid,
+            mtime,
+            nlink,
+        })
     }
 }
 

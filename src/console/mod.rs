@@ -15,6 +15,7 @@
 //! |--------------|-----------------------------------|
 //! | x86\_64      | `arch::x86_64::serial` (UART 16550)|
 
+#[allow(clippy::module_inception)]
 pub mod console;
 
 pub use console::{print, print_fmt, println};

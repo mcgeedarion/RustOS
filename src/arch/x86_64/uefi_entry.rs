@@ -200,6 +200,13 @@ pub static mut EFI_DESC_SIZE: usize = 0;
 
 static mut BOOT_INFO: BootInfo = BootInfo::empty();
 
+/// Raw x86_64 UEFI entry point shared by linker-selected entry symbols.
+///
+/// # Safety
+///
+/// The firmware must call this with a valid image handle and a valid pointer to
+/// an EFI system table for the lifetime of the handoff. The function never
+/// returns and assumes UEFI boot services are still available on entry.
 pub unsafe extern "efiapi" fn efi_entry_raw(
     image_handle: *mut core::ffi::c_void,
     system_table: *mut core::ffi::c_void,
@@ -207,6 +214,14 @@ pub unsafe extern "efiapi" fn efi_entry_raw(
     uefi_start(image_handle, system_table as *mut EfiSystemTable)
 }
 
+/// Firmware-visible x86_64 UEFI application entry point.
+///
+/// # Safety
+///
+/// The UEFI firmware must provide a valid image handle and system table pointer.
+/// This entry point is reached before `ExitBootServices`, so it assumes boot
+/// services and firmware-owned memory descriptors are valid while it prepares
+/// the kernel handoff.
 #[no_mangle]
 pub unsafe extern "efiapi" fn efi_main(
     image_handle: *mut core::ffi::c_void,
