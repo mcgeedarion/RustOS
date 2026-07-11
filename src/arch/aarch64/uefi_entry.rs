@@ -361,7 +361,12 @@ unsafe extern "efiapi" fn efi_main(
         halt();
     }
 
-    // 6. Switch to kernel boot stack and tail-call kernel_main.
+    // 6. Bring up serial before common kernel_main emits boot markers.
+    unsafe {
+        crate::arch::aarch64::serial::init(13, 1);
+    }
+
+    // 7. Switch to kernel boot stack and tail-call kernel_main.
     #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
     crate::arch::aarch64::hal::init();
     kernel_main_jump(&raw const BOOT_INFO);

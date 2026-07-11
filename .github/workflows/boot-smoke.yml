@@ -178,17 +178,18 @@ jobs:
       # ------------------------------------------------------------------
       # Sentinel assertion — THE canonical CI gate for release-boot.
       # ------------------------------------------------------------------
-      - name: "Assert boot sentinel: RUSTOS_BOOT_OK"
+      - name: Assert boot sentinel
         run: |
-          if ! grep -q 'RUSTOS_BOOT_OK' qemu-x86_64-boot-release-boot.log; then
-            echo "FAIL: sentinel 'RUSTOS_BOOT_OK' not found in serial output (release-boot)." >&2
+          SMOKE_MARKER_RE='BOOT_MINIMAL_OK|FULL_OS_USERSPACE_OK|entering cpu_idle'
+          if ! grep -Eq "$SMOKE_MARKER_RE" qemu-x86_64-boot-release-boot.log; then
+            echo "FAIL: no boot sentinel matching '$SMOKE_MARKER_RE' found in serial output (release-boot)." >&2
             echo "      Boot did not reach the expected checkpoint within 60 s." >&2
             echo "" >&2
             echo "Last 30 lines of serial output:" >&2
             tail -30 qemu-x86_64-boot-release-boot.log >&2
             exit 1
           fi
-          echo "OK: RUSTOS_BOOT_OK sentinel found in release-boot image."
+          echo "OK: boot sentinel found in release-boot image."
 
       # ------------------------------------------------------------------
       # Upload logs on every run (success or failure) for post-mortem.
@@ -203,4 +204,4 @@ jobs:
             build-x86_64-image-release-boot.log
             qemu-x86_64-boot-release-boot.log
 
-  # aarch64 job continues to use the boot_minimal debug image and BOOT_MINIMAL_OK sentinel.
+  # aarch64 jobs use the shared xtask smoke sentinel contract.

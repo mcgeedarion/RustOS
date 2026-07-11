@@ -125,7 +125,7 @@ impl BootInfo {
     ///
     /// Priority assignment:
     ///   PRIMARY   — x86_64  (default `cargo build` target)
-    ///   SECONDARY — aarch64 (explicit `--target targets/aarch64-uefi-loader.json`)
+    ///   SECONDARY — aarch64 (explicit `--target aarch64-unknown-uefi`)
     pub const fn priority() -> BootPriority {
         #[cfg(target_arch = "x86_64")]
         {

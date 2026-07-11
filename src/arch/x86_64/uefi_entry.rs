@@ -387,7 +387,10 @@ unsafe extern "efiapi" fn uefi_start(
         halt();
     }
 
-    // 6. Switch to kernel boot stack and call kernel_main.
+    // 6. Bring up serial before common kernel_main emits boot markers.
+    crate::arch::x86_64::serial::early_init();
+
+    // 7. Switch to kernel boot stack and call kernel_main.
     extern "C" {
         fn kernel_main(boot_info: &'static BootInfo) -> !;
     }

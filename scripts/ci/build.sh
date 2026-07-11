@@ -48,8 +48,8 @@ esac
 
 case "$ARCH:$BOOT" in
   aarch64:uefi)
-    CARGO_TARGET="${ROOT_DIR}/targets/aarch64-uefi-loader.json"
-    TARGET_DIR="aarch64-uefi-loader"
+    CARGO_TARGET="aarch64-unknown-uefi"
+    TARGET_DIR="aarch64-unknown-uefi"
     ;;
   aarch64:baremetal)
     CARGO_TARGET="${ROOT_DIR}/targets/aarch64-kernel.json"

@@ -36,5 +36,4 @@ targets = [
 ]
 
 # Custom JSON targets are not rustup-installed targets:
-#   - targets/aarch64-uefi-loader.json
 #   - targets/x86_64-kernel.json

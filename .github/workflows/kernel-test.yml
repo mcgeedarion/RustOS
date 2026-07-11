@@ -4,12 +4,12 @@
 # The default CI contract is intentionally explicit:
 #
 #   arch      boot mode   cargo target
-#   aarch64   uefi        targets/aarch64-uefi-loader.json
+#   aarch64   uefi        aarch64-unknown-uefi
 #   x86_64    uefi        x86_64-unknown-uefi (built-in)
 #
-# Plain local `cargo build` targets the repository-default aarch64 UEFI loader
-# via .cargo/config.toml. x86_64 UEFI is built explicitly through
-# `cargo xtask image --arch <arch>` or `ARCH=<arch> ./scripts/ci/run_qemu.sh`.
+# Plain local `cargo build` targets the repository-default x86_64 UEFI loader.
+# Architecture-specific UEFI images are built explicitly through `cargo xtask
+# image --arch <arch>` or `ARCH=<arch> ./scripts/ci/run_qemu.sh`.
 
 name: Kernel Test (reusable)
 
@@ -66,7 +66,7 @@ jobs:
           case "${{ inputs.arch }}" in
             aarch64)
               echo "BOOT=uefi" >> "$GITHUB_ENV"
-              echo "TARGET_SHORT=aarch64-uefi-loader" >> "$GITHUB_ENV"
+              echo "TARGET_SHORT=aarch64-unknown-uefi" >> "$GITHUB_ENV"
               ;;
             x86_64)
               echo "BOOT=uefi" >> "$GITHUB_ENV"
@@ -212,14 +212,8 @@ jobs:
         if: inputs.run_smoke
         run: |
           LOG="qemu-${{ inputs.arch }}.log"
-          case "${{ inputs.arch }}" in
-            aarch64)
-              grep -q 'RustOS: BOOT_MINIMAL_OK' "$LOG"
-              ;;
-            x86_64)
-              grep -q 'RustOS \[PRIMARY\] x86_64 booting via UEFI' "$LOG"
-              ;;
-          esac
+          SMOKE_MARKER_RE='BOOT_MINIMAL_OK|FULL_OS_USERSPACE_OK|entering cpu_idle'
+          grep -Eq "$SMOKE_MARKER_RE" "$LOG"
 
       - name: QEMU kmtest boot (x86_64)
         if: inputs.run_kmtest && inputs.arch == 'x86_64'
