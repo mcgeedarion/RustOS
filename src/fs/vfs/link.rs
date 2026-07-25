@@ -16,7 +16,7 @@ extern crate alloc;
 /// Linux `LINK_MAX` (per `limits.h`).
 pub const LINK_MAX: u32 = 65000;
 
-const S_IFMT:  u16 = 0o170000;
+const S_IFMT: u16 = 0o170000;
 const S_IFDIR: u16 = 0o040000;
 
 #[inline]

@@ -39,8 +39,8 @@
 //!
 //! On signal interruption:
 //!   - Returns -4 (EINTR).
-//!   - If `rem_va != 0` and the sleep was *relative*, writes the remaining time
-//!     to userspace (Linux-compatible: absolute sleeps never write rem).
+//!   - If `rem_va != 0` and the sleep was *relative*, writes the remaining time to userspace
+//!     (Linux-compatible: absolute sleeps never write rem).
 
 use crate::proc::scheduler;
 use crate::sync::wait_queue::{WaitQueue, WakeReason};

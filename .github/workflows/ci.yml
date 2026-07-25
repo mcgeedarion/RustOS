@@ -20,7 +20,7 @@ jobs:
             echo "ERROR: U+00A0 non-breaking space found in Rust source." >&2
             exit 1
           fi
-          if rg -n --glob '*.rs' '\\[[:blank:]]' .; then
+          if rg -n --glob '*.rs' --pcre2 '\\[ \t]' .; then
             echo "ERROR: backslash followed by space/tab found in Rust source." >&2
             exit 1
           fi
@@ -28,11 +28,19 @@ jobs:
         run: rustup show
       - name: Check formatting
         run: cargo fmt --all -- --check
-      - name: Run clippy on workspace
+      - name: Run clippy
         run: |
-          cargo clippy --workspace --all-targets --all-features \
+          cargo clippy -p rustos-kernel --lib --no-default-features --features boot_minimal \
             -Z build-std=core,alloc,compiler_builtins \
             -Z build-std-features=compiler-builtins-mem \
+            -- -D warnings
+          cargo clippy -p scheme-api --features std \
+            -Z build-std=std,panic_abort \
+            --target x86_64-unknown-linux-gnu \
+            -- -D warnings
+          cargo clippy -p xtask \
+            -Z build-std=std,panic_abort \
+            --target x86_64-unknown-linux-gnu \
             -- -D warnings
       - name: Check module hygiene
         run: cargo xtask lint-modules

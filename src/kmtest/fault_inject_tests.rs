@@ -17,13 +17,12 @@
 #![cfg(all(feature = "fault-inject", feature = "kmtest"))]
 
 use crate::fault_inject::points::{
-    FAULT_PMM_ALLOC, FAULT_PMM_CONTIGUOUS,
+    FAULT_PMM_ALLOC, FAULT_PMM_CONTIGUOUS, FAULT_SYSCALL_FDTABLE, FAULT_SYSCALL_RESOURCE,
     FAULT_VMM_MAP, FAULT_VMM_REGION,
-    FAULT_SYSCALL_RESOURCE, FAULT_SYSCALL_FDTABLE,
 };
-use crate::syscall::fault::{check_resource, check_fdtable, FaultErrno};
-use crate::mm::pmm_fault::{check_alloc_frame, check_alloc_contiguous};
-use crate::mm::vmm_fault::{check_map_page, check_alloc_region};
+use crate::mm::pmm_fault::{check_alloc_contiguous, check_alloc_frame};
+use crate::mm::vmm_fault::{check_alloc_region, check_map_page};
+use crate::syscall::fault::{check_fdtable, check_resource, FaultErrno};
 
 // ── Helper ───────────────────────────────────────────────────────────────────
 
@@ -163,11 +162,11 @@ pub fn test_syscall_resource_exhaustion() -> Result<(), &'static str> {
     FAULT_SYSCALL_RESOURCE.arm(0);
 
     match check_resource() {
-        Err(FaultErrno::ResourceExhausted) => {} // expected
+        Err(FaultErrno::ResourceExhausted) => {}, // expected
         Err(other) => {
             let _ = other; // avoid unused-variable warning in no_std
             return Err("check_resource() returned wrong error variant");
-        }
+        },
         Ok(()) => return Err("check_resource() returned Ok — fault did not fire"),
     }
 
@@ -191,7 +190,7 @@ pub fn test_syscall_fdtable_exhaustion() -> Result<(), &'static str> {
     FAULT_SYSCALL_FDTABLE.arm(0);
 
     match check_fdtable() {
-        Err(FaultErrno::TooManyFiles) => {} // expected
+        Err(FaultErrno::TooManyFiles) => {}, // expected
         Err(_) => return Err("check_fdtable() returned wrong error variant"),
         Ok(()) => return Err("check_fdtable() returned Ok — fault did not fire"),
     }
@@ -244,11 +243,23 @@ pub fn test_persistent_fault_mode() -> Result<(), &'static str> {
 /// Call this from `src/kmtest/mod.rs` inside the
 /// `#[cfg(all(feature = "fault-inject", feature = "kmtest"))]` block.
 pub fn register_tests(runner: &mut crate::kmtest::TestRunner) {
-    runner.register("fault_inject::pmm_oom_injection",           test_pmm_oom_injection);
-    runner.register("fault_inject::pmm_contiguous_skip_budget",  test_pmm_contiguous_skip_budget);
-    runner.register("fault_inject::vmm_map_failure",             test_vmm_map_failure);
-    runner.register("fault_inject::vmm_region_failure",          test_vmm_region_failure);
-    runner.register("fault_inject::syscall_resource_exhaustion", test_syscall_resource_exhaustion);
-    runner.register("fault_inject::syscall_fdtable_exhaustion",  test_syscall_fdtable_exhaustion);
-    runner.register("fault_inject::persistent_fault_mode",       test_persistent_fault_mode);
+    runner.register("fault_inject::pmm_oom_injection", test_pmm_oom_injection);
+    runner.register(
+        "fault_inject::pmm_contiguous_skip_budget",
+        test_pmm_contiguous_skip_budget,
+    );
+    runner.register("fault_inject::vmm_map_failure", test_vmm_map_failure);
+    runner.register("fault_inject::vmm_region_failure", test_vmm_region_failure);
+    runner.register(
+        "fault_inject::syscall_resource_exhaustion",
+        test_syscall_resource_exhaustion,
+    );
+    runner.register(
+        "fault_inject::syscall_fdtable_exhaustion",
+        test_syscall_fdtable_exhaustion,
+    );
+    runner.register(
+        "fault_inject::persistent_fault_mode",
+        test_persistent_fault_mode,
+    );
 }

@@ -1,8 +1,8 @@
 //! ftrace-style function entry/exit tracing via LLVM `-Z instrument-functions`.
 //!
-//! When the `trace` Cargo feature is active, rustc is instructed (in
-//! `build.rs`) to pass `-Z instrument-functions` to every compilation unit.
-//! LLVM then inserts calls to `__cyg_profile_func_enter` /
+//! When the `trace` Cargo feature is active and the build is run with
+//! `RUSTFLAGS='-Z instrument-functions'`, LLVM inserts calls to
+//! `__cyg_profile_func_enter` /
 //! `__cyg_profile_func_exit` at every function prologue and epilogue — the same
 //! ABI used by GCC's `-finstrument-functions`.
 //!

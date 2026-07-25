@@ -331,13 +331,13 @@ pub fn link(existing: &str, new_path: &str) -> Result<(), isize> {
     let dst_exists = stat(new_path).is_ok();
 
     link_preflight(LinkArgs {
-        src_dev:    0,
-        dst_dev:    0,
+        src_dev: 0,
+        dst_dev: 0,
         src_exists: true,
-        src_mode:   src_stat.mode,
-        src_nlink:  src_stat.nlink,
+        src_mode: src_stat.mode,
+        src_nlink: src_stat.nlink,
         dst_exists,
-        readonly:   h_e.is_readonly(),
+        readonly: h_e.is_readonly(),
     })?;
 
     let result = match h_e.fstype {
@@ -419,9 +419,9 @@ pub fn rmdir(path: &str) -> Result<(), isize> {
 }
 
 pub fn unlink(path: &str) -> Result<(), isize> {
-    use crate::fs::vfs::unlink::{unlink_preflight, UnlinkTarget};
     use crate::fs::vfs::inode_ref::InodeKey;
     use crate::fs::vfs::perm::InodePerm;
+    use crate::fs::vfs::unlink::{unlink_preflight, UnlinkTarget};
     // O_NOFOLLOW: resolve symlinks in parent components only; the
     // final component is the name being removed — do NOT follow it.
     use crate::fs::vfs::open_check::flags::O_NOFOLLOW;
@@ -440,16 +440,19 @@ pub fn unlink(path: &str) -> Result<(), isize> {
 
     let creds = crate::proc::current_creds();
     let target = UnlinkTarget {
-        key:         InodeKey { dev: 0, ino: target_stat.ino },
+        key: InodeKey {
+            dev: 0,
+            ino: target_stat.ino,
+        },
         target_mode: target_stat.mode,
-        target_uid:  target_stat.uid,
+        target_uid: target_stat.uid,
         parent_perm: InodePerm {
-            uid:  parent_stat.uid,
-            gid:  parent_stat.gid,
+            uid: parent_stat.uid,
+            gid: parent_stat.gid,
             mode: parent_stat.mode,
         },
-        readonly:    h.is_readonly(),
-        nlink:       target_stat.nlink,
+        readonly: h.is_readonly(),
+        nlink: target_stat.nlink,
     };
 
     // DAC + sticky-bit + deferred-free decision.
@@ -479,8 +482,8 @@ pub fn unlink(path: &str) -> Result<(), isize> {
 }
 
 pub fn rename(old: &str, new: &str) -> Result<(), isize> {
-    use crate::fs::vfs::rename::{rename_preflight, RenameArgs};
     use crate::fs::vfs::open_check::flags::O_NOFOLLOW;
+    use crate::fs::vfs::rename::{rename_preflight, RenameArgs};
 
     // Resolve symlinks in parent components; the final component is the
     // name being renamed — do NOT follow it.
@@ -498,11 +501,9 @@ pub fn rename(old: &str, new: &str) -> Result<(), isize> {
 
     let old_stat = stat(&old_r)?;
     let new_stat_r = stat(&new_r);
-    let new_exists    = new_stat_r.is_ok();
-    let new_mode      = new_stat_r.as_ref().map(|s| s.mode).unwrap_or(0);
-    let new_dir_empty = if new_exists
-        && new_stat_r.as_ref().map(|s| s.is_dir).unwrap_or(false)
-    {
+    let new_exists = new_stat_r.is_ok();
+    let new_mode = new_stat_r.as_ref().map(|s| s.mode).unwrap_or(0);
+    let new_dir_empty = if new_exists && new_stat_r.as_ref().map(|s| s.is_dir).unwrap_or(false) {
         readdir(&new_r)
             .map(|es| es.iter().all(|e| e.name == "." || e.name == ".."))
             .unwrap_or(true)
@@ -511,15 +512,15 @@ pub fn rename(old: &str, new: &str) -> Result<(), isize> {
     };
 
     rename_preflight(RenameArgs {
-        old_path:      &old_r,
-        new_path:      &new_r,
-        old_dev:       0,
-        new_dev:       0,
-        old_mode:      old_stat.mode,
+        old_path: &old_r,
+        new_path: &new_r,
+        old_dev: 0,
+        new_dev: 0,
+        old_mode: old_stat.mode,
         new_exists,
         new_mode,
         new_dir_empty,
-        readonly:      h_o.is_readonly(),
+        readonly: h_o.is_readonly(),
     })?;
 
     let result = match h_o.fstype {
@@ -1009,7 +1010,7 @@ fn mount_point_for(subpath: &str, full_path: &str) -> String {
 fn parent_path(path: &str) -> String {
     match path.rfind('/') {
         Some(0) | None => "/".to_string(),
-        Some(i)        => path[..i].to_string(),
+        Some(i) => path[..i].to_string(),
     }
 }
 

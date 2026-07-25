@@ -92,7 +92,7 @@ pub fn sys_set_tid_address(tidptr: u64) -> isize {
 }
 
 /// `set_robust_list(head, len)` — register the robust futex list for this
-/// thread. 
+/// thread.
 pub fn sys_set_robust_list(head: u64, len: usize) -> isize {
     if len != core::mem::size_of::<RobustListHead>() {
         return -(crate::syscall::errno::EINVAL as isize);

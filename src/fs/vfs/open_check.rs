@@ -27,18 +27,27 @@ pub const NAME_MAX: usize = 255;
 
 /// Open flags (Linux ABI subset used in pre-flight).
 pub mod flags {
-    pub const O_RDONLY:  u32 = 0x0000;
-    pub const O_WRONLY:  u32 = 0x0001;
-    pub const O_RDWR:    u32 = 0x0002;
-    pub const O_CREAT:   u32 = 0x0040;
-    pub const O_EXCL:    u32 = 0x0080;
-    pub const O_TRUNC:   u32 = 0x0200;
-    pub const O_APPEND:  u32 = 0x0400;
-    pub const O_NOFOLLOW:u32 = 0x0002_0000;
+    pub const O_RDONLY: u32 = 0x0000;
+    pub const O_WRONLY: u32 = 0x0001;
+    pub const O_RDWR: u32 = 0x0002;
+    pub const O_CREAT: u32 = 0x0040;
+    pub const O_EXCL: u32 = 0x0080;
+    pub const O_TRUNC: u32 = 0x0200;
+    pub const O_APPEND: u32 = 0x0400;
+    pub const O_NOFOLLOW: u32 = 0x0002_0000;
 
-    #[inline] pub fn is_write(f: u32) -> bool { f & (O_WRONLY | O_RDWR) != 0 }
-    #[inline] pub fn is_creat(f: u32) -> bool { f & O_CREAT != 0 }
-    #[inline] pub fn is_excl (f: u32) -> bool { f & O_EXCL  != 0 }
+    #[inline]
+    pub fn is_write(f: u32) -> bool {
+        f & (O_WRONLY | O_RDWR) != 0
+    }
+    #[inline]
+    pub fn is_creat(f: u32) -> bool {
+        f & O_CREAT != 0
+    }
+    #[inline]
+    pub fn is_excl(f: u32) -> bool {
+        f & O_EXCL != 0
+    }
 }
 
 /// Inode metadata supplied by the caller after path resolution.
@@ -130,21 +139,35 @@ pub fn open_preflight(
 
 #[cfg(test)]
 mod tests {
+    use super::flags::*;
     use super::*;
     use crate::fs::vfs::perm::{Creds, InodePerm};
-    use super::flags::*;
 
     fn root_creds() -> Creds {
-        Creds { uid: 0, gid: 0, euid: 0, egid: 0 }
+        Creds {
+            uid: 0,
+            gid: 0,
+            euid: 0,
+            egid: 0,
+        }
     }
     fn user_creds() -> Creds {
-        Creds { uid: 1000, gid: 1000, euid: 1000, egid: 1000 }
+        Creds {
+            uid: 1000,
+            gid: 1000,
+            euid: 1000,
+            egid: 1000,
+        }
     }
     fn rw_file(uid: u32, mode: u16) -> InodeInfo {
         InodeInfo {
             exists: true,
             mode,
-            perm: InodePerm { uid, gid: uid, mode },
+            perm: InodePerm {
+                uid,
+                gid: uid,
+                mode,
+            },
             readonly: false,
         }
     }
@@ -152,14 +175,23 @@ mod tests {
         InodeInfo {
             exists: false,
             mode: 0,
-            perm: InodePerm { uid: 0, gid: 0, mode: 0 },
+            perm: InodePerm {
+                uid: 0,
+                gid: 0,
+                mode: 0,
+            },
             readonly: false,
         }
     }
 
     #[test]
     fn open_existing_rdonly_ok() {
-        let r = open_preflight("/etc/hosts", O_RDONLY, user_creds(), rw_file(1000, 0o100644));
+        let r = open_preflight(
+            "/etc/hosts",
+            O_RDONLY,
+            user_creds(),
+            rw_file(1000, 0o100644),
+        );
         assert_eq!(r, Ok(OpenAction::OpenExisting));
     }
 
@@ -177,7 +209,12 @@ mod tests {
 
     #[test]
     fn open_creat_excl_existing_eexist() {
-        let r = open_preflight("/exists", O_CREAT | O_EXCL, user_creds(), rw_file(1000, 0o100644));
+        let r = open_preflight(
+            "/exists",
+            O_CREAT | O_EXCL,
+            user_creds(),
+            rw_file(1000, 0o100644),
+        );
         assert_eq!(r, Err(-17));
     }
 
@@ -186,7 +223,11 @@ mod tests {
         let info = InodeInfo {
             exists: true,
             mode: 0o040755, // directory
-            perm: InodePerm { uid: 0, gid: 0, mode: 0o040755 },
+            perm: InodePerm {
+                uid: 0,
+                gid: 0,
+                mode: 0o040755,
+            },
             readonly: false,
         };
         let r = open_preflight("/etc", O_WRONLY, root_creds(), info);
@@ -204,7 +245,11 @@ mod tests {
         let info = InodeInfo {
             exists: true,
             mode: 0o100644,
-            perm: InodePerm { uid: 1000, gid: 1000, mode: 0o100644 },
+            perm: InodePerm {
+                uid: 1000,
+                gid: 1000,
+                mode: 0o100644,
+            },
             readonly: true,
         };
         let r = open_preflight("/ro/file", O_WRONLY, user_creds(), info);
@@ -220,7 +265,12 @@ mod tests {
 
     #[test]
     fn open_trunc_sets_truncate_action() {
-        let r = open_preflight("/f", O_WRONLY | O_TRUNC, user_creds(), rw_file(1000, 0o100644));
+        let r = open_preflight(
+            "/f",
+            O_WRONLY | O_TRUNC,
+            user_creds(),
+            rw_file(1000, 0o100644),
+        );
         assert_eq!(r, Ok(OpenAction::Truncate));
     }
 }

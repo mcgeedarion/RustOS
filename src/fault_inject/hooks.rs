@@ -11,8 +11,8 @@
 #![cfg(feature = "fault-inject")]
 
 use super::points::{
-    FAULT_PMM_ALLOC, FAULT_PMM_CONTIGUOUS, FAULT_VMM_MAP, FAULT_VMM_REGION,
-    FAULT_SYSCALL_RESOURCE, FAULT_SYSCALL_FDTABLE,
+    FAULT_PMM_ALLOC, FAULT_PMM_CONTIGUOUS, FAULT_SYSCALL_FDTABLE, FAULT_SYSCALL_RESOURCE,
+    FAULT_VMM_MAP, FAULT_VMM_REGION,
 };
 
 // ── PMM hooks ────────────────────────────────────────────────────────────────

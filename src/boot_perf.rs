@@ -77,7 +77,6 @@ pub fn read_hw_counter() -> u64 {
         tick
     }
 
-
     // Fallback for host-side unit-test builds (std target).
 }
 

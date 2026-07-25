@@ -99,11 +99,7 @@ fn arch_enable_single_step(frame: &mut crate::arch::TrapFrame) -> bool {
         true
     }
 
-
-    #[cfg(not(any(
-        target_arch = "x86_64",
-        target_arch = "aarch64",
-    )))]
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64",)))]
     {
         let _ = frame;
         false

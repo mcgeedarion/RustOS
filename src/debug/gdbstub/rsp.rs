@@ -31,10 +31,7 @@ pub fn rsp_packet(body: &str) -> String {
 const ARCH_REG_COUNT: usize = 24;
 #[cfg(target_arch = "aarch64")]
 const ARCH_REG_COUNT: usize = 34; // x0-x30 + sp + pc + pstate
-#[cfg(not(any(
-    target_arch = "x86_64",
-    target_arch = "aarch64"
-)))]
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
 const ARCH_REG_COUNT: usize = 32;
 
 // ---------------------------------------------------------------------------
@@ -50,10 +47,7 @@ fn arch_reg_buf_len() -> usize {
     {
         crate::debug::gdbstub::arch::AArch64::reg_buf_len()
     }
-    #[cfg(not(any(
-        target_arch = "x86_64",
-        target_arch = "aarch64"
-    )))]
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     {
         ARCH_REG_COUNT * 8
     }
@@ -68,10 +62,7 @@ fn arch_read_regs(trap: &crate::debug::AnyTrapFrame, buf: &mut [u8]) {
     {
         crate::debug::gdbstub::arch::AArch64::read_regs(trap, buf);
     }
-    #[cfg(not(any(
-        target_arch = "x86_64",
-        target_arch = "aarch64"
-    )))]
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     {
         let _ = (trap, buf);
     }
@@ -86,10 +77,7 @@ fn arch_write_regs(trap: &mut crate::debug::AnyTrapFrame, buf: &[u8]) {
     {
         crate::debug::gdbstub::arch::AArch64::write_regs(trap, buf);
     }
-    #[cfg(not(any(
-        target_arch = "x86_64",
-        target_arch = "aarch64"
-    )))]
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     {
         let _ = (trap, buf);
     }

@@ -24,15 +24,15 @@ const O_NOFOLLOW: u32 = 0x0002_0000;
 #[repr(isize)]
 pub enum ResolveError {
     /// `ENOENT` — no such file or directory.
-    NoEnt  = -2,
+    NoEnt = -2,
     /// `ENOTDIR` — a non-directory component appears in the path.
     NotDir = -20,
     /// `ELOOP`  — too many levels of symbolic links.
-    Loop   = -40,
+    Loop = -40,
     /// `EINVAL` — not a symbolic link (for `readlink`).
-    Inval  = -22,
+    Inval = -22,
     /// `EIO`    — I/O error during symlink read.
-    Io     = -5,
+    Io = -5,
 }
 
 impl From<ResolveError> for isize {
@@ -149,11 +149,7 @@ fn walk_component(
 /// * Symlinks are followed up to `MAX_SYMLINK_DEPTH` times.
 /// * `flags` should carry the open(2) flags; only `O_NOFOLLOW` is inspected.
 /// * Returns the canonical absolute path of the target, or an error.
-pub fn resolve(
-    ops: &dyn FsOps,
-    path: &str,
-    flags: u32,
-) -> Result<String, ResolveError> {
+pub fn resolve(ops: &dyn FsOps, path: &str, flags: u32) -> Result<String, ResolveError> {
     if path.is_empty() {
         return Err(ResolveError::NoEnt);
     }
@@ -183,7 +179,14 @@ pub fn resolve(
     while !remaining.is_empty() {
         let component = remaining.remove(0);
         let is_last = remaining.is_empty();
-        walk_component(&mut ctx, &mut current, &component, &mut remaining, is_last, flags)?;
+        walk_component(
+            &mut ctx,
+            &mut current,
+            &component,
+            &mut remaining,
+            is_last,
+            flags,
+        )?;
     }
 
     Ok(current)
@@ -206,10 +209,7 @@ fn normalise_dotdot(components: Vec<String>) -> Vec<String> {
 ///
 /// Returns `Err(ResolveError::Inval)` if `path` does not name a symlink.
 /// Returns `Err(ResolveError::NoEnt)` if `path` does not exist at all.
-pub fn vfs_readlink(
-    ops: &dyn FsOps,
-    path: &str,
-) -> Result<String, ResolveError> {
+pub fn vfs_readlink(ops: &dyn FsOps, path: &str) -> Result<String, ResolveError> {
     if !ops.exists(path) {
         return Err(ResolveError::NoEnt);
     }
@@ -253,7 +253,8 @@ mod tests {
             self.dirs.insert(path.to_string(), true);
         }
         fn add_symlink(&mut self, path: &str, target: &str) {
-            self.nodes.insert(path.to_string(), Some(target.to_string()));
+            self.nodes
+                .insert(path.to_string(), Some(target.to_string()));
         }
     }
 
@@ -305,10 +306,7 @@ mod tests {
     fn resolve_o_nofollow_eloop() {
         let mut fs = MemFs::new();
         fs.add_symlink("/a", "/b");
-        assert_eq!(
-            resolve(&fs, "/a", O_NOFOLLOW),
-            Err(ResolveError::Loop)
-        );
+        assert_eq!(resolve(&fs, "/a", O_NOFOLLOW), Err(ResolveError::Loop));
     }
 
     #[test]
@@ -317,10 +315,7 @@ mod tests {
         let mut fs = MemFs::new();
         for i in 0..=40u32 {
             if i < 40 {
-                fs.add_symlink(
-                    &alloc::format!("/s{}", i),
-                    &alloc::format!("/s{}", i + 1),
-                );
+                fs.add_symlink(&alloc::format!("/s{}", i), &alloc::format!("/s{}", i + 1));
             } else {
                 fs.add_file("/s40");
             }

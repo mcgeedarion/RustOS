@@ -14,8 +14,8 @@
 //!
 //! ## Send protocol
 //!   1. Set target's `ipi_pending` bit(s) with `fetch_or(..., Release)`.
-//!   2. Call `send(target_cpu, kind)` which invokes the arch-specific mechanism
-//!      (x86: APIC ICR write).
+//!   2. Call `send(target_cpu, kind)` which invokes the arch-specific mechanism (x86: APIC ICR
+//!      write).
 //!
 //! ## `schedule_on(task, cpu)` integration
 //!   When the scheduler pins a task to a specific remote CPU via

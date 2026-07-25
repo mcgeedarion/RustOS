@@ -28,14 +28,14 @@ extern crate alloc;
 use alloc::vec::Vec;
 use spin::Mutex;
 
-use crate::drivers::gpu::framebuffer::{Framebuffer, PixelFormat};
 use crate::display::drm::acp::{AcpDevice, AcpEndpointKind};
 use crate::display::drm::hdmi::{FrlRate, HdmiCapabilities, HdmiVersion};
+use crate::drivers::gpu::framebuffer::{Framebuffer, PixelFormat};
 
 /// Pixel-clock constant for HDMI 2.1 high-rate modes.
-const CLOCK_594MHZ: u32    = 594_000;  // 4K@60 / 1080p@240
-const CLOCK_1188MHZ: u32   = 1_188_000; // 4K@120 / 8K@60
-const CLOCK_2178MHZ: u32   = 2_178_000; // 4K@144 (FRL only)
+const CLOCK_594MHZ: u32 = 594_000; // 4K@60 / 1080p@240
+const CLOCK_1188MHZ: u32 = 1_188_000; // 4K@120 / 8K@60
+const CLOCK_2178MHZ: u32 = 2_178_000; // 4K@144 (FRL only)
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DisplayMode {
@@ -56,27 +56,45 @@ impl DisplayMode {
     /// Standard 1920×1080 @ 60 Hz
     pub fn fullhd_60() -> Self {
         Self {
-            hdisplay: 1920, vdisplay: 1080, clock_khz: 148_500,
-            hsync_start: 2008, hsync_end: 2052, htotal: 2200,
-            vsync_start: 1084, vsync_end: 1089, vtotal: 1125,
+            hdisplay: 1920,
+            vdisplay: 1080,
+            clock_khz: 148_500,
+            hsync_start: 2008,
+            hsync_end: 2052,
+            htotal: 2200,
+            vsync_start: 1084,
+            vsync_end: 1089,
+            vtotal: 1125,
             flags: 0,
         }
     }
     /// Standard 1280×720 @ 60 Hz
     pub fn hd_60() -> Self {
         Self {
-            hdisplay: 1280, vdisplay: 720, clock_khz: 74_250,
-            hsync_start: 1390, hsync_end: 1430, htotal: 1650,
-            vsync_start: 725, vsync_end: 730, vtotal: 750,
+            hdisplay: 1280,
+            vdisplay: 720,
+            clock_khz: 74_250,
+            hsync_start: 1390,
+            hsync_end: 1430,
+            htotal: 1650,
+            vsync_start: 725,
+            vsync_end: 730,
+            vtotal: 750,
             flags: 0,
         }
     }
     /// 800×600 @ 60 Hz (SVGA)
     pub fn svga_60() -> Self {
         Self {
-            hdisplay: 800, vdisplay: 600, clock_khz: 40_000,
-            hsync_start: 840, hsync_end: 968, htotal: 1056,
-            vsync_start: 601, vsync_end: 605, vtotal: 628,
+            hdisplay: 800,
+            vdisplay: 600,
+            clock_khz: 40_000,
+            hsync_start: 840,
+            hsync_end: 968,
+            htotal: 1056,
+            vsync_start: 601,
+            vsync_end: 605,
+            vtotal: 628,
             flags: 0,
         }
     }
@@ -86,45 +104,75 @@ impl DisplayMode {
     /// 3840×2160 @ 60 Hz (4K UHD, HDMI 2.0 / TMDS boundary, also FRL)
     pub fn uhd4k_60() -> Self {
         Self {
-            hdisplay: 3840, vdisplay: 2160, clock_khz: CLOCK_594MHZ,
-            hsync_start: 4016, hsync_end: 4104, htotal: 4400,
-            vsync_start: 2168, vsync_end: 2178, vtotal: 2250,
+            hdisplay: 3840,
+            vdisplay: 2160,
+            clock_khz: CLOCK_594MHZ,
+            hsync_start: 4016,
+            hsync_end: 4104,
+            htotal: 4400,
+            vsync_start: 2168,
+            vsync_end: 2178,
+            vtotal: 2250,
             flags: 0,
         }
     }
     /// 3840×2160 @ 120 Hz (4K UHD, HDMI 2.1 FRL ≥ 40 Gb/s required)
     pub fn uhd4k_120() -> Self {
         Self {
-            hdisplay: 3840, vdisplay: 2160, clock_khz: CLOCK_1188MHZ,
-            hsync_start: 4016, hsync_end: 4104, htotal: 4400,
-            vsync_start: 2168, vsync_end: 2178, vtotal: 2250,
+            hdisplay: 3840,
+            vdisplay: 2160,
+            clock_khz: CLOCK_1188MHZ,
+            hsync_start: 4016,
+            hsync_end: 4104,
+            htotal: 4400,
+            vsync_start: 2168,
+            vsync_end: 2178,
+            vtotal: 2250,
             flags: 0x1, // FRL required
         }
     }
     /// 3840×2160 @ 144 Hz (4K UHD, HDMI 2.1 FRL 48 Gb/s + DSC)
     pub fn uhd4k_144() -> Self {
         Self {
-            hdisplay: 3840, vdisplay: 2160, clock_khz: CLOCK_2178MHZ,
-            hsync_start: 4016, hsync_end: 4104, htotal: 4400,
-            vsync_start: 2168, vsync_end: 2178, vtotal: 2250,
+            hdisplay: 3840,
+            vdisplay: 2160,
+            clock_khz: CLOCK_2178MHZ,
+            hsync_start: 4016,
+            hsync_end: 4104,
+            htotal: 4400,
+            vsync_start: 2168,
+            vsync_end: 2178,
+            vtotal: 2250,
             flags: 0x3, // FRL + DSC required
         }
     }
     /// 7680×4320 @ 60 Hz (8K UHD, HDMI 2.1 FRL 48 Gb/s + DSC)
     pub fn uhd8k_60() -> Self {
         Self {
-            hdisplay: 7680, vdisplay: 4320, clock_khz: CLOCK_1188MHZ,
-            hsync_start: 8008, hsync_end: 8208, htotal: 8800,
-            vsync_start: 4336, vsync_end: 4356, vtotal: 4500,
+            hdisplay: 7680,
+            vdisplay: 4320,
+            clock_khz: CLOCK_1188MHZ,
+            hsync_start: 8008,
+            hsync_end: 8208,
+            htotal: 8800,
+            vsync_start: 4336,
+            vsync_end: 4356,
+            vtotal: 4500,
             flags: 0x3, // FRL + DSC required
         }
     }
     /// 2560×1440 @ 165 Hz (QHD, HDMI 2.1 FRL)
     pub fn qhd_165() -> Self {
         Self {
-            hdisplay: 2560, vdisplay: 1440, clock_khz: 586_000,
-            hsync_start: 2720, hsync_end: 2800, htotal: 2960,
-            vsync_start: 1441, vsync_end: 1444, vtotal: 1481,
+            hdisplay: 2560,
+            vdisplay: 1440,
+            clock_khz: 586_000,
+            hsync_start: 2720,
+            hsync_end: 2800,
+            htotal: 2960,
+            vsync_start: 1441,
+            vsync_end: 1444,
+            vtotal: 1481,
             flags: 0x1, // FRL required
         }
     }
@@ -252,7 +300,12 @@ static DRM: Mutex<Option<DrmDevice>> = Mutex::new(None);
 /// and binds an HDMI audio endpoint to connector 1.
 pub fn init_with_acp(acp_mmio_base: u64) {
     let crtcs = alloc::vec![Crtc {
-        id: 1, mode: None, fb_id: None, x: 0, y: 0, enabled: false,
+        id: 1,
+        mode: None,
+        fb_id: None,
+        x: 0,
+        y: 0,
+        enabled: false,
     }];
 
     let connectors = alloc::vec![Connector {
@@ -277,14 +330,32 @@ pub fn init_with_acp(acp_mmio_base: u64) {
 
     let planes = alloc::vec![
         Plane {
-            id: 1, kind: PlaneType::Primary, crtc_id: None, fb_id: None,
-            src_x: 0, src_y: 0, src_w: 0, src_h: 0,
-            crtc_x: 0, crtc_y: 0, crtc_w: 0, crtc_h: 0,
+            id: 1,
+            kind: PlaneType::Primary,
+            crtc_id: None,
+            fb_id: None,
+            src_x: 0,
+            src_y: 0,
+            src_w: 0,
+            src_h: 0,
+            crtc_x: 0,
+            crtc_y: 0,
+            crtc_w: 0,
+            crtc_h: 0,
         },
         Plane {
-            id: 2, kind: PlaneType::Overlay, crtc_id: None, fb_id: None,
-            src_x: 0, src_y: 0, src_w: 0, src_h: 0,
-            crtc_x: 0, crtc_y: 0, crtc_w: 0, crtc_h: 0,
+            id: 2,
+            kind: PlaneType::Overlay,
+            crtc_id: None,
+            fb_id: None,
+            src_x: 0,
+            src_y: 0,
+            src_w: 0,
+            src_h: 0,
+            crtc_x: 0,
+            crtc_y: 0,
+            crtc_w: 0,
+            crtc_h: 0,
         },
     ];
 
@@ -356,7 +427,15 @@ pub fn gem_alloc(width: u32, height: u32, format: PixelFormat) -> Option<u32> {
     let d = drm.as_mut()?;
     let handle = d.next_handle;
     d.next_handle += 1;
-    d.gem_bos.push(GemBo { handle, size, phys, width, height, pitch, format });
+    d.gem_bos.push(GemBo {
+        handle,
+        size,
+        phys,
+        width,
+        height,
+        pitch,
+        format,
+    });
     Some(handle)
 }
 
@@ -444,15 +523,24 @@ pub fn atomic_commit(
 }
 
 pub fn connectors() -> Vec<Connector> {
-    DRM.lock().as_ref().map(|d| d.connectors.clone()).unwrap_or_default()
+    DRM.lock()
+        .as_ref()
+        .map(|d| d.connectors.clone())
+        .unwrap_or_default()
 }
 
 pub fn crtcs() -> Vec<Crtc> {
-    DRM.lock().as_ref().map(|d| d.crtcs.clone()).unwrap_or_default()
+    DRM.lock()
+        .as_ref()
+        .map(|d| d.crtcs.clone())
+        .unwrap_or_default()
 }
 
 pub fn planes() -> Vec<Plane> {
-    DRM.lock().as_ref().map(|d| d.planes.clone()).unwrap_or_default()
+    DRM.lock()
+        .as_ref()
+        .map(|d| d.planes.clone())
+        .unwrap_or_default()
 }
 
 fn alloc_dma(size: usize, align: usize) -> Option<u64> {

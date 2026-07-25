@@ -28,8 +28,8 @@ impl Cap {
     pub const SysNice: u8 = cap::SYS_NICE;
 }
 pub mod dac;
-pub mod lsm;
 pub mod landlock;
+pub mod lsm;
 pub mod ns;
 pub mod pti;
 pub mod seccomp;

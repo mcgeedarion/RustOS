@@ -608,30 +608,10 @@ fn stage_esp(root: &Path, opts: &BuildOpts) -> Result<PathBuf> {
 
 fn build_fat_image(root: &Path, esp_dir: &Path, arch: Arch) -> Result<PathBuf> {
     let img = root.join(image_name(arch));
-    if which_first(&["mformat"]).is_none() || which_first(&["mcopy"]).is_none() {
-        log("mtools not found; using built-in FAT16 ESP writer");
-        return build_fat_image_builtin(&img, esp_dir, arch);
-    }
-
-    // 64 MiB FAT image
-    let size_kb = 65536u32;
-    run(Command::new("mformat")
-        .args(["-i", img.to_str().unwrap(), "-C", "-F"])
-        .args(["-T", &size_kb.to_string()])
-        .args(["::"]))?;
-
-    // Copy entire EFI/ tree
-    let efi_src = esp_dir.join("EFI");
-    run(Command::new("mcopy")
-        .args(["-i", img.to_str().unwrap(), "-s"])
-        .arg(&efi_src)
-        .arg("::"))?;
-
-    log(format!("built FAT image: {}", img.display()));
-    Ok(img)
+    build_partitioned_fat_image(&img, esp_dir, arch)
 }
 
-fn build_fat_image_builtin(img: &Path, esp_dir: &Path, arch: Arch) -> Result<PathBuf> {
+fn build_partitioned_fat_image(img: &Path, esp_dir: &Path, arch: Arch) -> Result<PathBuf> {
     const BYTES_PER_SECTOR: usize = 512;
     const SECTORS_PER_CLUSTER: usize = 4;
     const RESERVED_SECTORS: usize = 1;
@@ -639,7 +619,13 @@ fn build_fat_image_builtin(img: &Path, esp_dir: &Path, arch: Arch) -> Result<Pat
     const ROOT_ENTRIES: usize = 512;
     const ROOT_DIR_SECTORS: usize = ROOT_ENTRIES * 32 / BYTES_PER_SECTOR;
     const SECTORS_PER_FAT: usize = 256;
-    const TOTAL_SECTORS: usize = 131_072; // 64 MiB
+    const DISK_SECTORS: usize = 131_072; // 64 MiB
+    const GPT_ENTRY_COUNT: usize = 128;
+    const GPT_ENTRY_SIZE: usize = 128;
+    const GPT_ENTRY_SECTORS: usize = (GPT_ENTRY_COUNT * GPT_ENTRY_SIZE) / BYTES_PER_SECTOR;
+    const PARTITION_FIRST_LBA: usize = 2048;
+    const PARTITION_LAST_LBA: usize = DISK_SECTORS - GPT_ENTRY_SECTORS - 2;
+    const PARTITION_SECTORS: usize = PARTITION_LAST_LBA - PARTITION_FIRST_LBA + 1;
     const CLUSTER_SIZE: usize = BYTES_PER_SECTOR * SECTORS_PER_CLUSTER;
 
     let efi_path = esp_dir.join("EFI/BOOT").join(efi_boot_filename(arch));
@@ -651,52 +637,78 @@ fn build_fat_image_builtin(img: &Path, esp_dir: &Path, arch: Arch) -> Result<Pat
     }
 
     let first_data_sector = RESERVED_SECTORS + (FAT_COUNT * SECTORS_PER_FAT) + ROOT_DIR_SECTORS;
-    let mut image = vec![0u8; TOTAL_SECTORS * BYTES_PER_SECTOR];
-
-    // BIOS Parameter Block for a FAT16 ESP-style image.
-    image[0..3].copy_from_slice(&[0xEB, 0x3C, 0x90]);
-    image[3..11].copy_from_slice(b"RUSTOS  ");
-    put_u16(&mut image, 11, BYTES_PER_SECTOR as u16);
-    image[13] = SECTORS_PER_CLUSTER as u8;
-    put_u16(&mut image, 14, RESERVED_SECTORS as u16);
-    image[16] = FAT_COUNT as u8;
-    put_u16(&mut image, 17, ROOT_ENTRIES as u16);
-    put_u16(&mut image, 19, 0);
-    image[21] = 0xF8;
-    put_u16(&mut image, 22, SECTORS_PER_FAT as u16);
-    put_u16(&mut image, 24, 32);
-    put_u16(&mut image, 26, 64);
-    put_u32(&mut image, 28, 0);
-    put_u32(&mut image, 32, TOTAL_SECTORS as u32);
-    image[36] = 0x80;
-    image[38] = 0x29;
-    put_u32(&mut image, 39, 0x5255_5354);
-    image[43..54].copy_from_slice(b"RUSTOS ESP ");
-    image[54..62].copy_from_slice(b"FAT16   ");
-    image[510] = 0x55;
-    image[511] = 0xAA;
-
+    let data_clusters = (PARTITION_SECTORS - first_data_sector) / SECTORS_PER_CLUSTER;
     let file_start_cluster = 4usize;
     let last_file_cluster = file_start_cluster + file_clusters - 1;
+    if last_file_cluster >= data_clusters + 2 {
+        bail!(
+            "staged EFI binary is too large for {}: {} bytes",
+            img.display(),
+            efi.len()
+        );
+    }
+    if (last_file_cluster + 1) * 2 > SECTORS_PER_FAT * BYTES_PER_SECTOR {
+        bail!(
+            "staged EFI binary needs more FAT16 entries than {} provides",
+            img.display()
+        );
+    }
+
+    let mut image = vec![0u8; DISK_SECTORS * BYTES_PER_SECTOR];
+    write_protective_mbr(&mut image, DISK_SECTORS as u32);
+    write_gpt(
+        &mut image,
+        DISK_SECTORS as u64,
+        PARTITION_FIRST_LBA as u64,
+        PARTITION_LAST_LBA as u64,
+    );
+
+    let partition_offset = PARTITION_FIRST_LBA * BYTES_PER_SECTOR;
+    let partition_end = partition_offset + PARTITION_SECTORS * BYTES_PER_SECTOR;
+    let partition = &mut image[partition_offset..partition_end];
+
+    // BIOS Parameter Block for a FAT16 ESP-style image.
+    partition[0..3].copy_from_slice(&[0xEB, 0x3C, 0x90]);
+    partition[3..11].copy_from_slice(b"RUSTOS  ");
+    put_u16(partition, 11, BYTES_PER_SECTOR as u16);
+    partition[13] = SECTORS_PER_CLUSTER as u8;
+    put_u16(partition, 14, RESERVED_SECTORS as u16);
+    partition[16] = FAT_COUNT as u8;
+    put_u16(partition, 17, ROOT_ENTRIES as u16);
+    put_u16(partition, 19, 0);
+    partition[21] = 0xF8;
+    put_u16(partition, 22, SECTORS_PER_FAT as u16);
+    put_u16(partition, 24, 32);
+    put_u16(partition, 26, 64);
+    put_u32(partition, 28, PARTITION_FIRST_LBA as u32);
+    put_u32(partition, 32, PARTITION_SECTORS as u32);
+    partition[36] = 0x80;
+    partition[38] = 0x29;
+    put_u32(partition, 39, 0x5255_5354);
+    partition[43..54].copy_from_slice(b"RUSTOS ESP ");
+    partition[54..62].copy_from_slice(b"FAT16   ");
+    partition[510] = 0x55;
+    partition[511] = 0xAA;
+
     for fat_index in 0..FAT_COUNT {
         let fat_base = (RESERVED_SECTORS + fat_index * SECTORS_PER_FAT) * BYTES_PER_SECTOR;
-        put_u16(&mut image, fat_base, 0xFFF8);
-        put_u16(&mut image, fat_base + 2, 0xFFFF);
-        put_u16(&mut image, fat_base + 2 * 2, 0xFFFF); // EFI directory
-        put_u16(&mut image, fat_base + 3 * 2, 0xFFFF); // BOOT directory
+        put_u16(partition, fat_base, 0xFFF8);
+        put_u16(partition, fat_base + 2, 0xFFFF);
+        put_u16(partition, fat_base + 2 * 2, 0xFFFF); // EFI directory
+        put_u16(partition, fat_base + 3 * 2, 0xFFFF); // BOOT directory
         for cluster in file_start_cluster..=last_file_cluster {
             let next = if cluster == last_file_cluster {
                 0xFFFF
             } else {
                 (cluster + 1) as u16
             };
-            put_u16(&mut image, fat_base + cluster * 2, next);
+            put_u16(partition, fat_base + cluster * 2, next);
         }
     }
 
     let root_dir = (RESERVED_SECTORS + FAT_COUNT * SECTORS_PER_FAT) * BYTES_PER_SECTOR;
     write_dir_entry(
-        &mut image[root_dir..root_dir + 32],
+        &mut partition[root_dir..root_dir + 32],
         b"EFI     ",
         b"   ",
         0x10,
@@ -706,7 +718,7 @@ fn build_fat_image_builtin(img: &Path, esp_dir: &Path, arch: Arch) -> Result<Pat
 
     let efi_dir = cluster_offset(first_data_sector, 2);
     write_dir_entry(
-        &mut image[efi_dir..efi_dir + 32],
+        &mut partition[efi_dir..efi_dir + 32],
         b".       ",
         b"   ",
         0x10,
@@ -714,7 +726,7 @@ fn build_fat_image_builtin(img: &Path, esp_dir: &Path, arch: Arch) -> Result<Pat
         0,
     );
     write_dir_entry(
-        &mut image[efi_dir + 32..efi_dir + 64],
+        &mut partition[efi_dir + 32..efi_dir + 64],
         b"..      ",
         b"   ",
         0x10,
@@ -722,7 +734,7 @@ fn build_fat_image_builtin(img: &Path, esp_dir: &Path, arch: Arch) -> Result<Pat
         0,
     );
     write_dir_entry(
-        &mut image[efi_dir + 64..efi_dir + 96],
+        &mut partition[efi_dir + 64..efi_dir + 96],
         b"BOOT    ",
         b"   ",
         0x10,
@@ -732,7 +744,7 @@ fn build_fat_image_builtin(img: &Path, esp_dir: &Path, arch: Arch) -> Result<Pat
 
     let boot_dir = cluster_offset(first_data_sector, 3);
     write_dir_entry(
-        &mut image[boot_dir..boot_dir + 32],
+        &mut partition[boot_dir..boot_dir + 32],
         b".       ",
         b"   ",
         0x10,
@@ -740,7 +752,7 @@ fn build_fat_image_builtin(img: &Path, esp_dir: &Path, arch: Arch) -> Result<Pat
         0,
     );
     write_dir_entry(
-        &mut image[boot_dir + 32..boot_dir + 64],
+        &mut partition[boot_dir + 32..boot_dir + 64],
         b"..      ",
         b"   ",
         0x10,
@@ -748,7 +760,7 @@ fn build_fat_image_builtin(img: &Path, esp_dir: &Path, arch: Arch) -> Result<Pat
         0,
     );
     write_dir_entry(
-        &mut image[boot_dir + 64..boot_dir + 96],
+        &mut partition[boot_dir + 64..boot_dir + 96],
         match arch {
             Arch::AArch64 => b"BOOTAA64",
             Arch::X86_64 => b"BOOTX64 ",
@@ -760,11 +772,138 @@ fn build_fat_image_builtin(img: &Path, esp_dir: &Path, arch: Arch) -> Result<Pat
     );
 
     let file_offset = cluster_offset(first_data_sector, file_start_cluster);
-    image[file_offset..file_offset + efi.len()].copy_from_slice(&efi);
+    partition[file_offset..file_offset + efi.len()].copy_from_slice(&efi);
 
     fs::write(img, image).with_context(|| format!("write FAT image {}", img.display()))?;
-    log(format!("built FAT image: {}", img.display()));
+    log(format!(
+        "built partitioned FAT16 ESP image: {}",
+        img.display()
+    ));
     Ok(img.to_path_buf())
+}
+
+fn write_protective_mbr(image: &mut [u8], disk_sectors: u32) {
+    const PARTITION_OFFSET: usize = 446;
+
+    image[PARTITION_OFFSET + 1] = 0x00;
+    image[PARTITION_OFFSET + 2] = 0x02;
+    image[PARTITION_OFFSET + 3] = 0x00;
+    image[PARTITION_OFFSET + 4] = 0xEE;
+    image[PARTITION_OFFSET + 5] = 0xFF;
+    image[PARTITION_OFFSET + 6] = 0xFF;
+    image[PARTITION_OFFSET + 7] = 0xFF;
+    put_u32(image, PARTITION_OFFSET + 8, 1);
+    put_u32(image, PARTITION_OFFSET + 12, disk_sectors.saturating_sub(1));
+    image[510] = 0x55;
+    image[511] = 0xAA;
+}
+
+fn write_gpt(
+    image: &mut [u8],
+    disk_sectors: u64,
+    partition_first_lba: u64,
+    partition_last_lba: u64,
+) {
+    const BYTES_PER_SECTOR: usize = 512;
+    const GPT_ENTRY_COUNT: usize = 128;
+    const GPT_ENTRY_SIZE: usize = 128;
+    const GPT_ENTRY_BYTES: usize = GPT_ENTRY_COUNT * GPT_ENTRY_SIZE;
+    const PRIMARY_HEADER_LBA: u64 = 1;
+    const PRIMARY_ENTRIES_LBA: u64 = 2;
+    const EFI_SYSTEM_PARTITION_GUID: [u8; 16] = [
+        0x28, 0x73, 0x2A, 0xC1, 0x1F, 0xF8, 0xD2, 0x11, 0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9,
+        0x3B,
+    ];
+    const RUSTOS_DISK_GUID: [u8; 16] = [
+        0x54, 0x53, 0x55, 0x52, 0x49, 0x44, 0x4B, 0x53, 0x80, 0x00, 0x12, 0x34, 0x56, 0x78, 0x9A,
+        0xBC,
+    ];
+    const RUSTOS_ESP_GUID: [u8; 16] = [
+        0x54, 0x53, 0x55, 0x52, 0x53, 0x4F, 0x00, 0x40, 0x80, 0x00, 0x12, 0x34, 0x56, 0x78, 0x9A,
+        0xBC,
+    ];
+
+    let backup_header_lba = disk_sectors - 1;
+    let backup_entries_lba = disk_sectors - 33;
+    let first_usable_lba = 34;
+    let last_usable_lba = disk_sectors - 34;
+
+    let mut entries = [0u8; GPT_ENTRY_BYTES];
+    entries[0..16].copy_from_slice(&EFI_SYSTEM_PARTITION_GUID);
+    entries[16..32].copy_from_slice(&RUSTOS_ESP_GUID);
+    put_u64(&mut entries, 32, partition_first_lba);
+    put_u64(&mut entries, 40, partition_last_lba);
+    write_utf16le(&mut entries[56..128], "RustOS ESP");
+
+    let entries_crc = crc32(&entries);
+    let primary_entries_offset = PRIMARY_ENTRIES_LBA as usize * BYTES_PER_SECTOR;
+    image[primary_entries_offset..primary_entries_offset + GPT_ENTRY_BYTES]
+        .copy_from_slice(&entries);
+
+    let backup_entries_offset = backup_entries_lba as usize * BYTES_PER_SECTOR;
+    image[backup_entries_offset..backup_entries_offset + GPT_ENTRY_BYTES].copy_from_slice(&entries);
+
+    write_gpt_header(
+        &mut image[BYTES_PER_SECTOR..BYTES_PER_SECTOR * 2],
+        GptHeader {
+            current_lba: PRIMARY_HEADER_LBA,
+            backup_lba: backup_header_lba,
+            first_usable_lba,
+            last_usable_lba,
+            disk_guid: RUSTOS_DISK_GUID,
+            entries_lba: PRIMARY_ENTRIES_LBA,
+            entry_count: GPT_ENTRY_COUNT as u32,
+            entry_size: GPT_ENTRY_SIZE as u32,
+            entries_crc,
+        },
+    );
+
+    let backup_header_offset = backup_header_lba as usize * BYTES_PER_SECTOR;
+    write_gpt_header(
+        &mut image[backup_header_offset..backup_header_offset + BYTES_PER_SECTOR],
+        GptHeader {
+            current_lba: backup_header_lba,
+            backup_lba: PRIMARY_HEADER_LBA,
+            first_usable_lba,
+            last_usable_lba,
+            disk_guid: RUSTOS_DISK_GUID,
+            entries_lba: backup_entries_lba,
+            entry_count: GPT_ENTRY_COUNT as u32,
+            entry_size: GPT_ENTRY_SIZE as u32,
+            entries_crc,
+        },
+    );
+}
+
+struct GptHeader {
+    current_lba: u64,
+    backup_lba: u64,
+    first_usable_lba: u64,
+    last_usable_lba: u64,
+    disk_guid: [u8; 16],
+    entries_lba: u64,
+    entry_count: u32,
+    entry_size: u32,
+    entries_crc: u32,
+}
+
+fn write_gpt_header(sector: &mut [u8], header: GptHeader) {
+    sector.fill(0);
+    sector[0..8].copy_from_slice(b"EFI PART");
+    put_u32(sector, 8, 0x0001_0000);
+    put_u32(sector, 12, 92);
+    put_u64(sector, 24, header.current_lba);
+    put_u64(sector, 32, header.backup_lba);
+    put_u64(sector, 40, header.first_usable_lba);
+    put_u64(sector, 48, header.last_usable_lba);
+    sector[56..72].copy_from_slice(&header.disk_guid);
+    put_u64(sector, 72, header.entries_lba);
+    put_u32(sector, 80, header.entry_count);
+    put_u32(sector, 84, header.entry_size);
+    put_u32(sector, 88, header.entries_crc);
+
+    let header_crc = crc32(&sector[..92]);
+    put_u32(sector, 16, header_crc);
 }
 
 fn cluster_offset(first_data_sector: usize, cluster: usize) -> usize {
@@ -794,6 +933,28 @@ fn put_u16(bytes: &mut [u8], offset: usize, value: u16) {
 
 fn put_u32(bytes: &mut [u8], offset: usize, value: u32) {
     bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+}
+
+fn put_u64(bytes: &mut [u8], offset: usize, value: u64) {
+    bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+}
+
+fn write_utf16le(bytes: &mut [u8], value: &str) {
+    for (index, code_unit) in value.encode_utf16().take(bytes.len() / 2).enumerate() {
+        put_u16(bytes, index * 2, code_unit);
+    }
+}
+
+fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for byte in bytes {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            let mask = 0u32.wrapping_sub(crc & 1);
+            crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
+        }
+    }
+    !crc
 }
 
 // ── OVMF firmware resolution (x86_64) ─────────────────────────────────────
@@ -851,11 +1012,11 @@ fn ensure_ovmf(root: &Path) -> Result<PathBuf> {
                 }
                 downloaded_rpm = true;
                 break;
-            }
+            },
             Err(err) => {
                 log(format!("OVMF download failed from {url}: {err}"));
                 let _ = fs::remove_file(download_path);
-            }
+            },
         }
     }
     if !downloaded_rpm {
@@ -1248,7 +1409,7 @@ fn write_cpio_entry(archive: &mut Vec<u8>, name: &str, mode: u32, data: &[u8]) -
 }
 
 fn pad_to_4(bytes: &mut Vec<u8>) {
-    while bytes.len() % 4 != 0 {
+    while !bytes.len().is_multiple_of(4) {
         bytes.push(0);
     }
 }
@@ -1268,7 +1429,7 @@ fn lint_modules(root: &Path) -> Result<()> {
             let path = entry.path();
             if path.is_dir() {
                 walk(&path, violations)?;
-            } else if path.extension().map_or(false, |e| e == "rs") {
+            } else if path.extension().is_some_and(|e| e == "rs") {
                 let content = fs::read_to_string(&path)?;
                 for (i, line) in content.lines().enumerate() {
                     // Flag `pub(crate) use` that crosses a top-level module

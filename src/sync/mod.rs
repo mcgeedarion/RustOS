@@ -24,6 +24,6 @@ pub mod spinlock;
 pub mod wait_queue;
 
 pub use mutex::Mutex;
-pub use spin::Mutex as SpinMutex;
 pub use poll_source::{wait_any, wait_on, PollSource};
+pub use spin::Mutex as SpinMutex;
 pub use wait_queue::{CancelReason, CancellationToken, ReadyMask, WaitQueue, WakeReason};

@@ -6,14 +6,14 @@
 
 extern crate alloc;
 
+#[cfg(feature = "input_events")]
+use alloc::sync::Arc;
 use alloc::{
     collections::BTreeMap,
     format,
     string::{String, ToString},
     vec::Vec,
 };
-#[cfg(feature = "input_events")]
-use alloc::sync::Arc;
 use core::sync::atomic::{AtomicU64, Ordering};
 use spin::Mutex;
 

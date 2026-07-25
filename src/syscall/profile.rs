@@ -2,17 +2,15 @@
 //!
 //! ## Design goals
 //!
-//! * **Zero overhead when disabled** — every public symbol is a no-op
-//!   `#[inline(always)]` stub when `cfg(not(feature = "syscall-trace"))` is
-//!   active.  The compiler folds all call sites away entirely.
+//! * **Zero overhead when disabled** — every public symbol is a no-op `#[inline(always)]` stub when
+//!   `cfg(not(feature = "syscall-trace"))` is active.  The compiler folds all call sites away
+//!   entirely.
 //!
-//! * **Near-zero overhead when enabled** — entry/exit hooks do one
-//!   `AtomicU64::fetch_add(Relaxed)` for the counter and two `rdtsc` reads
-//!   for timing.  No locks, no allocations.
+//! * **Near-zero overhead when enabled** — entry/exit hooks do one `AtomicU64::fetch_add(Relaxed)`
+//!   for the counter and two `rdtsc` reads for timing.  No locks, no allocations.
 //!
-//! * **Multi-arch** — TSC on x86_64 and PMCCNTR_EL0 on AArch64.
-//!   `PMCCNTR_EL0` on AArch64.  Falls back to a zero constant on unknown
-//!   targets so the code compiles everywhere.
+//! * **Multi-arch** — TSC on x86_64 and PMCCNTR_EL0 on AArch64. `PMCCNTR_EL0` on AArch64.  Falls
+//!   back to a zero constant on unknown targets so the code compiles everywhere.
 //!
 //! ## Usage
 //!
@@ -75,9 +73,7 @@ mod enabled {
         {
             // SAFETY: rdtsc is always available on x86_64 and has no side
             // effects visible outside this CPU core.
-            unsafe {
-                core::arch::x86_64::_rdtsc()
-            }
+            unsafe { core::arch::x86_64::_rdtsc() }
         }
         #[cfg(target_arch = "aarch64")]
         {
@@ -87,10 +83,7 @@ mod enabled {
             }
             v
         }
-        #[cfg(not(any(
-            target_arch = "x86_64",
-                target_arch = "aarch64"
-        )))]
+        #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
         {
             0u64
         }
@@ -144,8 +137,7 @@ mod enabled {
 
         // Snapshot all counters (no lock needed — Relaxed loads are fine for
         // a best-effort debug dump).
-        let mut snap: [(u64, u64, usize); TABLE_SIZE] =
-            [(0u64, 0u64, 0usize); TABLE_SIZE];
+        let mut snap: [(u64, u64, usize); TABLE_SIZE] = [(0u64, 0u64, 0usize); TABLE_SIZE];
         for (i, stat) in SYSCALL_STATS.iter().enumerate() {
             snap[i] = (
                 stat.cycles.load(Ordering::Relaxed),
@@ -157,10 +149,7 @@ mod enabled {
         snap.sort_unstable_by(|a, b| b.0.cmp(&a.0));
 
         let mut sink = Sink { buf, pos: 0 };
-        let _ = write!(
-            sink,
-            "syscall_stats (top {top_n} by cycles)\n"
-        );
+        let _ = write!(sink, "syscall_stats (top {top_n} by cycles)\n");
         let _ = write!(
             sink,
             "{:<6}  {:>12}  {:>16}  {:>14}\n",
@@ -202,8 +191,8 @@ mod enabled {
 // regardless of the feature flag.
 #[cfg(feature = "syscall-trace")]
 pub use enabled::{
-    dump_syscall_stats, format_stats_top, syscall_profile_enter, syscall_profile_exit,
-    SyscallStat, SYSCALL_STATS,
+    dump_syscall_stats, format_stats_top, syscall_profile_enter, syscall_profile_exit, SyscallStat,
+    SYSCALL_STATS,
 };
 
 // ---------------------------------------------------------------------------

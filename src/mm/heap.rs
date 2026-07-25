@@ -22,9 +22,9 @@
 //!      to the linked_list_allocator via `add_free_region`.
 //!
 //!   4. On both supported architectures the kernel direct map covers the entire physical address
-//!      space in the higher half (x86-64: `PHYS_OFFSET + pa`; AArch64 via its VA48 physmap).
-//!      Newly allocated pages are therefore immediately addressable without any additional
-//!      `map_page()` call.
+//!      space in the higher half (x86-64: `PHYS_OFFSET + pa`; AArch64 via its VA48 physmap). Newly
+//!      allocated pages are therefore immediately addressable without any additional `map_page()`
+//!      call.
 //!
 //! ## Boot pool
 //! `BOOT_HEAP` is a `static mut [u8; BOOT_HEAP_SIZE]` baked into the kernel
@@ -60,14 +60,10 @@ use spin::Mutex;
 #[cfg(target_arch = "x86_64")]
 const PAGE_SIZE: usize = 4096;
 
-
 #[cfg(target_arch = "aarch64")]
 const PAGE_SIZE: usize = crate::arch::aarch64::mem_layout::GRANULE_SIZE;
 
-#[cfg(not(any(
-    target_arch = "x86_64",
-    target_arch = "aarch64",
-)))]
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64",)))]
 compile_error!(
     "Unsupported architecture: define PAGE_SIZE and phys_to_kernel_virt for this target in src/mm/heap.rs"
 );
@@ -84,7 +80,6 @@ fn phys_to_kernel_virt(pa: usize) -> usize {
     const PHYS_OFFSET: usize = 0xFFFF_8000_0000_0000;
     pa + PHYS_OFFSET
 }
-
 
 #[cfg(target_arch = "aarch64")]
 #[inline]

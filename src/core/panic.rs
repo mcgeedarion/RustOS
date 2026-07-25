@@ -104,12 +104,8 @@ unsafe fn arch_halt() -> ! {
             options(nomem, nostack)
         );
 
-
         // Unknown architecture: busy-loop.
-        #[cfg(not(any(
-            target_arch = "x86_64",
-            target_arch = "aarch64",
-            )))]
+        #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64",)))]
         core::hint::spin_loop();
     }
 }

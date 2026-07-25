@@ -129,16 +129,12 @@ where
     {
         arch_x86_64::with_user_access_enabled(f)
     }
-    #[cfg(not(any(
-        target_arch = "aarch64",
-        target_arch = "x86_64",
-    )))]
+    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64",)))]
     {
         let _ = f;
         Err(UaccessError::Fault)
     }
 }
-
 
 #[cfg(target_arch = "x86_64")]
 mod arch_x86_64 {

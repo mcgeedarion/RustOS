@@ -18,8 +18,8 @@
 //! touches this table.
 
 extern crate alloc;
-use alloc::collections::BTreeMap;
-use crate::sync::SpinMutex; // kernel spin-lock already used elsewhere
+use crate::sync::SpinMutex;
+use alloc::collections::BTreeMap; // kernel spin-lock already used elsewhere
 
 /// Composite device+inode key (matches Linux `struct inode` identity).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -39,8 +39,7 @@ struct Entry {
 }
 
 /// Global inode reference table.
-static INODE_REFS: SpinMutex<BTreeMap<InodeKey, Entry>> =
-    SpinMutex::new(BTreeMap::new());
+static INODE_REFS: SpinMutex<BTreeMap<InodeKey, Entry>> = SpinMutex::new(BTreeMap::new());
 
 // ---- Public API -----------------------------------------------------
 
@@ -144,7 +143,7 @@ mod tests {
         // (the table entry was removed). Simulate by just inc_open again.
         let k = key(1004);
         mark_unlinked(k); // immediate free, entry removed
-        inc_open(k);       // new open after removal → fresh entry
+        inc_open(k); // new open after removal → fresh entry
         assert_eq!(open_count(k), 1);
         assert!(!dec_open(k)); // not unlinked this time
     }

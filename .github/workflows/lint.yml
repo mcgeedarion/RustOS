@@ -16,10 +16,22 @@ jobs:
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           rustflags: ""
-          components: rustfmt, clippy
+          components: rust-src, rustfmt, clippy
 
       - name: Check formatting
-        run: cargo fmt --check
+        run: cargo fmt --all -- --check
 
       - name: Run clippy
-        run: cargo clippy -- -D warnings
+        run: |
+          cargo clippy -p rustos-kernel --lib --no-default-features --features boot_minimal \
+            -Z build-std=core,alloc,compiler_builtins \
+            -Z build-std-features=compiler-builtins-mem \
+            -- -D warnings
+          cargo clippy -p scheme-api --features std \
+            -Z build-std=std,panic_abort \
+            --target x86_64-unknown-linux-gnu \
+            -- -D warnings
+          cargo clippy -p xtask \
+            -Z build-std=std,panic_abort \
+            --target x86_64-unknown-linux-gnu \
+            -- -D warnings

@@ -51,10 +51,7 @@ fn hw_seed_raw() -> u64 {
     {
         crate::arch::aarch64::hal::time_now_cycles()
     }
-    #[cfg(not(any(
-        target_arch = "x86_64",
-        target_arch = "aarch64"
-    )))]
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     compile_error!("rand::hw_seed_raw: unsupported architecture")
 }
 
@@ -80,10 +77,7 @@ pub fn arch_entropy() -> u64 {
         let _ = STATE.compare_exchange_weak(s, mixed, Ordering::Relaxed, Ordering::Relaxed);
         next_u64() ^ hw.rotate_left(17)
     }
-    #[cfg(not(any(
-        target_arch = "x86_64",
-        target_arch = "aarch64"
-    )))]
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     compile_error!("rand::arch_entropy: unsupported architecture")
 }
 

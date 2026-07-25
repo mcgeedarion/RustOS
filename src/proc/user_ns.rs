@@ -18,10 +18,9 @@
 //!
 //! ## ID translation
 //!
-//! * `ns_to_host_uid(ns_id, ns_uid)` — convert a UID seen inside `ns_id` to the
-//!   host UID stored in the PCB.
-//! * `host_to_ns_uid(ns_id, host_uid)` — reverse mapping (for getuid(2) inside
-//!   a container).
+//! * `ns_to_host_uid(ns_id, ns_uid)` — convert a UID seen inside `ns_id` to the host UID stored in
+//!   the PCB.
+//! * `host_to_ns_uid(ns_id, host_uid)` — reverse mapping (for getuid(2) inside a container).
 //!
 //! Both return `u32::MAX` (overflow UID, -1 on Linux) when no mapping exists.
 
