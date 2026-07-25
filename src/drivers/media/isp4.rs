@@ -52,39 +52,39 @@ use spin::Mutex;
 
 // ── MMIO register offsets ─────────────────────────────────────────────────
 
-const ISP4_CTRL:        u32 = 0x0000;
-const ISP4_STATUS:      u32 = 0x0004;
-const ISP4_RESET:       u32 = 0x0008;
-const ISP4_CLK_GATE:    u32 = 0x000C;
-const ISP4_FW_BASE_LO:  u32 = 0x0100;
-const ISP4_FW_BASE_HI:  u32 = 0x0104;
-const ISP4_FW_SIZE:     u32 = 0x0108;
-const ISP4_FW_CTRL:     u32 = 0x010C;
-const ISP4_MBOX_CMD:    u32 = 0x0200;
+const ISP4_CTRL: u32 = 0x0000;
+const ISP4_STATUS: u32 = 0x0004;
+const ISP4_RESET: u32 = 0x0008;
+const ISP4_CLK_GATE: u32 = 0x000C;
+const ISP4_FW_BASE_LO: u32 = 0x0100;
+const ISP4_FW_BASE_HI: u32 = 0x0104;
+const ISP4_FW_SIZE: u32 = 0x0108;
+const ISP4_FW_CTRL: u32 = 0x010C;
+const ISP4_MBOX_CMD: u32 = 0x0200;
 const ISP4_MBOX_STATUS: u32 = 0x0204;
-const ISP4_MBOX_DATA:   u32 = 0x0208;
+const ISP4_MBOX_DATA: u32 = 0x0208;
 const ISP4_DMA_BASE_LO: u32 = 0x0300;
 const ISP4_DMA_BASE_HI: u32 = 0x0304;
-const ISP4_DMA_STRIDE:  u32 = 0x0308;
-const ISP4_DMA_CTRL:    u32 = 0x030C;
-const ISP4_DMA_HEAD:    u32 = 0x0310;
-const ISP4_DMA_TAIL:    u32 = 0x0314;
+const ISP4_DMA_STRIDE: u32 = 0x0308;
+const ISP4_DMA_CTRL: u32 = 0x030C;
+const ISP4_DMA_HEAD: u32 = 0x0310;
+const ISP4_DMA_TAIL: u32 = 0x0314;
 
 // ── ISP4_CTRL bits ────────────────────────────────────────────────────────
-const CTRL_POWER_ON:    u32 = 1 << 0;
-const CTRL_CLK_EN:      u32 = 1 << 1;
-const CTRL_SENSOR_EN:   u32 = 1 << 2;
+const CTRL_POWER_ON: u32 = 1 << 0;
+const CTRL_CLK_EN: u32 = 1 << 1;
+const CTRL_SENSOR_EN: u32 = 1 << 2;
 
 // ── ISP4_STATUS bits ─────────────────────────────────────────────────────
-const STATUS_FW_READY:  u32 = 1 << 0;
+const STATUS_FW_READY: u32 = 1 << 0;
 const STATUS_FRAME_RDY: u32 = 1 << 1;
-const STATUS_ERROR:     u32 = 1 << 8;
+const STATUS_ERROR: u32 = 1 << 8;
 
 // ── Mailbox command codes ─────────────────────────────────────────────────
-const MBOX_CMD_INIT:         u32 = 0x01;
-const MBOX_CMD_SET_FORMAT:   u32 = 0x02;
-const MBOX_CMD_STREAM_ON:    u32 = 0x03;
-const MBOX_CMD_STREAM_OFF:   u32 = 0x04;
+const MBOX_CMD_INIT: u32 = 0x01;
+const MBOX_CMD_SET_FORMAT: u32 = 0x02;
+const MBOX_CMD_STREAM_ON: u32 = 0x03;
+const MBOX_CMD_STREAM_OFF: u32 = 0x04;
 const MBOX_CMD_SET_DMA_RING: u32 = 0x05;
 
 // ── DMA ring configuration ────────────────────────────────────────────────
@@ -93,7 +93,7 @@ const MBOX_CMD_SET_DMA_RING: u32 = 0x05;
 const NUM_BUFS: usize = 4;
 
 /// Maximum supported resolution (4K UHD).
-const MAX_WIDTH:  u32 = 3840;
+const MAX_WIDTH: u32 = 3840;
 const MAX_HEIGHT: u32 = 2160;
 
 /// Bytes per pixel for YUYV (16 bpp packed).
@@ -108,7 +108,7 @@ struct Isp4State {
     dma_ring_paddr: u64,
     /// Per-buffer physical addresses within the ring.
     buf_paddrs: [u64; NUM_BUFS],
-    buf_sizes:  [u32; NUM_BUFS],
+    buf_sizes: [u32; NUM_BUFS],
     streaming: bool,
     width: u32,
     height: u32,
@@ -184,7 +184,9 @@ pub fn init(mmio_base: u64, fw_paddr: u64) {
         // 1. Soft-reset
         mmio_write(mmio_base, ISP4_RESET, 1);
         // Allow reset to propagate (spin a few cycles)
-        for _ in 0..1000 { core::hint::spin_loop(); }
+        for _ in 0..1000 {
+            core::hint::spin_loop();
+        }
 
         // 2. Power on + enable clocks
         mmio_write(mmio_base, ISP4_CLK_GATE, 0);
@@ -264,22 +266,26 @@ pub fn capture_start(width: u32, height: u32) -> Result<(), &'static str> {
         // Program DMA ring base
         mmio_write(base, ISP4_DMA_BASE_LO, (ring_paddr & 0xFFFF_FFFF) as u32);
         mmio_write(base, ISP4_DMA_BASE_HI, (ring_paddr >> 32) as u32);
-        mmio_write(base, ISP4_DMA_STRIDE,  stride);
+        mmio_write(base, ISP4_DMA_STRIDE, stride);
 
         // Notify firmware: SET_FORMAT  [width, height, fourcc_YUYV, num_bufs]
-        mbox_send(base, MBOX_CMD_SET_FORMAT, &[
-            width, height,
-            u32::from_le_bytes(*b"YUYV"),
-            NUM_BUFS as u32,
-        ])?;
+        mbox_send(
+            base,
+            MBOX_CMD_SET_FORMAT,
+            &[width, height, u32::from_le_bytes(*b"YUYV"), NUM_BUFS as u32],
+        )?;
 
         // Notify firmware: SET_DMA_RING  [ring_lo, ring_hi, buf_size, num_bufs]
-        mbox_send(base, MBOX_CMD_SET_DMA_RING, &[
-            (ring_paddr & 0xFFFF_FFFF) as u32,
-            (ring_paddr >> 32) as u32,
-            buf_size,
-            NUM_BUFS as u32,
-        ])?;
+        mbox_send(
+            base,
+            MBOX_CMD_SET_DMA_RING,
+            &[
+                (ring_paddr & 0xFFFF_FFFF) as u32,
+                (ring_paddr >> 32) as u32,
+                buf_size,
+                NUM_BUFS as u32,
+            ],
+        )?;
 
         // Enable sensor pipeline
         let ctrl = mmio_read(base, ISP4_CTRL);
@@ -293,11 +299,11 @@ pub fn capture_start(width: u32, height: u32) -> Result<(), &'static str> {
     }
 
     state.dma_ring_paddr = ring_paddr;
-    state.buf_paddrs     = buf_paddrs;
-    state.buf_sizes      = [buf_size; NUM_BUFS];
-    state.streaming      = true;
-    state.width          = width;
-    state.height         = height;
+    state.buf_paddrs = buf_paddrs;
+    state.buf_sizes = [buf_size; NUM_BUFS];
+    state.streaming = true;
+    state.width = width;
+    state.height = height;
 
     Ok(())
 }
@@ -347,11 +353,11 @@ pub fn dequeue_frame() -> Option<super::media::CaptureFrame> {
     }
 
     let frame = super::media::CaptureFrame {
-        index:        tail as u32,
-        paddr:        state.buf_paddrs[tail],
-        byte_len:     state.buf_sizes[tail],
-        sequence:     tail as u32, // simplified; real HW provides a counter
-        timestamp_ns: 0,           // real HW: read from ISP4_TIMESTAMP register
+        index: tail as u32,
+        paddr: state.buf_paddrs[tail],
+        byte_len: state.buf_sizes[tail],
+        sequence: tail as u32, // simplified; real HW provides a counter
+        timestamp_ns: 0,       // real HW: read from ISP4_TIMESTAMP register
     };
 
     Some(frame)
@@ -364,7 +370,11 @@ pub fn queue_buf(index: u32) {
         if state.streaming {
             unsafe {
                 // Advance the tail pointer so HW can reuse this slot
-                mmio_write(state.mmio_base, ISP4_DMA_TAIL, (index + 1) % NUM_BUFS as u32);
+                mmio_write(
+                    state.mmio_base,
+                    ISP4_DMA_TAIL,
+                    (index + 1) % NUM_BUFS as u32,
+                );
             }
         }
     }
@@ -372,8 +382,5 @@ pub fn queue_buf(index: u32) {
 
 /// Return the list of supported pixel formats.
 pub fn enum_formats() -> Vec<super::media::PixelFormat> {
-    alloc::vec![
-        super::media::FMT_YUYV,
-        super::media::FMT_NV12,
-    ]
+    alloc::vec![super::media::FMT_YUYV, super::media::FMT_NV12,]
 }

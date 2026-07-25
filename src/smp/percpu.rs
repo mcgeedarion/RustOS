@@ -4,7 +4,6 @@
 //!         mapping.  The `gs:0` slot holds the self-pointer so that
 //!         `current_cpu_id()` is a single `mov rax, gs:[0]` with no memory
 //!         barrier.
-//!
 
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU32, Ordering};

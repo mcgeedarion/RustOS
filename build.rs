@@ -58,8 +58,15 @@ fn main() {
     }
 
     if std::env::var("CARGO_FEATURE_TRACE").is_ok() {
-        println!("cargo:rustc-flags=-Z instrument-functions");
         println!("cargo:rerun-if-env-changed=CARGO_FEATURE_TRACE");
+        println!("cargo:rerun-if-env-changed=RUSTFLAGS");
+
+        let rustflags = std::env::var("RUSTFLAGS").unwrap_or_default();
+        if !rustflags.contains("-Z instrument-functions") {
+            println!(
+                "cargo:warning=trace feature enabled without RUSTFLAGS='-Z instrument-functions'; ftrace callbacks will not be inserted"
+            );
+        }
     }
 }
 

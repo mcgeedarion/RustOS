@@ -88,5 +88,4 @@ pub fn init() {
 
         crate::serial_println!("[nic] no supported NIC found on PCI bus");
     }
-
 }

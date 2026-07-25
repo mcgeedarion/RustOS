@@ -88,9 +88,9 @@ pub enum BootPriority {
 impl BootPriority {
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::Primary   => "PRIMARY",
+            Self::Primary => "PRIMARY",
             Self::Secondary => "SECONDARY",
-            Self::Tertiary  => "TERTIARY",
+            Self::Tertiary => "TERTIARY",
         }
     }
 }
@@ -136,10 +136,7 @@ impl BootInfo {
             BootPriority::Secondary
         }
         // Fallback for any future architecture not yet assigned a priority.
-        #[cfg(not(any(
-            target_arch = "x86_64",
-            target_arch = "aarch64",
-            )))]
+        #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64",)))]
         {
             BootPriority::Tertiary
         }

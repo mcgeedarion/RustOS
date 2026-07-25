@@ -138,6 +138,14 @@ pub struct PixelFormat {
 }
 
 /// YUYV 4:2:2 packed (default AMD ISP4 output).
-pub const FMT_YUYV: PixelFormat = PixelFormat { fourcc: *b"YUYV", desc: "YUYV 4:2:2", bpp: 16 };
+pub const FMT_YUYV: PixelFormat = PixelFormat {
+    fourcc: *b"YUYV",
+    desc: "YUYV 4:2:2",
+    bpp: 16,
+};
 /// NV12 4:2:0 semi-planar.
-pub const FMT_NV12: PixelFormat = PixelFormat { fourcc: *b"NV12", desc: "NV12 4:2:0", bpp: 12 };
+pub const FMT_NV12: PixelFormat = PixelFormat {
+    fourcc: *b"NV12",
+    desc: "NV12 4:2:0",
+    bpp: 12,
+};

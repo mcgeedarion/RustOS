@@ -6,9 +6,9 @@
 //! Extends the original connector with HDMI 2.1 capability metadata and an
 //! optional ACP audio endpoint binding.
 
-use super::DisplayMode;
-use super::hdmi::HdmiCapabilities;
 use super::acp::AcpEndpointId;
+use super::hdmi::HdmiCapabilities;
+use super::DisplayMode;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnectorType {

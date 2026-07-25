@@ -96,9 +96,9 @@ pub fn open_raw(path: &str, flags: u32) -> Result<usize, isize> {
 
     // ── 2. DAC pre-flight ────────────────────────────────────────────
     {
+        use crate::fs::vfs::open_check::flags as oflags;
         use crate::fs::vfs::open_check::{open_preflight, InodeInfo};
         use crate::fs::vfs::perm::InodePerm;
-        use crate::fs::vfs::open_check::flags as oflags;
 
         let (info, exists) = match crate::fs::vfs_ops::stat(path) {
             Ok(s) => {
@@ -106,9 +106,13 @@ pub fn open_raw(path: &str, flags: u32) -> Result<usize, isize> {
                     .map(|h| h.is_readonly())
                     .unwrap_or(false);
                 let info = InodeInfo {
-                    exists:   true,
-                    mode:     s.mode,
-                    perm:     InodePerm { uid: s.uid, gid: s.gid, mode: s.mode },
+                    exists: true,
+                    mode: s.mode,
+                    perm: InodePerm {
+                        uid: s.uid,
+                        gid: s.gid,
+                        mode: s.mode,
+                    },
                     readonly,
                 };
                 (info, true)
@@ -118,9 +122,13 @@ pub fn open_raw(path: &str, flags: u32) -> Result<usize, isize> {
                     .map(|h| h.is_readonly())
                     .unwrap_or(false);
                 let info = InodeInfo {
-                    exists:   false,
-                    mode:     0,
-                    perm:     InodePerm { uid: 0, gid: 0, mode: 0 },
+                    exists: false,
+                    mode: 0,
+                    perm: InodePerm {
+                        uid: 0,
+                        gid: 0,
+                        mode: 0,
+                    },
                     readonly,
                 };
                 (info, false)

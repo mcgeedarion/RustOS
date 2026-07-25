@@ -106,7 +106,11 @@ pub trait Tlb {
 }
 
 pub trait ContextSwitch {
-    unsafe fn switch_to(current_frame: *mut TrapFrame, next_frame: *const TrapFrame, next_cr3: usize);
+    unsafe fn switch_to(
+        current_frame: *mut TrapFrame,
+        next_frame: *const TrapFrame,
+        next_cr3: usize,
+    );
     fn make_user_frame(entry: u64, user_sp: u64) -> TrapFrame;
     fn current_sp() -> usize;
 }

@@ -5,15 +5,13 @@
 //!
 //! # Design
 //!
-//! - **Zero-cost when disabled**: all public APIs compile to no-ops / `false`
-//!   when `cfg(feature = "fault-inject")` is absent, so production builds
-//!   are completely unaffected.
-//! - **Per-subsystem counters**: each [`FaultPoint`] holds an atomic *budget*
-//!   (how many more calls will succeed before a failure is injected) and a
-//!   *trigger count* (how many times a failure has actually fired), allowing
-//!   precise, repeatable test scenarios.
-//! - **Thread-safe**: all state is manipulated through [`AtomicI64`] /
-//!   [`AtomicU64`] so no mutex is needed on the hot path.
+//! - **Zero-cost when disabled**: all public APIs compile to no-ops / `false` when `cfg(feature =
+//!   "fault-inject")` is absent, so production builds are completely unaffected.
+//! - **Per-subsystem counters**: each [`FaultPoint`] holds an atomic *budget* (how many more calls
+//!   will succeed before a failure is injected) and a *trigger count* (how many times a failure has
+//!   actually fired), allowing precise, repeatable test scenarios.
+//! - **Thread-safe**: all state is manipulated through [`AtomicI64`] / [`AtomicU64`] so no mutex is
+//!   needed on the hot path.
 //!
 //! # Usage
 //!
@@ -77,8 +75,8 @@ impl FaultPoint {
 
     /// Arm this fault point.
     ///
-    /// - `skip`: number of *successful* calls to allow before the first
-    ///   failure fires.  Pass `0` to fail immediately on the next call.
+    /// - `skip`: number of *successful* calls to allow before the first failure fires.  Pass `0` to
+    ///   fail immediately on the next call.
     pub fn arm(&self, skip: u32) {
         self.budget.store(skip as i64, Ordering::Release);
         self.armed.store(true, Ordering::Release);
@@ -105,8 +103,8 @@ impl FaultPoint {
     ///
     /// Internally:
     /// 1. If not armed → return `false`.
-    /// 2. Decrement budget.  If it was already ≤ 0 → fire, increment trigger
-    ///    count, disarm (one-shot by default).
+    /// 2. Decrement budget.  If it was already ≤ 0 → fire, increment trigger count, disarm
+    ///    (one-shot by default).
     /// 3. Otherwise → return `false`.
     #[inline]
     pub fn check(&self) -> bool {
@@ -162,8 +160,7 @@ pub mod points {
 
     /// Injected into the PMM bulk allocator (`alloc_frames_contiguous`).
     /// Simulates failure to satisfy a contiguous multi-page request.
-    pub static FAULT_PMM_CONTIGUOUS: FaultPoint =
-        FaultPoint::new("pmm::alloc_frames_contiguous");
+    pub static FAULT_PMM_CONTIGUOUS: FaultPoint = FaultPoint::new("pmm::alloc_frames_contiguous");
 
     // ── Virtual Memory Manager ───────────────────────────────────────────────
 
@@ -179,13 +176,11 @@ pub mod points {
 
     /// Injected at the syscall dispatch layer.  Simulates resource exhaustion
     /// (`EAGAIN` / `ENOMEM`) for any syscall that touches kernel resources.
-    pub static FAULT_SYSCALL_RESOURCE: FaultPoint =
-        FaultPoint::new("syscall::resource_check");
+    pub static FAULT_SYSCALL_RESOURCE: FaultPoint = FaultPoint::new("syscall::resource_check");
 
     /// Injected into the per-process file-descriptor table.  Simulates
     /// `EMFILE` (per-process fd limit reached).
-    pub static FAULT_SYSCALL_FDTABLE: FaultPoint =
-        FaultPoint::new("syscall::fdtable_insert");
+    pub static FAULT_SYSCALL_FDTABLE: FaultPoint = FaultPoint::new("syscall::fdtable_insert");
 }
 
 // ── maybe_inject! macro ──────────────────────────────────────────────────────

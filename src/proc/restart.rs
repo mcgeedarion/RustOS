@@ -2,14 +2,14 @@
 //!
 //! ## Protocol
 //!
-//!   1. A syscall that can block (nanosleep, clock_nanosleep, futex WAIT, …)
-//!      detects EINTR from signal delivery.
-//!   2. Before returning -EINTR to userspace it calls `set_restart` with the
-//!      syscall number, the adjusted argument registers.
-//!   3. `signal::check_and_deliver` inspects the pending signal's SA_RESTART
-//!      flag.  If set, it calls `apply_restart(pid)` to replay the syscall.
-//!   4. `gdbstub` calls `get_restart(pid)` on register-snapshot packets so
-//!      that a stopped task reports the pre-restart register view.
+//!   1. A syscall that can block (nanosleep, clock_nanosleep, futex WAIT, …) detects EINTR from
+//!      signal delivery.
+//!   2. Before returning -EINTR to userspace it calls `set_restart` with the syscall number, the
+//!      adjusted argument registers.
+//!   3. `signal::check_and_deliver` inspects the pending signal's SA_RESTART flag.  If set, it
+//!      calls `apply_restart(pid)` to replay the syscall.
+//!   4. `gdbstub` calls `get_restart(pid)` on register-snapshot packets so that a stopped task
+//!      reports the pre-restart register view.
 //!
 //! ## Cleanup
 //!

@@ -207,7 +207,9 @@ impl HdmiCapabilities {
             if tag == 7 && len >= 1 {
                 let ext_tag = block[pos + 1];
                 if ext_tag == 0x20 {
-                    if let Some(feat) = HdmiSinkFeatures::parse_hf_vsdb(&block[pos + 2..pos + 1 + len]) {
+                    if let Some(feat) =
+                        HdmiSinkFeatures::parse_hf_vsdb(&block[pos + 2..pos + 1 + len])
+                    {
                         self.sink = feat;
                         self.version = HdmiVersion::Hdmi21;
                         self.scdc_present = true;
@@ -263,7 +265,7 @@ impl FrlNegotiator {
             FrlState::SetRate => {
                 // Write FRL_RATE to SCDC then wait for FLT_READY
                 self.state = FrlState::WaitFltReady;
-            }
+            },
             FrlState::WaitFltReady => {
                 if flt_ready {
                     self.state = FrlState::FrlStart;
@@ -279,14 +281,14 @@ impl FrlNegotiator {
                         }
                     }
                 }
-            }
+            },
             FrlState::FrlStart => {
                 // Assert FRL_START in SCDC CONFIG_CONTROL_0
                 if frl_start_ack {
                     self.state = FrlState::Active;
                 }
-            }
-            _ => {}
+            },
+            _ => {},
         }
     }
 

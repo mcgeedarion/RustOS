@@ -41,49 +41,49 @@ use alloc::vec::Vec;
 /// ACP MMIO register offsets relative to the ACP base address.
 /// Register widths are 32-bit.
 pub mod regs {
-    pub const ACP_SOFT_RESET: u32        = 0x0000;
-    pub const ACP_CONTROL: u32           = 0x0004;
-    pub const ACP_STATUS: u32            = 0x0008;
-    pub const ACP_PGFSM_CONTROL: u32     = 0x0010;
-    pub const ACP_PGFSM_STATUS: u32      = 0x0014;
-    pub const ACP_INTR_STAT: u32         = 0x0020;
-    pub const ACP_INTR_MASK: u32         = 0x0024;
-    pub const ACP_INTR_CNTL: u32         = 0x0028;
+    pub const ACP_SOFT_RESET: u32 = 0x0000;
+    pub const ACP_CONTROL: u32 = 0x0004;
+    pub const ACP_STATUS: u32 = 0x0008;
+    pub const ACP_PGFSM_CONTROL: u32 = 0x0010;
+    pub const ACP_PGFSM_STATUS: u32 = 0x0014;
+    pub const ACP_INTR_STAT: u32 = 0x0020;
+    pub const ACP_INTR_MASK: u32 = 0x0024;
+    pub const ACP_INTR_CNTL: u32 = 0x0028;
 
     // I2S / TDM endpoint 0 (base; stride 0x40 per endpoint)
-    pub const I2S_TX_FIFO_ADDR: u32      = 0x1000;
-    pub const I2S_TX_FIFO_SIZE: u32      = 0x1004;
-    pub const I2S_TX_DMA_SIZE: u32       = 0x1008;
-    pub const I2S_TX_THRESHOLD: u32      = 0x100C;
-    pub const I2S_TX_CONTROL: u32        = 0x1010;
+    pub const I2S_TX_FIFO_ADDR: u32 = 0x1000;
+    pub const I2S_TX_FIFO_SIZE: u32 = 0x1004;
+    pub const I2S_TX_DMA_SIZE: u32 = 0x1008;
+    pub const I2S_TX_THRESHOLD: u32 = 0x100C;
+    pub const I2S_TX_CONTROL: u32 = 0x1010;
 
-    pub const I2S_RX_FIFO_ADDR: u32      = 0x1040;
-    pub const I2S_RX_FIFO_SIZE: u32      = 0x1044;
-    pub const I2S_RX_DMA_SIZE: u32       = 0x1048;
-    pub const I2S_RX_CONTROL: u32        = 0x1050;
+    pub const I2S_RX_FIFO_ADDR: u32 = 0x1040;
+    pub const I2S_RX_FIFO_SIZE: u32 = 0x1044;
+    pub const I2S_RX_DMA_SIZE: u32 = 0x1048;
+    pub const I2S_RX_CONTROL: u32 = 0x1050;
 
     // HDMI audio
-    pub const HDMI_TX_FIFO_ADDR: u32     = 0x2000;
-    pub const HDMI_TX_FIFO_SIZE: u32     = 0x2004;
-    pub const HDMI_TX_DMA_SIZE: u32      = 0x2008;
-    pub const HDMI_TX_CONTROL: u32       = 0x2010;
-    pub const HDMI_TX_CHANNEL_STATUS: u32= 0x2020;
+    pub const HDMI_TX_FIFO_ADDR: u32 = 0x2000;
+    pub const HDMI_TX_FIFO_SIZE: u32 = 0x2004;
+    pub const HDMI_TX_DMA_SIZE: u32 = 0x2008;
+    pub const HDMI_TX_CONTROL: u32 = 0x2010;
+    pub const HDMI_TX_CHANNEL_STATUS: u32 = 0x2020;
 
     // DP audio
-    pub const DP_TX_FIFO_ADDR: u32       = 0x2100;
-    pub const DP_TX_FIFO_SIZE: u32       = 0x2104;
-    pub const DP_TX_DMA_SIZE: u32        = 0x2108;
-    pub const DP_TX_CONTROL: u32         = 0x2110;
+    pub const DP_TX_FIFO_ADDR: u32 = 0x2100;
+    pub const DP_TX_FIFO_SIZE: u32 = 0x2104;
+    pub const DP_TX_DMA_SIZE: u32 = 0x2108;
+    pub const DP_TX_CONTROL: u32 = 0x2110;
 
     // SPDIF
-    pub const SPDIF_TX_FIFO_ADDR: u32    = 0x2200;
-    pub const SPDIF_TX_FIFO_SIZE: u32    = 0x2204;
-    pub const SPDIF_TX_CONTROL: u32      = 0x2210;
+    pub const SPDIF_TX_FIFO_ADDR: u32 = 0x2200;
+    pub const SPDIF_TX_FIFO_SIZE: u32 = 0x2204;
+    pub const SPDIF_TX_CONTROL: u32 = 0x2210;
 
     // Clock / sample-rate
     pub const ACP_I2S_MASTER_BCLK_DIV: u32 = 0x3000;
     pub const ACP_I2S_MASTER_LRCK_DIV: u32 = 0x3004;
-    pub const ACP_SCRATCH_REG: u32          = 0x4000;
+    pub const ACP_SCRATCH_REG: u32 = 0x4000;
 }
 
 /// ACP version discriminant.

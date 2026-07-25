@@ -16,8 +16,7 @@ pub fn read_cstr_safe(addr: usize) -> Option<String> {
     let mut bytes = Vec::new();
     for offset in 0..MAX_CSTR_LEN {
         let mut byte = 0u8;
-        if crate::kernel::uaccess::copy_from_user(&mut byte as *mut u8, addr + offset, 1).is_err()
-        {
+        if crate::kernel::uaccess::copy_from_user(&mut byte as *mut u8, addr + offset, 1).is_err() {
             return None;
         }
         if byte == 0 {
@@ -36,7 +35,7 @@ pub fn read_cstr_safe(addr: usize) -> Option<String> {
 pub fn sys_execve(path_va: usize, _argv_va: usize, _envp_va: usize) -> isize {
     match read_cstr_safe(path_va) {
         Some(_) => -38, // ENOSYS
-        None => -14,   // EFAULT
+        None => -14,    // EFAULT
     }
 }
 

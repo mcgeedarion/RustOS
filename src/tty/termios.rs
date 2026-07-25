@@ -67,7 +67,7 @@ pub mod lflag {
 
 pub mod cc {
     pub const VINTR: usize = 0; // ^C  → SIGINT
-    pub const VQUIT: usize = 1; // ^\ → SIGQUIT
+    pub const VQUIT: usize = 1; // Ctrl-backslash -> SIGQUIT
     pub const VERASE: usize = 2; // DEL / BS
     pub const VKILL: usize = 3; // ^U  — erase line
     pub const VEOF: usize = 4; // ^D

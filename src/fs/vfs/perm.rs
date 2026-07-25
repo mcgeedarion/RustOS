@@ -6,13 +6,13 @@
 //!
 //! ## Design notes
 //! * uid 0 (root) bypasses DAC checks (but not MAC — when LSM lands).
-//! * Effective credentials are supplied by the caller; this module is
-//!   stateless and purely functional.
-//! * EROFS guard is the caller's responsibility (`ops.rs` already checks
-//!   `h.is_readonly()` before mutating ops); `check_write` exists for
-//!   consistency with the three-way split expected by `open` flag handling.
-//! * `S_ISVTX` (sticky bit) enforcement for `unlink`/`rename` is exposed
-//!   separately in `check_sticky`.
+//! * Effective credentials are supplied by the caller; this module is stateless and purely
+//!   functional.
+//! * EROFS guard is the caller's responsibility (`ops.rs` already checks `h.is_readonly()` before
+//!   mutating ops); `check_write` exists for consistency with the three-way split expected by
+//!   `open` flag handling.
+//! * `S_ISVTX` (sticky bit) enforcement for `unlink`/`rename` is exposed separately in
+//!   `check_sticky`.
 
 extern crate alloc;
 
@@ -66,7 +66,7 @@ impl From<PermError> for isize {
 
 // ---- Mode bit masks -------------------------------------------------
 
-const S_IFMT:  u16 = 0o170000;
+const S_IFMT: u16 = 0o170000;
 const S_IFDIR: u16 = 0o040000;
 const S_IFLNK: u16 = 0o120000;
 
@@ -139,11 +139,7 @@ pub fn check_read(creds: Creds, inode: InodePerm) -> Result<(), PermError> {
 /// Check write permission on `inode` for task with `creds`.
 /// Returns `Ok(())`, `Err(PermError::Acces)`, or `Err(PermError::Rofs)` if
 /// `readonly` is true.
-pub fn check_write(
-    creds: Creds,
-    inode: InodePerm,
-    readonly: bool,
-) -> Result<(), PermError> {
+pub fn check_write(creds: Creds, inode: InodePerm, readonly: bool) -> Result<(), PermError> {
     if readonly {
         return Err(PermError::Rofs);
     }
@@ -220,13 +216,9 @@ pub fn check_sticky(
 /// rejected with `ENOTDIR`.
 ///
 /// `is_last_component` should be true only for the final path element.
-pub fn check_open_type(
-    mode: u16,
-    flags: u32,
-    is_last_component: bool,
-) -> Result<(), PermError> {
+pub fn check_open_type(mode: u16, flags: u32, is_last_component: bool) -> Result<(), PermError> {
     const O_WRONLY: u32 = 0x0001;
-    const O_RDWR: u32   = 0x0002;
+    const O_RDWR: u32 = 0x0002;
 
     if is_dir(mode) && is_last_component {
         if flags & (O_WRONLY | O_RDWR) != 0 {
@@ -245,11 +237,21 @@ mod tests {
     use super::*;
 
     fn root_creds() -> Creds {
-        Creds { uid: 0, gid: 0, euid: 0, egid: 0 }
+        Creds {
+            uid: 0,
+            gid: 0,
+            euid: 0,
+            egid: 0,
+        }
     }
 
     fn user_creds(uid: u32, gid: u32) -> Creds {
-        Creds { uid, gid, euid: uid, egid: gid }
+        Creds {
+            uid,
+            gid,
+            euid: uid,
+            egid: gid,
+        }
     }
 
     fn inode(uid: u32, gid: u32, mode: u16) -> InodePerm {

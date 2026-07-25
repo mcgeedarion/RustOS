@@ -6,11 +6,11 @@ pub mod fd;
 pub mod inode_ref;
 pub mod link;
 pub mod open_check;
+pub mod ops;
 pub mod perm;
 pub mod rename;
 pub mod symlink;
 pub mod unlink;
-pub mod ops;
 pub mod uring;
 
 // Preserve the historical `crate::fs::vfs::*` facade after moving the raw
@@ -57,8 +57,7 @@ impl FsOps for VfsMountOps {
 /// (bit `0x0002_0000`).  Returns the canonical absolute path or a
 /// POSIX errno on error (`ELOOP = -40`, `ENOENT = -2`, …).
 pub fn resolve_path(path: &str, flags: u32) -> Result<alloc::string::String, isize> {
-    crate::fs::vfs::symlink::resolve(&VfsMountOps, path, flags)
-        .map_err(isize::from)
+    crate::fs::vfs::symlink::resolve(&VfsMountOps, path, flags).map_err(isize::from)
 }
 
 /// Compatibility helper for older callers that create and populate a file in
