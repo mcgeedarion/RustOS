@@ -12,7 +12,8 @@
  */
 
 #include <unistd.h>
-#include <stdlib.h>
+extern long write(int fd, const void *buf, unsigned long count);
+extern void exit(int status);
 
 int main(void) {
     const char msg[] = "Hello from rustos userspace!\n";
