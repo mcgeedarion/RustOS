@@ -27,12 +27,6 @@ compiled only when neither `boot_minimal` nor `userspace_boot` is selected.
   marker, and idle-loop contracts; full subsystem parity with x86_64 is not yet
   required.
 
-## Not currently implemented: RISC-V
-
-There is no RISC-V target spec, architecture module, or CI/runtime contract in
-this repository today. Add those only when an SBI boot path and compile target
-are introduced together.
-
 ---
 
 ## Build-profile/module policy
