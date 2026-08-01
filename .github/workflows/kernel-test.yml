@@ -215,6 +215,14 @@ jobs:
           SMOKE_MARKER_RE='BOOT_MINIMAL_OK|FULL_OS_USERSPACE_OK|entering cpu_idle'
           grep -Eq "$SMOKE_MARKER_RE" "$LOG"
 
+      - name: Build x86_64 UEFI image for kmtest boot
+        if: inputs.run_kmtest && inputs.arch == 'x86_64'
+        run: |
+          set -o pipefail
+          cargo xtask image --arch x86_64 --boot uefi --debug \
+            2>&1 | tee "build-kmtest-x86_64-image.log"
+          test -f boot-x86_64.img
+
       - name: QEMU kmtest boot (x86_64)
         if: inputs.run_kmtest && inputs.arch == 'x86_64'
         run: |
