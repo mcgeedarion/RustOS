@@ -9,17 +9,65 @@ TEMP_FW_VARS=""
 SMOKE_MARKER_RE=${SMOKE_MARKER_RE:-'BOOT_MINIMAL_OK|FULL_OS_USERSPACE_OK|entering cpu_idle'}
 
 usage() {
-    echo "Usage: ARCH=<arch> [TIMEOUT=<s>] [SMOKE=1] $0"
+    echo "Usage: ARCH=<arch> [TIMEOUT=<s>] [SMOKE=1] $0 [--arch <arch>] [--boot uefi] [--timeout <s>] [--smoke|--test]"
     echo "  ARCH    : x86_64 | aarch64"
     echo "  TIMEOUT : seconds before QEMU is killed (default: 30)"
     echo "  SMOKE   : set to 1 to grep serial output for boot sentinel"
+    echo "  --test  : CI alias for --smoke"
     exit 1
 }
 
-if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then usage; fi
-if [[ -n "${1:-}" ]]; then ARCH=$1; fi
-if [[ -n "${2:-}" ]]; then TIMEOUT=$2; fi
-if [[ -n "${3:-}" ]]; then SMOKE=$3; fi
+positional=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help)
+            usage
+            ;;
+        --arch)
+            [[ $# -ge 2 ]] || { echo "ERROR: --arch requires a value" >&2; usage; }
+            ARCH=$2
+            shift 2
+            ;;
+        --boot)
+            [[ $# -ge 2 ]] || { echo "ERROR: --boot requires a value" >&2; usage; }
+            BOOT=$2
+            shift 2
+            ;;
+        --timeout)
+            [[ $# -ge 2 ]] || { echo "ERROR: --timeout requires a value" >&2; usage; }
+            TIMEOUT=$2
+            shift 2
+            ;;
+        --smoke|--test)
+            SMOKE=1
+            shift
+            ;;
+        --)
+            shift
+            break
+            ;;
+        -*)
+            echo "ERROR: unsupported option '$1'" >&2
+            usage
+            ;;
+        *)
+            # Preserve the original positional interface for local callers.
+            case "$positional" in
+                0) ARCH=$1 ;;
+                1) TIMEOUT=$1 ;;
+                2) SMOKE=$1 ;;
+                *) echo "ERROR: too many positional arguments" >&2; usage ;;
+            esac
+            positional=$((positional + 1))
+            shift
+            ;;
+    esac
+done
+
+if [[ "$BOOT" != "uefi" ]]; then
+    echo "ERROR: unsupported boot mode '$BOOT'" >&2
+    usage
+fi
 
 case "$ARCH" in
     x86_64|aarch64) ;;
