@@ -21,7 +21,6 @@
 #pragma once
 
 #include <stddef.h>   /* size_t */
-#include <stdint.h>   /* int64_t, uint64_t */
 
 /* ─── types ─────────────────────────────────────────────────────────── */
 typedef int            pid_t;

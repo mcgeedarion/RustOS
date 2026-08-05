@@ -2,20 +2,20 @@
 
 /* ── Layer shell helpers ───────────────────────────────────────────────── */
 static void layer_surface_layout(LayerSurface *ls) {
-    int32_t sw = (int32_t)g.screen_width;
-    int32_t sh = (int32_t)g.screen_height;
+    int32_t sw = (int32_t)(g.screen_width);
+    int32_t sh = (int32_t)(g.screen_height);
     int32_t x = ls->margin_left;
     int32_t y = ls->margin_top;
-    int32_t usable_w = sw - ls->margin_left - ls->margin_right;
-    int32_t usable_h = sh - ls->margin_top  - ls->margin_bottom;
-    if (usable_w < 0) usable_w = 0;
-    if (usable_h < 0) usable_h = 0;
-    int32_t w = ls->req_width  > 0 ? ls->req_width  : usable_w;
-    int32_t h = ls->req_height > 0 ? ls->req_height : usable_h;
+    int32_t usableW = (int32_t)(sw - ls->margin_left - ls->margin_right);
+    int32_t usableH = (int32_t)(sh - ls->margin_top  - ls->margin_bottom);
+    if (usableW < 0) usableW = 0;
+    if (usableH < 0) usableH = 0;
+    int32_t w = ls->req_width  > 0 ? ls->req_width  : usableW;
+    int32_t h = ls->req_height > 0 ? ls->req_height : usableH;
 
     uint32_t a = ls->anchor;
-    if ((a & ZWL_ANCHOR_LEFT) && (a & ZWL_ANCHOR_RIGHT)) w = usable_w;
-    if ((a & ZWL_ANCHOR_TOP)  && (a & ZWL_ANCHOR_BOTTOM)) h = usable_h;
+    if ((a & ZWL_ANCHOR_LEFT) && (a & ZWL_ANCHOR_RIGHT)) w = usableW;
+    if ((a & ZWL_ANCHOR_TOP)  && (a & ZWL_ANCHOR_BOTTOM)) h = usableH;
     if (w < 0) w = 0;
     if (h < 0) h = 0;
 

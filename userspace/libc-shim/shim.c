@@ -9,7 +9,25 @@
  * and define ARCH=riscv64 in the build system.
  */
 
-#include "shim.h"
+/* Minimal shim definitions to avoid dependency on system headers. */
+
+typedef unsigned long size_t;
+typedef long ssize_t;
+typedef unsigned int mode_t;
+typedef int pid_t;
+
+#define SYS_READ        0
+#define SYS_WRITE       1
+#define SYS_OPEN        2
+#define SYS_CLOSE       3
+#define SYS_EXIT       60
+#define SYS_FORK       57
+#define SYS_EXECVE     59
+#define SYS_WAIT4      61
+#define SYS_NANOSLEEP  35
+#define SYS_SCHED_YIELD 24
+#define SYS_GETCWD     79
+#define SYS_CHDIR      80
 
 /* ─── raw syscall ──────────────────────────────────────────────────── */
 
@@ -60,6 +78,32 @@ long shim_syscall(long nr,
         : "memory"
     );
     return ra1;
+}
+
+#elif defined(__aarch64__)
+/*
+ * ARM64 (AArch64) svc ABI
+ *   x8 = syscall number, x0-x5 = args, x0 = return value
+ */
+long shim_syscall(long nr,
+                  long a1, long a2, long a3,
+                  long a4, long a5, long a6)
+{
+    register long r8 __asm__("x8") = nr;
+    register long r0 __asm__("x0") = a1;
+    register long r1 __asm__("x1") = a2;
+    register long r2 __asm__("x2") = a3;
+    register long r3 __asm__("x3") = a4;
+    register long r4 __asm__("x4") = a5;
+    register long r5 __asm__("x5") = a6;
+    __asm__ volatile (
+        "svc #0"
+        : "+r" (r0)
+        : "r" (r8), "r" (r1), "r" (r2),
+          "r" (r3), "r" (r4), "r" (r5)
+        : "memory"
+    );
+    return r0;
 }
 
 #else
