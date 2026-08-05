@@ -67,10 +67,6 @@ impl<T> SpinLock<T> {
             unsafe {
                 core::arch::asm!("pause", options(nostack, preserves_flags));
             }
-            #[cfg(target_arch = "riscv64")]
-            unsafe {
-                core::arch::asm!("nop", options(nostack));
-            }
             core::hint::spin_loop();
         }
         SpinLockGuard { lock: self }
@@ -211,20 +207,6 @@ fn irq_flags_and_disable() -> bool {
         );
         flags & (1 << 9) != 0
     }
-    #[cfg(target_arch = "riscv64")]
-    unsafe {
-        let sstatus: usize;
-        core::arch::asm!(
-            "csrrci {ss}, sstatus, 2",
-            ss = out(reg) sstatus,
-            options(nostack)
-        );
-        sstatus & (1 << 1) != 0
-    }
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "riscv64")))]
-    {
-        false
-    }
 }
 
 #[inline]
@@ -232,9 +214,5 @@ fn irq_enable() {
     #[cfg(target_arch = "x86_64")]
     unsafe {
         core::arch::asm!("sti", options(nostack, preserves_flags));
-    }
-    #[cfg(target_arch = "riscv64")]
-    unsafe {
-        core::arch::asm!("csrsi sstatus, 2", options(nostack));
     }
 }

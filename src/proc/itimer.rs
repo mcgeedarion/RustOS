@@ -313,3 +313,11 @@ pub fn cleanup_itimers(pid: usize) {
     let mut table = ITIMER_TABLE.lock();
     table.remove(&pid);
 }
+
+/// Timer interrupt compatibility hook.
+pub fn tick() {
+    let pid = crate::proc::scheduler::current_pid() as usize;
+    if pid != 0 {
+        check_itimers(pid);
+    }
+}

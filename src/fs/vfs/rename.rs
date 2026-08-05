@@ -13,7 +13,7 @@
 extern crate alloc;
 use alloc::string::String;
 
-const S_IFMT:  u16 = 0o170000;
+const S_IFMT: u16 = 0o170000;
 const S_IFDIR: u16 = 0o040000;
 
 #[inline]
@@ -159,7 +159,7 @@ mod tests {
         let mut a = base("/f", "/d");
         a.new_exists = true;
         a.new_mode = 0o040755; // dst is dir
-        // src is file (old_mode default 0o100644)
+                               // src is file (old_mode default 0o100644)
         assert_eq!(rename_preflight(a), Err(-21));
     }
 

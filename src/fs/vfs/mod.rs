@@ -3,12 +3,29 @@
 extern crate alloc;
 
 pub mod fd;
+pub mod inode_ref;
+pub mod link;
+pub mod open_check;
 pub mod ops;
+pub mod perm;
+pub mod rename;
+pub mod symlink;
+pub mod unlink;
 pub mod uring;
 
 // Preserve the historical `crate::fs::vfs::*` facade after moving the raw
 // descriptor implementation into `fd.rs`.
 pub use fd::*;
+
+/// Compatibility open flag constants.
+pub const O_RDONLY: u32 = open_check::flags::O_RDONLY;
+pub const O_WRONLY: u32 = open_check::flags::O_WRONLY;
+pub const O_RDWR: u32 = open_check::flags::O_RDWR;
+
+/// Return the size of an open raw VFS fd.
+pub fn fstat(fd: usize) -> Option<usize> {
+    fd::file_size(fd)
+}
 
 use crate::fs::vfs::symlink::{FsOps, ResolveError};
 
@@ -40,8 +57,7 @@ impl FsOps for VfsMountOps {
 /// (bit `0x0002_0000`).  Returns the canonical absolute path or a
 /// POSIX errno on error (`ELOOP = -40`, `ENOENT = -2`, …).
 pub fn resolve_path(path: &str, flags: u32) -> Result<alloc::string::String, isize> {
-    crate::fs::vfs::symlink::resolve(&VfsMountOps, path, flags)
-        .map_err(isize::from)
+    crate::fs::vfs::symlink::resolve(&VfsMountOps, path, flags).map_err(isize::from)
 }
 
 /// Compatibility helper for older callers that create and populate a file in

@@ -36,7 +36,9 @@ pub fn check_alloc_frame() -> bool {
 #[inline(always)]
 pub fn check_alloc_contiguous() -> bool {
     if FAULT_PMM_CONTIGUOUS.check() {
-        log::warn!("[fault-inject] FAULT_PMM_CONTIGUOUS fired — injecting contiguous alloc failure");
+        log::warn!(
+            "[fault-inject] FAULT_PMM_CONTIGUOUS fired — injecting contiguous alloc failure"
+        );
         true
     } else {
         false

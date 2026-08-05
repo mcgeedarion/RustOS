@@ -6,7 +6,6 @@
 #            errno returned as negative value in rax (no errno global for
 #            static musl; per-thread errno lives at fs:0x00 in the TCB)
 #
-#   riscv64: ecall instruction, number in a7, args in a0..a5
 #            errno returned as negative value in a0
 #
 # The kernel side (src/syscall/mod.rs) already follows Linux ABI exactly,
@@ -35,14 +34,9 @@ COMMON_CFLAGS  := -ffreestanding \
 ifeq ($(ARCH),x86_64)
   SYSDEP_ARCH    := x86_64
   # Note: x86_64 requires assembly implementations of longjmp; 
-  # riscv64 uses C implementations instead
   SYSDEP_FILES   := syscall.s setjmp.s longjmp.s clone.s
   EXTRA_CFLAGS   := -mno-red-zone -mcmodel=small
-else ifeq ($(ARCH),riscv64)
-  SYSDEP_ARCH    := riscv64
-  # Note: riscv64 implements longjmp as C code, x86_64 requires assembly
   SYSDEP_FILES   := syscall.s setjmp.s clone.s
-  EXTRA_CFLAGS   := -march=rv64gc -mabi=lp64d
 else
   $(error Unsupported ARCH=$(ARCH))
 endif

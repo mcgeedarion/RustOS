@@ -3,18 +3,17 @@
 //! ## What this implements
 //! * Each net-ns starts with a synthetic loopback entry (lo, 127.0.0.1/8, ::1).
 //! * `unshare(CLONE_NEWNET)` creates a fresh net-ns via `create_net_ns()`.
-//! * Physical/virtual interfaces are registered into a specific net-ns by the
-//!   network stack via `net_ns_add_iface()`.  They are removed on interface
-//!   teardown or when moving between namespaces.
-//! * `check_socket_ns(sock_ns, current_ns)` enforces isolation: a socket
-//!   created in ns A cannot be used by a process in ns B.
+//! * Physical/virtual interfaces are registered into a specific net-ns by the network stack via
+//!   `net_ns_add_iface()`.  They are removed on interface teardown or when moving between
+//!   namespaces.
+//! * `check_socket_ns(sock_ns, current_ns)` enforces isolation: a socket created in ns A cannot be
+//!   used by a process in ns B.
 //!
 //! ## Integration points
-//! * `net::socket::sys_socket()` should call `current_net_ns()` and store the
-//!   result in the socket object.
-//! * Every socket syscall (send/recv/connect/bind/…) should call
-//!   `check_socket_ns(sock.net_ns, current_net_ns())` and return `-EACCES` on
-//!   mismatch.
+//! * `net::socket::sys_socket()` should call `current_net_ns()` and store the result in the socket
+//!   object.
+//! * Every socket syscall (send/recv/connect/bind/…) should call `check_socket_ns(sock.net_ns,
+//!   current_net_ns())` and return `-EACCES` on mismatch.
 //! * procfs renders `/proc/net/dev` per net-ns via `list_ifaces(ns)`.
 
 extern crate alloc;

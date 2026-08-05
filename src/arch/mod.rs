@@ -32,9 +32,6 @@ pub mod console {
         #[cfg(target_arch = "x86_64")]
         crate::arch::x86_64::serial::write_byte(byte);
 
-        #[cfg(target_arch = "riscv64")]
-        crate::arch::riscv64::hal::putchar(byte);
-
         #[cfg(target_arch = "aarch64")]
         crate::arch::aarch64::serial::write_byte(byte);
     }
@@ -52,19 +49,6 @@ pub use aarch64::hal;
     not(any(feature = "boot_minimal", feature = "userspace_boot"))
 ))]
 use aarch64::hal::ArchImpl;
-
-#[cfg(target_arch = "riscv64")]
-pub mod riscv64;
-#[cfg(all(
-    target_arch = "riscv64",
-    not(any(feature = "boot_minimal", feature = "userspace_boot"))
-))]
-pub use riscv64::hal;
-#[cfg(all(
-    target_arch = "riscv64",
-    not(any(feature = "boot_minimal", feature = "userspace_boot"))
-))]
-use riscv64::hal::ArchImpl;
 
 #[cfg(target_arch = "x86_64")]
 pub mod x86_64;
@@ -89,14 +73,10 @@ pub type Arch = ArchImpl;
 pub fn init(boot_info: &'static crate::init::boot_info::BootInfo) -> ! {
     #[cfg(target_arch = "x86_64")]
     {
-        return x86_64::init(boot_info);
-    }
-    #[cfg(target_arch = "riscv64")]
-    {
-        return riscv64::init(boot_info);
+        x86_64::init(boot_info)
     }
     #[cfg(target_arch = "aarch64")]
     {
-        return aarch64::init(boot_info);
+        aarch64::init(boot_info)
     }
 }

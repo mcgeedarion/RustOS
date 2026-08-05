@@ -2,7 +2,6 @@
 //!
 //! Canonical build/run contract:
 //!   aarch64: uefi | baremetal
-//!   riscv64: uefi | sbi
 //!   x86_64:  uefi
 //!
 //! Canonical ESP staging path:
@@ -30,19 +29,32 @@
 use anyhow::{anyhow, bail, Context, Result};
 use std::{
     env, fs,
+    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::{exit, Command},
+    thread,
+    time::{Duration, Instant},
 };
 
 const OS_RELEASE_CONTENT: &[u8] =
     b"NAME=RustOS\nID=rustos\nVERSION=0.1.0\nPRETTY_NAME=\"RustOS 0.1.0\"\n";
 
-/// Fedora mirror for a known-good OVMF build. Only fetched when no system
+/// Known-good OVMF firmware downloads. Only fetched when no system
 /// OVMF is present and OVMF_CODE is not set in the environment.
-/// The file is cached at .ovmf/OVMF_CODE.fd after the first download.
-const OVMF_DOWNLOAD_URL: &str =
-    "https://dl.fedoraproject.org/pub/fedora/linux/releases/40/Everything/x86_64/os/Packages/e/\
-     edk2-ovmf-20231122-6.fc40.noarch.rpm";
+/// The file is cached at .ovmf/OVMF_CODE.fd after the first successful download.
+const OVMF_DOWNLOAD_URLS: &[&str] = &[
+    // Direct firmware image fallback. This avoids requiring rpm2cpio/cpio on
+    // lean developer containers.
+    "https://qemu.weilnetz.de/test/ovmf/usr/share/OVMF/OVMF_CODE.fd",
+    // Fedora 42 updates. Prefer this RPM before older release-tree packages
+    // because updates URLs tend to outlive
+    // the release-tree package once the release receives an OVMF update.
+    "https://download-ib01.fedoraproject.org/pub/fedora/linux/updates/42/Everything/x86_64/Packages/e/\
+     edk2-ovmf-20250812-21.fc42.noarch.rpm",
+    // Fedora 43 release tree fallback.
+    "https://dl.fedoraproject.org/pub/fedora/linux/releases/43/Everything/x86_64/os/Packages/e/\
+     edk2-ovmf-20250812-18.fc43.noarch.rpm",
+];
 
 /// Well-known system paths where distros install OVMF.
 const OVMF_SYSTEM_CANDIDATES: &[&str] = &[
@@ -59,22 +71,31 @@ const OVMF_SYSTEM_CANDIDATES: &[&str] = &[
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Arch {
     AArch64,
-    RiscV64,
     X86_64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Boot {
     Uefi,
-    Sbi,
     Baremetal,
+}
+
+/// Build profile used for kernel compilation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BuildProfile {
+    /// Dev/debug build: -O0 + full debug symbols, `cfg(debug_assertions)` on.
+    Dev,
+    /// Optimised developer build: [profile.release] + default debug features.
+    Release,
+    /// Lean boot image: [profile.release-boot] + release-boot feature set.
+    ReleaseBoot,
 }
 
 #[derive(Debug, Clone)]
 struct BuildOpts {
     arch: Arch,
     boot: Boot,
-    debug: bool,
+    profile: BuildProfile,
     initrd: bool,
     features: Option<String>,
 }
@@ -84,7 +105,7 @@ impl Default for BuildOpts {
         Self {
             arch: Arch::X86_64,
             boot: Boot::Uefi,
-            debug: false,
+            profile: BuildProfile::Dev,
             initrd: false,
             features: None,
         }
@@ -98,7 +119,6 @@ fn log(msg: impl AsRef<str>) {
 fn arch_str(arch: Arch) -> &'static str {
     match arch {
         Arch::AArch64 => "aarch64",
-        Arch::RiscV64 => "riscv64",
         Arch::X86_64 => "x86_64",
     }
 }
@@ -106,23 +126,21 @@ fn arch_str(arch: Arch) -> &'static str {
 fn boot_str(boot: Boot) -> &'static str {
     match boot {
         Boot::Uefi => "uefi",
-        Boot::Sbi => "sbi",
         Boot::Baremetal => "baremetal",
+    }
+}
+
+fn profile_str(profile: BuildProfile) -> &'static str {
+    match profile {
+        BuildProfile::Dev => "debug",
+        BuildProfile::Release => "release",
+        BuildProfile::ReleaseBoot => "release-boot",
     }
 }
 
 fn validate_contract(arch: Arch, boot: Boot) -> Result<()> {
     match (arch, boot) {
         (Arch::AArch64, Boot::Uefi | Boot::Baremetal) => Ok(()),
-        // riscv64 UEFI is gated: the current toolchain cannot produce a
-        // bootable BOOTRISCV64.EFI. Use --boot sbi for riscv64, or pass
-        // --features riscv64_uefi_boot to explicitly override when re-enabling.
-        (Arch::RiscV64, Boot::Uefi) => bail!(
-            "riscv64 UEFI boot is currently gated. \
-             Use `--boot sbi` for riscv64, or pass \
-             `--features riscv64_uefi_boot` to override."
-        ),
-        (Arch::RiscV64, Boot::Sbi) => Ok(()),
         (Arch::X86_64, Boot::Uefi) => Ok(()),
         _ => bail!(
             "unsupported build contract: {} --boot {}",
@@ -136,8 +154,6 @@ fn target_json(root: &Path, arch: Arch, boot: Boot) -> PathBuf {
     match (arch, boot) {
         (Arch::AArch64, Boot::Uefi) => PathBuf::from("aarch64-unknown-uefi"),
         (Arch::AArch64, Boot::Baremetal) => root.join("targets/aarch64-kernel.json"),
-        (Arch::RiscV64, Boot::Uefi) => root.join("targets/riscv64-uefi-loader.json"),
-        (Arch::RiscV64, Boot::Sbi) => root.join("targets/riscv64-kernel.json"),
         (Arch::X86_64, Boot::Uefi) => PathBuf::from("x86_64-unknown-uefi"),
         _ => unreachable!("validate_contract must run before target_json"),
     }
@@ -147,8 +163,6 @@ fn target_dir_name(arch: Arch, boot: Boot) -> &'static str {
     match (arch, boot) {
         (Arch::AArch64, Boot::Uefi) => "aarch64-unknown-uefi",
         (Arch::AArch64, Boot::Baremetal) => "aarch64-kernel",
-        (Arch::RiscV64, Boot::Uefi) => "riscv64-uefi-loader",
-        (Arch::RiscV64, Boot::Sbi) => "riscv64-kernel",
         (Arch::X86_64, Boot::Uefi) => "x86_64-unknown-uefi",
         _ => unreachable!("validate_contract must run before target_dir_name"),
     }
@@ -157,7 +171,6 @@ fn target_dir_name(arch: Arch, boot: Boot) -> &'static str {
 fn efi_boot_filename(arch: Arch) -> &'static str {
     match arch {
         Arch::AArch64 => "BOOTAA64.EFI",
-        Arch::RiscV64 => "BOOTRISCV64.EFI",
         Arch::X86_64 => "BOOTX64.EFI",
     }
 }
@@ -165,7 +178,6 @@ fn efi_boot_filename(arch: Arch) -> &'static str {
 fn image_name(arch: Arch) -> &'static str {
     match arch {
         Arch::AArch64 => "boot-aarch64.img",
-        Arch::RiscV64 => "boot-riscv64.img",
         Arch::X86_64 => "boot-x86_64.img",
     }
 }
@@ -177,18 +189,10 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
-fn profile(opts: &BuildOpts) -> &'static str {
-    if opts.debug {
-        "debug"
-    } else {
-        "release"
-    }
-}
-
 fn build_output_path(root: &Path, opts: &BuildOpts) -> PathBuf {
     root.join("target")
         .join(target_dir_name(opts.arch, opts.boot))
-        .join(profile(opts))
+        .join(profile_str(opts.profile))
 }
 
 fn artifact_path(root: &Path, opts: &BuildOpts) -> Option<PathBuf> {
@@ -233,12 +237,75 @@ fn which_first(names: &[&str]) -> Option<String> {
     })
 }
 
-fn require_tool(names: &[&str], install_hint: &str) {
-    if which_first(names).is_none() {
-        eprintln!("[xtask] ERROR: none of {:?} found on PATH", names);
-        eprintln!("[xtask] Install with: {install_hint}");
-        exit(1);
+fn qemu_install_hint(arch: Arch) -> &'static str {
+    match arch {
+        Arch::X86_64 => {
+            "Ubuntu/Debian: apt install qemu-system-x86\n\
+             Fedora: dnf install qemu-system-x86\n\
+             Arch: pacman -S qemu-system-x86\n\
+             macOS: brew install qemu"
+        },
+        Arch::AArch64 => {
+            "Ubuntu/Debian: apt install qemu-system-arm qemu-efi-aarch64\n\
+             Fedora: dnf install qemu-system-aarch64 edk2-aarch64\n\
+             Arch: pacman -S qemu-system-aarch64 edk2-aarch64\n\
+             macOS: brew install qemu"
+        },
     }
+}
+
+fn ensure_qemu_for_arch(arch: Arch) -> Result<()> {
+    let binary = match arch {
+        Arch::X86_64 => "qemu-system-x86_64",
+        Arch::AArch64 => "qemu-system-aarch64",
+    };
+
+    if which_first(&[binary]).is_some() {
+        Ok(())
+    } else {
+        bail!(
+            "{binary} is required to boot RustOS under QEMU, but it was not found on PATH.\n\
+             Install it with one of:\n{}",
+            qemu_install_hint(arch)
+        );
+    }
+}
+
+fn has_feature(opts: &BuildOpts, feature: &str) -> bool {
+    opts.features
+        .as_deref()
+        .map(|features| {
+            features
+                .split(',')
+                .map(str::trim)
+                .any(|candidate| candidate == feature)
+        })
+        .unwrap_or(false)
+}
+
+fn initrd_path(root: &Path) -> PathBuf {
+    root.join("initramfs.cpio")
+}
+
+fn ensure_initrd(root: &Path, opts: &BuildOpts) -> Result<Option<PathBuf>> {
+    if !opts.initrd {
+        return Ok(None);
+    }
+
+    if has_feature(opts, "userspace_boot") {
+        build_init(root, opts.arch)?;
+    }
+
+    let initrd = initrd_path(root);
+    if !initrd.exists() {
+        bail!(
+            "initrd requested but {} does not exist; run `cargo xtask build-init --arch {}`",
+            initrd.display(),
+            arch_str(opts.arch)
+        );
+    }
+
+    Ok(Some(initrd))
 }
 
 fn parse_build_args(args: &[String]) -> BuildOpts {
@@ -250,7 +317,6 @@ fn parse_build_args(args: &[String]) -> BuildOpts {
                 i += 1;
                 opts.arch = match args.get(i).map(String::as_str) {
                     Some("aarch64") => Arch::AArch64,
-                    Some("riscv64") => Arch::RiscV64,
                     Some("x86_64") => Arch::X86_64,
                     other => {
                         eprintln!("[xtask] unknown --arch: {:?}", other);
@@ -262,7 +328,6 @@ fn parse_build_args(args: &[String]) -> BuildOpts {
                 i += 1;
                 opts.boot = match args.get(i).map(String::as_str) {
                     Some("uefi") => Boot::Uefi,
-                    Some("sbi") => Boot::Sbi,
                     Some("baremetal") | Some("bare-metal") => Boot::Baremetal,
                     other => {
                         eprintln!("[xtask] unknown --boot: {:?}", other);
@@ -274,7 +339,23 @@ fn parse_build_args(args: &[String]) -> BuildOpts {
                 i += 1;
                 opts.features = args.get(i).cloned();
             },
-            "--debug" => opts.debug = true,
+            "--debug" => opts.profile = BuildProfile::Dev,
+            "--profile" => {
+                i += 1;
+                opts.profile = match args
+                    .get(i)
+                    .map(|profile| profile.to_ascii_lowercase().replace('_', "-"))
+                    .as_deref()
+                {
+                    Some("dev") | Some("debug") => BuildProfile::Dev,
+                    Some("release") => BuildProfile::Release,
+                    Some("release-boot") | Some("releaseboot") => BuildProfile::ReleaseBoot,
+                    other => {
+                        eprintln!("[xtask] unknown --profile: {:?}", other);
+                        exit(1);
+                    },
+                };
+            },
             "--initrd" => opts.initrd = true,
             other => {
                 eprintln!("[xtask] unknown argument: {other}");
@@ -297,992 +378,1316 @@ fn add_build_std_flags(cmd: &mut Command) {
     ]);
 }
 
-fn build_kernel(root: &Path, opts: &BuildOpts) -> Result<()> {
-    // Secondary gate: reject riscv64 UEFI unless riscv64_uefi_boot is in
-    // --features. validate_contract handles the normal CLI path; this catches
-    // any internal callers that bypass it.
-    if opts.arch == Arch::RiscV64 && opts.boot == Boot::Uefi {
-        let has_gate = opts
-            .features
-            .as_deref()
-            .map(|f| f.split(',').any(|feat| feat.trim() == "riscv64_uefi_boot"))
-            .unwrap_or(false);
-        if !has_gate {
-            bail!(
-                "riscv64 UEFI boot is gated. Add `riscv64_uefi_boot` to --features to override."
-            );
-        }
-    }
-
+fn kernel_cargo_command(root: &Path, opts: &BuildOpts, subcommand: &str) -> Result<Command> {
     validate_contract(opts.arch, opts.boot)?;
 
     let mut cmd = cargo();
     cmd.current_dir(root)
-        .args(["build", "--target"])
+        .arg(subcommand)
+        .arg("--target")
         .arg(target_json(root, opts.arch, opts.boot));
-    add_build_std_flags(&mut cmd);
-    if !opts.debug {
-        cmd.arg("--release");
-    }
-    match &opts.features {
-        Some(features) => {
-            if features
-                .split(',')
-                .any(|feature| feature.trim() == "boot_minimal")
-            {
-                cmd.arg("--no-default-features");
-            }
-            cmd.arg("--features").arg(features);
-        },
-        None if opts.boot == Boot::Uefi => {
-            cmd.arg("--features").arg("uefi_boot");
-        },
-        None => {},
-    }
-    run(&mut cmd)?;
-
-    if opts.boot == Boot::Uefi {
-        install_efi(root, opts)?;
-    }
     if opts.initrd {
-        mkinitramfs(root, opts.arch)?;
+        let initrd = initrd_path(root);
+        cmd.env("RUSTOS_INITRAMFS", &initrd);
+        if let Ok(meta) = fs::metadata(&initrd) {
+            let modified = meta
+                .modified()
+                .ok()
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0);
+            cmd.env(
+                "RUSTOS_INITRAMFS_FINGERPRINT",
+                format!("{}:{modified}", meta.len()),
+            );
+        }
     }
-    log(format!(
-        "built {} {} {}",
-        arch_str(opts.arch),
-        boot_str(opts.boot),
-        profile(opts)
-    ));
-    Ok(())
-}
+    add_build_std_flags(&mut cmd);
 
-fn install_efi(root: &Path, opts: &BuildOpts) -> Result<()> {
-    let src = artifact_path(root, opts).with_context(|| {
-        format!(
-            "UEFI artifact not found under {}",
-            build_output_path(root, opts).display()
-        )
-    })?;
-    let dest_dir = esp_boot_dir(root, opts.arch);
-    fs::create_dir_all(&dest_dir).context("create ESP boot directory")?;
-    let dest = dest_dir.join(efi_boot_filename(opts.arch));
-    fs::copy(&src, &dest).context("copy EFI artifact into ESP")?;
-    log(format!("installed EFI: {}", dest.display()));
-    Ok(())
-}
-
-fn require_initramfs_tools(arch: Arch) -> Result<()> {
-    match arch {
-        Arch::X86_64 => require_tool(&["musl-gcc"], "apt install musl-tools"),
-        Arch::RiscV64 => require_tool(
-            &["riscv64-linux-musl-gcc", "riscv64-unknown-linux-musl-gcc"],
-            "install a riscv64 musl cross compiler",
-        ),
-        Arch::AArch64 => {
-            bail!("aarch64 initramfs is disabled until userspace/Makefile supports ARCH=aarch64")
+    match opts.profile {
+        BuildProfile::Dev => {
+            // default: debug profile, default feature set
+        },
+        BuildProfile::Release => {
+            cmd.arg("--release");
+        },
+        BuildProfile::ReleaseBoot => {
+            cmd.args(["--profile", "release-boot"]);
+            // Lean feature set: no default debug / test / profiling features.
+            cmd.arg("--no-default-features");
+            cmd.arg("--features").arg("release-boot,boot_minimal");
         },
     }
-    require_tool(&["cpio"], "apt install cpio");
-    require_tool(&["find"], "coreutils should provide find");
-    Ok(())
+
+    if !matches!(opts.profile, BuildProfile::ReleaseBoot) {
+        match &opts.features {
+            Some(features) => {
+                let requested: Vec<&str> = features
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|feature| !feature.is_empty())
+                    .collect();
+
+                let lean_boot = requested
+                    .iter()
+                    .any(|feature| matches!(*feature, "boot_minimal" | "uefi_boot"));
+                if lean_boot {
+                    cmd.arg("--no-default-features");
+                }
+
+                let mut effective_features = features.to_string();
+                if requested.contains(&"uefi_boot") && !requested.contains(&"boot_minimal") {
+                    effective_features.push_str(",boot_minimal");
+                }
+
+                cmd.arg("--features").arg(effective_features);
+            },
+            None => {
+                // Keep the default developer boot path on the known-good
+                // first-stage profile while the full kernel module graph is
+                // still being stabilised.
+                cmd.arg("--no-default-features");
+                cmd.arg("--features").arg("boot_minimal");
+            },
+        }
+    }
+
+    Ok(cmd)
 }
 
-fn mkinitramfs(root: &Path, arch: Arch) -> Result<()> {
-    require_initramfs_tools(arch)?;
-    let arch_name = arch_str(arch);
-    let staging = root.join(format!("target/initramfs-staging-{arch_name}"));
-    if staging.exists() {
-        fs::remove_dir_all(&staging).context("remove old initramfs staging dir")?;
-    }
-    for dir in [
-        "", "bin", "sbin", "usr/bin", "usr/sbin", "lib", "etc", "dev", "proc", "sys", "tmp", "run",
-    ] {
-        fs::create_dir_all(staging.join(dir)).context("create initramfs subdir")?;
-    }
-    run(Command::new("make")
-        .current_dir(root.join("userspace"))
-        .args([
-            "-j4",
-            &format!("ARCH={arch_name}"),
-            &format!("DESTDIR={}", staging.display()),
-            "install",
-        ]))?;
-    fs::write(staging.join("etc/os-release"), OS_RELEASE_CONTENT).context("write os-release")?;
-    let cpio_out = root.join("initramfs.cpio");
-    run(Command::new("sh").current_dir(&staging).args([
-        "-c",
-        &format!(
-            "find . | sort | cpio --create --format=newc --quiet > {}",
-            cpio_out.display()
-        ),
-    ]))?;
-    Ok(())
+fn build_kernel(root: &Path, opts: &BuildOpts) -> Result<()> {
+    let mut cmd = kernel_cargo_command(root, opts, "build")?;
+    run(&mut cmd)
 }
 
-fn image(root: &Path, opts: &BuildOpts) -> Result<()> {
-    validate_contract(opts.arch, opts.boot)?;
-    if opts.boot != Boot::Uefi {
-        bail!("image is only supported for UEFI boots; use `cargo xtask build` for non-UEFI");
-    }
-    build_kernel(root, opts)?;
-    let efi_name = efi_boot_filename(opts.arch);
-    let efi_path = esp_boot_dir(root, opts.arch).join(efi_name);
-    if !efi_path.exists() {
-        bail!("EFI binary not found at {}", efi_path.display());
-    }
-    let img_path = root.join(image_name(opts.arch));
-    let startup_nsh = format!("FS0:\r\n\\EFI\\BOOT\\{efi_name}\r\n");
-    let startup_nsh_path = root
-        .join("target/esp")
-        .join(arch_str(opts.arch))
-        .join("STARTUP.NSH");
-    fs::write(&startup_nsh_path, startup_nsh).context("write startup.nsh")?;
-    if which_first(&["mformat"]).is_some()
-        && which_first(&["mmd"]).is_some()
-        && which_first(&["mcopy"]).is_some()
-    {
-        run(Command::new("mformat")
-            .args(["-C", "-F", "-h", "64", "-s", "32", "-t", "64", "-i"])
-            .arg(&img_path)
-            .arg("::"))?;
-        run(Command::new("mmd")
-            .args(["-i"])
-            .arg(&img_path)
-            .args(["::/EFI", "::/EFI/BOOT"]))?;
-        run(Command::new("mcopy")
-            .args(["-i"])
-            .arg(&img_path)
-            .arg(&efi_path)
-            .arg(format!("::/EFI/BOOT/{efi_name}")))?;
-        run(Command::new("mcopy")
-            .args(["-i"])
-            .arg(&img_path)
-            .arg(&startup_nsh_path)
-            .arg("::/STARTUP.NSH"))?;
-    } else {
-        log("mtools not found; using built-in FAT16 ESP writer");
-        write_fat16_esp(&img_path, &efi_path, efi_name)?;
-    }
-    log(format!("image ready: {}", img_path.display()));
-    Ok(())
+fn check_kernel(root: &Path, opts: &BuildOpts) -> Result<()> {
+    let mut cmd = kernel_cargo_command(root, opts, "check")?;
+    run(&mut cmd)
 }
 
-// ---------------------------------------------------------------------------
-// `build-init` subcommand  (Phase 2: Make userspace real)
-// ---------------------------------------------------------------------------
-
-/// Build the no-libc Rust /init binary and pack it into initramfs.cpio.
-///
-/// Steps:
-///   1. `rustup target add x86_64-unknown-linux-musl`  (idempotent)
-///   2. `cargo build --release` inside userspace/init/
-///      The crate's own .cargo/config.toml sets the target + rustflags.
-///   3. Stage a minimal initramfs tree under target/initramfs-rust-init/
-///   4. Pack to initramfs.cpio (newc) at the workspace root.
-///
-/// The resulting CPIO archive can be passed to QEMU with:
-///   -initrd initramfs.cpio
-///
-/// Acceptance criteria (scanned from QEMU serial output):
-///   [init] Hello from userspace!
-///   SMOKE OK: userspace_init
-///   [init] TEST PASS: userspace_init
-fn build_init(root: &Path, debug: bool) -> Result<()> {
-    let init_crate = root.join("userspace/init");
-    if !init_crate.exists() {
-        bail!("userspace/init not found at {}", init_crate.display());
-    }
-
-    // 1. Ensure the musl target is installed.
-    log("==> Step 1/4: ensuring x86_64-unknown-linux-musl rustup target");
-    let _ = Command::new("rustup")
-        .args(["target", "add", "x86_64-unknown-linux-musl"])
-        .status(); // non-fatal if rustup absent; cargo will error clearly
-
-    // 2. Build the init crate.
-    log("==> Step 2/4: building userspace/init (no-libc Rust, static musl)");
+fn test_host(root: &Path) -> Result<()> {
     let mut cmd = cargo();
-    cmd.current_dir(&init_crate)
-        .args(["build", "--target", "x86_64-unknown-linux-musl"]);
-    if !debug {
-        cmd.arg("--release");
-    }
-    run(&mut cmd)?;
+    cmd.current_dir(root).args([
+        "test",
+        "--lib",
+        "--target",
+        "x86_64-unknown-linux-gnu",
+        "-Z",
+        "build-std=std,test",
+        "--no-default-features",
+        "--features",
+        "userspace_boot",
+    ]);
+    run(&mut cmd)
+}
 
-    let profile_dir = if debug { "debug" } else { "release" };
-    let init_bin = init_crate
-        .join("target/x86_64-unknown-linux-musl")
-        .join(profile_dir)
-        .join("init");
-    if !init_bin.exists() {
-        bail!("init binary not found after build: {}", init_bin.display());
-    }
-    log(format!("built init binary: {}", init_bin.display()));
+fn ci_local(root: &Path) -> Result<()> {
+    log("ci-local: checking canonical boot-minimal x86_64 build");
+    let opts = BuildOpts::default();
+    check_kernel(root, &opts)?;
 
-    // 3. Stage a minimal initramfs directory tree.
-    log("==> Step 3/4: staging initramfs tree");
-    let staging = root.join("target/initramfs-rust-init");
-    if staging.exists() {
-        fs::remove_dir_all(&staging).context("remove old rust-init staging dir")?;
-    }
-    for dir in ["", "bin", "dev", "proc", "sys", "tmp", "etc", "run"] {
-        fs::create_dir_all(staging.join(dir)).context("create initramfs subdir")?;
-    }
-    // Copy the binary as /init (mode 0755).
-    let dest_init = staging.join("init");
-    fs::copy(&init_bin, &dest_init).context("copy init binary into staging")?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&dest_init, fs::Permissions::from_mode(0o755))
-            .context("chmod +x init")?;
-    }
-    fs::write(staging.join("etc/os-release"), OS_RELEASE_CONTENT)
-        .context("write etc/os-release")?;
+    log("ci-local: running host unit tests");
+    test_host(root)?;
 
-    // 4. Pack into newc CPIO archive.
-    log("==> Step 4/4: packing initramfs.cpio (newc)");
-    require_tool(&["cpio"], "apt install cpio");
-    let cpio_out = root.join("initramfs.cpio");
-    run(Command::new("sh").current_dir(&staging).args([
-        "-c",
-        &format!(
-            "find . | sort | cpio --create --format=newc --quiet > {}",
-            cpio_out.display()
-        ),
-    ]))?;
+    log("ci-local: checking module hygiene");
+    lint_modules(root)?;
 
-    log(format!("initramfs ready: {}", cpio_out.display()));
-    log("Pass to QEMU with:  -initrd initramfs.cpio  -append \"console=ttyS0\"");
-    log("Expected serial output:");
-    log("  [init] Hello from userspace!");
-    log("  SMOKE OK: userspace_init");
-    log("  [init] TEST PASS: userspace_init");
+    log("ci-local: checking documented stub guards");
+    run(Command::new("bash").arg(root.join("scripts/ci/check-stubs.sh")))?;
+
+    log("ci-local: validating roadmap documents");
+    validate_roadmap_docs(root)?;
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// OVMF firmware resolution
-// ---------------------------------------------------------------------------
-
-/// Returns a path to an OVMF_CODE.fd suitable for qemu-system-x86_64.
-///
-/// Resolution order:
-///   1. `OVMF_CODE` environment variable (user override, highest priority)
-///   2. Well-known system install paths (distro packages)
-///   3. `.ovmf/OVMF_CODE.fd` inside the workspace (previously auto-downloaded)
-///   4. Auto-download from Fedora mirrors into `.ovmf/OVMF_CODE.fd`
-///
-/// The download requires either `curl` or `wget` plus `rpm2cpio` and `cpio`
-/// on PATH. If none of those are available the function returns an actionable
-/// error message with manual install instructions.
-fn resolve_ovmf(root: &Path) -> Result<PathBuf> {
-    // 1. Explicit env override.
-    if let Ok(val) = env::var("OVMF_CODE") {
-        let p = PathBuf::from(&val);
-        if p.exists() {
-            log(format!("OVMF: using OVMF_CODE env override: {}", p.display()));
-            return Ok(p);
-        }
-        bail!(
-            "OVMF_CODE={val} is set but the file does not exist. \
-             Unset OVMF_CODE or point it at a real OVMF_CODE.fd."
-        );
-    }
-
-    // 2. System candidates.
-    for candidate in OVMF_SYSTEM_CANDIDATES {
-        let p = Path::new(candidate);
-        if p.exists() {
-            log(format!("OVMF: found system firmware: {}", p.display()));
-            return Ok(p.to_path_buf());
-        }
-    }
-
-    // 3. Cached download.
-    let cache_path = root.join(".ovmf/OVMF_CODE.fd");
-    if cache_path.exists() {
-        log(format!("OVMF: using cached firmware: {}", cache_path.display()));
-        return Ok(cache_path);
-    }
-
-    // 4. Auto-download.
-    log("OVMF: no system firmware found — attempting auto-download from Fedora mirrors");
-    log(format!("OVMF: source: {OVMF_DOWNLOAD_URL}"));
-    log("OVMF: (set OVMF_CODE=/path/to/OVMF_CODE.fd to skip this step)");
-
-    let ovmf_dir = root.join(".ovmf");
-    fs::create_dir_all(&ovmf_dir).context("create .ovmf cache directory")?;
-
-    let rpm_path = ovmf_dir.join("edk2-ovmf.rpm");
-
-    // Download the RPM.
-    if which_first(&["curl"]).is_some() {
-        run(Command::new("curl")
-            .args(["-fSL", "--retry", "3", "-o"])
-            .arg(&rpm_path)
-            .arg(OVMF_DOWNLOAD_URL))?;
-    } else if which_first(&["wget"]).is_some() {
-        run(Command::new("wget")
-            .args(["-q", "-O"])
-            .arg(&rpm_path)
-            .arg(OVMF_DOWNLOAD_URL))?;
+fn validate_file_contains(root: &Path, relative: &str, required: &[&str]) -> Result<()> {
+    let path = root.join(relative);
+    let content = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    let missing = required
+        .iter()
+        .filter(|needle| !content.contains(**needle))
+        .copied()
+        .collect::<Vec<_>>();
+    if missing.is_empty() {
+        log(format!("{relative}: OK"));
+        Ok(())
     } else {
         bail!(
-            "OVMF firmware not found and neither curl nor wget is available for auto-download.\n\
-             \n\
-             Install OVMF manually, then either:\n\
-             • Set OVMF_CODE=/path/to/OVMF_CODE.fd, or\n\
-             • Copy the file to .ovmf/OVMF_CODE.fd in the workspace root.\n\
-             \n\
-             Distro packages:\n\
-             • Debian/Ubuntu: sudo apt install ovmf\n\
-             • Fedora/RHEL:   sudo dnf install edk2-ovmf\n\
-             • Arch:          sudo pacman -S edk2-ovmf\n\
-             • macOS:         brew install qemu  # bundles edk2-x86_64-code.fd"
-        );
-    }
-
-    // Extract OVMF_CODE.fd from the RPM using rpm2cpio + cpio.
-    // The RPM contains usr/share/edk2/x64/OVMF_CODE.fd (Fedora layout).
-    if which_first(&["rpm2cpio"]).is_none() || which_first(&["cpio"]).is_none() {
-        // Fallback: if we happen to have rpm installed we can try `rpm -i`.
-        // Otherwise give a clear error.
-        bail!(
-            "Downloaded OVMF RPM to {} but rpm2cpio/cpio are not available to extract it.\n\
-             \n\
-             Extract manually:\n\
-             • rpm2cpio {} | cpio -idmv\n\
-             • Then: cp usr/share/edk2/x64/OVMF_CODE.fd .ovmf/OVMF_CODE.fd\n\
-             \n\
-             Or install OVMF via your distro package manager (see above).",
-            rpm_path.display(),
-            rpm_path.display()
-        );
-    }
-
-    // rpm2cpio <rpm> | cpio -idm --no-absolute-filenames
-    // Run inside ovmf_dir so extracted paths land there.
-    let rpm2cpio_out = Command::new("rpm2cpio")
-        .arg(&rpm_path)
-        .output()
-        .context("rpm2cpio failed")?;
-    if !rpm2cpio_out.status.success() {
-        bail!("rpm2cpio exited with {}", rpm2cpio_out.status);
-    }
-    run(Command::new("cpio")
-        .current_dir(&ovmf_dir)
-        .args(["-idm", "--no-absolute-filenames", "--quiet"])
-        .stdin(std::process::Stdio::piped())
-        // We'll do this as two steps: write rpm2cpio stdout to cpio stdin.
-        // Simplest portable approach: write to a temp file then pipe.
-        // We already have the bytes in memory from .output() above.
-        .stdin({
-            use std::io::Write;
-            let mut child_in = Command::new("cpio")
-                .current_dir(&ovmf_dir)
-                .args(["-idm", "--no-absolute-filenames", "--quiet"])
-                .stdin(std::process::Stdio::piped())
-                .spawn()
-                .context("spawn cpio")?;
-            child_in
-                .stdin
-                .take()
-                .unwrap()
-                .write_all(&rpm2cpio_out.stdout)
-                .context("write to cpio stdin")?;
-            let status = child_in.wait().context("wait cpio")?;
-            if !status.success() {
-                bail!("cpio exited with {status}");
-            }
-            // Return a dummy Stdio — we've already run cpio above.
-            std::process::Stdio::null()
-        }))?;
-
-    // Locate the extracted OVMF_CODE.fd (Fedora layout).
-    let extracted = ovmf_dir.join("usr/share/edk2/x64/OVMF_CODE.fd");
-    if !extracted.exists() {
-        bail!(
-            "Extracted RPM but could not find usr/share/edk2/x64/OVMF_CODE.fd under {}.\n\
-             Please copy your OVMF_CODE.fd to .ovmf/OVMF_CODE.fd manually.",
-            ovmf_dir.display()
-        );
-    }
-    fs::copy(&extracted, &cache_path).context("copy extracted OVMF_CODE.fd to .ovmf/")?;
-    // Clean up the extracted tree but keep the cache file.
-    let _ = fs::remove_dir_all(ovmf_dir.join("usr"));
-    let _ = fs::remove_file(&rpm_path);
-
-    log(format!("OVMF: cached at {}", cache_path.display()));
-    Ok(cache_path)
-}
-
-// ---------------------------------------------------------------------------
-// `run` subcommand — golden-path developer on-ramp
-// ---------------------------------------------------------------------------
-
-/// Build the kernel + ESP image and boot it in QEMU in one command.
-///
-/// ```text
-/// cargo xtask run --arch x86_64
-/// cargo xtask run --arch x86_64 --debug
-/// cargo xtask run --arch x86_64 --features boot_minimal
-/// ```
-///
-/// Serial output is forwarded to stdout. Press Ctrl-A X to quit QEMU.
-fn run_qemu(root: &Path, opts: &BuildOpts) -> Result<()> {
-    validate_contract(opts.arch, opts.boot)?;
-
-    if opts.boot != Boot::Uefi {
-        bail!(
-            "`cargo xtask run` only supports UEFI boot. \
-             For riscv64 SBI use `cargo xtask build --arch riscv64 --boot sbi` \
-             and invoke QEMU manually."
-        );
-    }
-
-    // Step 1 — build kernel + assemble FAT image.
-    log(format!(
-        "==> Step 1/3: building {} {} kernel",
-        arch_str(opts.arch),
-        boot_str(opts.boot)
-    ));
-    image(root, opts)?;
-
-    let img_path = root.join(image_name(opts.arch));
-    if !img_path.exists() {
-        bail!("disk image not found after build: {}", img_path.display());
-    }
-
-    match opts.arch {
-        Arch::X86_64 => run_qemu_x86_64(root, &img_path),
-        Arch::AArch64 => run_qemu_aarch64(root, &img_path),
-        Arch::RiscV64 => bail!(
-            "riscv64 UEFI QEMU launch is not yet wired into `cargo xtask run`; \
-             use scripts/ci/run_qemu.sh directly."
-        ),
+            "{relative} is missing required topic(s): {}",
+            missing.join(", ")
+        )
     }
 }
 
-fn run_qemu_x86_64(root: &Path, img_path: &Path) -> Result<()> {
-    let qemu = env::var("QEMU").unwrap_or_else(|_| "qemu-system-x86_64".into());
-    if which_first(&[&qemu]).is_none() {
-        bail!(
-            "`{qemu}` not found on PATH.\n\
-             Install with:\n\
-             • Debian/Ubuntu: sudo apt install qemu-system-x86\n\
-             • Fedora/RHEL:   sudo dnf install qemu-system-x86\n\
-             • Arch:          sudo pacman -S qemu-system-x86\n\
-             • macOS:         brew install qemu\n\
-             Or set the QEMU env var to the full path."
-        );
-    }
-
-    // Step 2 — resolve OVMF firmware.
-    log("==> Step 2/3: resolving OVMF firmware");
-    let ovmf_code = resolve_ovmf(root)?;
-
-    // Step 3 — launch QEMU.
-    log("==> Step 3/3: launching QEMU (serial → stdout; Ctrl-A X to quit)");
-    log(format!("    image:    {}", img_path.display()));
-    log(format!("    firmware: {}", ovmf_code.display()));
-
-    let mut cmd = Command::new(&qemu);
-    cmd
-        // Machine + CPU.
-        .args(["-machine", "q35"])
-        .args(["-cpu", "qemu64"])
-        .args(["-m", "256M"])
-        // OVMF firmware (read-only pflash).
-        .arg("-drive")
-        .arg(format!(
-            "if=pflash,format=raw,readonly=on,file={}",
-            ovmf_code.display()
-        ))
-        // Boot disk.
-        .arg("-drive")
-        .arg(format!("format=raw,file={},if=virtio", img_path.display()))
-        // Serial on stdout, no graphical window.
-        .args(["-serial", "stdio"])
-        .args(["-display", "none"])
-        // Don't loop on triple-fault; keep the VM up after kernel halt.
-        .args(["-no-reboot"])
-        .args(["-no-shutdown"]);
-
-    log(format!("running: {cmd:?}"));
-    // exec-replace on Unix so QEMU owns the terminal directly.
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        let err = cmd.exec();
-        bail!("failed to exec {qemu}: {err}");
-    }
-    #[cfg(not(unix))]
-    {
-        run(&mut cmd)
-    }
-}
-
-fn run_qemu_aarch64(root: &Path, img_path: &Path) -> Result<()> {
-    let qemu = env::var("QEMU").unwrap_or_else(|_| "qemu-system-aarch64".into());
-    if which_first(&[&qemu]).is_none() {
-        bail!("`{qemu}` not found on PATH. Install qemu-system-aarch64.");
-    }
-
-    // Resolve AArch64 UEFI firmware.
-    log("==> Step 2/3: resolving AArch64 UEFI firmware");
-    let fw = resolve_aavmf(root)?;
-
-    log("==> Step 3/3: launching QEMU AArch64 (serial → stdout; Ctrl-A X to quit)");
-    let mut cmd = Command::new(&qemu);
-    cmd.args(["-machine", "virt"])
-        .args(["-cpu", "cortex-a57"])
-        .args(["-m", "512M"])
-        .args(["-bios"])
-        .arg(&fw)
-        .arg("-drive")
-        .arg(format!("if=none,id=esp,format=raw,file={}", img_path.display()))
-        .args(["-device", "virtio-blk-device,drive=esp"])
-        .args(["-serial", "stdio"])
-        .args(["-display", "none"])
-        .args(["-no-reboot"])
-        .args(["-no-shutdown"]);
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        let err = cmd.exec();
-        bail!("failed to exec {qemu}: {err}");
-    }
-    #[cfg(not(unix))]
-    {
-        run(&mut cmd)
-    }
-}
-
-fn resolve_aavmf(root: &Path) -> Result<PathBuf> {
-    if let Ok(val) = env::var("QEMU_EFI") {
-        let p = PathBuf::from(&val);
-        if p.exists() {
-            return Ok(p);
-        }
-        bail!("QEMU_EFI={val} is set but the file does not exist.");
-    }
-    let candidates = [
-        "/usr/share/AAVMF/AAVMF_CODE.fd",
-        "/usr/share/AAVMF/AAVMF32_CODE.fd",
-        "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
-        "/usr/share/edk2/aarch64/QEMU_EFI.fd",
-        "/opt/homebrew/share/qemu/edk2-aarch64-code.fd",
-        "/usr/local/share/qemu/edk2-aarch64-code.fd",
-    ];
-    let cache = root.join(".ovmf/AAVMF_CODE.fd");
-    for c in &candidates {
-        let p = Path::new(c);
-        if p.exists() {
-            return Ok(p.to_path_buf());
-        }
-    }
-    if cache.exists() {
-        return Ok(cache);
-    }
-    bail!(
-        "AArch64 UEFI firmware not found.\n\
-         Install with:\n\
-         • Debian/Ubuntu: sudo apt install qemu-efi-aarch64\n\
-         • Fedora/RHEL:   sudo dnf install edk2-aarch64\n\
-         • macOS:         brew install qemu\n\
-         Or set QEMU_EFI=/path/to/QEMU_EFI.fd"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// `smoke` subcommand (unchanged logic, now uses inline QEMU invocation)
-// ---------------------------------------------------------------------------
-
-fn smoke(root: &Path) -> Result<()> {
-    let script = root.join("scripts/ci/run_qemu.sh");
-    if !script.exists() {
-        bail!("QEMU runner not found at {}", script.display());
-    }
-    run(Command::new(&script)
-        .current_dir(root)
-        .env("ARCH", "x86_64")
-        .arg("--boot")
-        .arg("uefi")
-        .arg("--smoke"))
-}
-
-// ---------------------------------------------------------------------------
-// Help
-// ---------------------------------------------------------------------------
-
-fn print_help() {
-    println!(
-        "cargo xtask <subcommand> [options]
-
-Subcommands:
-  run           Build kernel + image and boot in QEMU   ← golden path
-  build         Compile the kernel only
-  image         Build a FAT ESP disk image for UEFI
-  mkinitramfs   Build userspace (C/musl) and pack initramfs.cpio
-  build-init    Build no-libc Rust /init + pack initramfs.cpio  ← Phase 2
-  smoke         Run x86_64 UEFI under QEMU (CI smoke test)
-  help          Show this help
-
-Golden-path one-liner (Phase 1):
-  cargo xtask run --arch x86_64
-
-Phase 2 userspace validation:
-  cargo xtask build-init
-  # Then add -initrd initramfs.cpio to your QEMU invocation
-  # Expected serial output:
-  #   [init] Hello from userspace!
-  #   SMOKE OK: userspace_init
-  #   [init] TEST PASS: userspace_init
-
-Options (apply to run / build / image):
-  --arch <aarch64|riscv64|x86_64>   target architecture (default: x86_64)
-  --boot <uefi|sbi|baremetal>       boot protocol      (default: uefi)
-  --features <feat1,feat2,...>       extra Cargo features
-  --debug                            debug build (no --release)
-  --initrd                           also build + pack initramfs
-
-build-init options:
-  --debug                            debug build of /init
-
-Environment variables:
-  OVMF_CODE     Path to OVMF_CODE.fd (x86_64 UEFI firmware)
-  QEMU_EFI      Path to QEMU_EFI.fd  (AArch64 UEFI firmware)
-  QEMU          QEMU binary to use   (default: qemu-system-<arch>)
-  CARGO         Cargo binary to use  (default: cargo)
-
-See docs/getting-started.md for the full developer on-ramp."
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Entry point
-// ---------------------------------------------------------------------------
-
-fn main() {
-    let mut args = env::args().skip(1);
-    let subcommand = args.next().unwrap_or_default();
-    let rest: Vec<String> = args.collect();
-    let root = workspace_root();
-    let result = match subcommand.as_str() {
-        "run" => run_qemu(&root, &parse_build_args(&rest)),
-        "build" => build_kernel(&root, &parse_build_args(&rest)),
-        "mkinitramfs" => {
-            let opts = parse_build_args(&rest);
-            mkinitramfs(&root, opts.arch)
-        },
-        "build-init" => {
-            // Parse only --debug from rest; ignore other flags.
-            let debug = rest.iter().any(|a| a == "--debug");
-            build_init(&root, debug)
-        },
-        "image" => image(&root, &parse_build_args(&rest)),
-        "smoke" => smoke(&root),
-        "help" | "--help" | "-h" | "" => {
-            print_help();
-            Ok(())
-        },
-        other => Err(anyhow!(
-            "unknown subcommand: {other:?}. Try `cargo xtask help`."
-        )),
-    };
-    if let Err(error) = result {
-        eprintln!("[xtask] ERROR: {error:#}");
-        exit(1);
-    }
-}
-
-// ---------------------------------------------------------------------------
-// FAT16 ESP writer (unchanged)
-// ---------------------------------------------------------------------------
-
-fn write_fat16_esp(img_path: &Path, efi_path: &Path, efi_name: &str) -> Result<()> {
-    const BYTES_PER_SECTOR: usize = 512;
-    const TOTAL_SECTORS: usize = 8192; // 4 MiB.
-    const RESERVED_SECTORS: usize = 1;
-    const FAT_COUNT: usize = 2;
-    const ROOT_ENTRIES: usize = 512;
-    const SECTORS_PER_FAT: usize = 32;
-    const ROOT_DIR_SECTORS: usize = ROOT_ENTRIES * 32 / BYTES_PER_SECTOR;
-    const FIRST_DATA_SECTOR: usize =
-        RESERVED_SECTORS + FAT_COUNT * SECTORS_PER_FAT + ROOT_DIR_SECTORS;
-    const EFI_CLUSTER: u16 = 2;
-    const BOOT_CLUSTER: u16 = 3;
-    const FILE_FIRST_CLUSTER: u16 = 4;
-
-    let file = fs::read(efi_path).with_context(|| format!("read {}", efi_path.display()))?;
-    let startup_nsh = format!("FS0:\r\n\\EFI\\BOOT\\{efi_name}\r\n");
-    let startup_bytes = startup_nsh.as_bytes();
-    let file_clusters = file.len().div_ceil(BYTES_PER_SECTOR).max(1);
-    let last_file_cluster = FILE_FIRST_CLUSTER as usize + file_clusters - 1;
-    let startup_cluster = last_file_cluster + 1;
-    let max_cluster = TOTAL_SECTORS - FIRST_DATA_SECTOR + 1;
-    if startup_cluster > max_cluster {
-        bail!("EFI binary is too large for the built-in 4 MiB ESP image");
-    }
-
-    let mut img = vec![0u8; TOTAL_SECTORS * BYTES_PER_SECTOR];
-    write_boot_sector(
-        &mut img,
-        TOTAL_SECTORS as u16,
-        SECTORS_PER_FAT as u16,
-        ROOT_ENTRIES as u16,
-    );
-
-    let mut fat = vec![0u16; SECTORS_PER_FAT * BYTES_PER_SECTOR / 2];
-    fat[0] = 0xfff8;
-    fat[1] = 0xffff;
-    fat[EFI_CLUSTER as usize] = 0xffff;
-    fat[BOOT_CLUSTER as usize] = 0xffff;
-    for cluster in FILE_FIRST_CLUSTER as usize..=last_file_cluster {
-        fat[cluster] = if cluster == last_file_cluster {
-            0xffff
-        } else {
-            (cluster + 1) as u16
-        };
-    }
-    fat[startup_cluster] = 0xffff;
-    for fat_index in 0..FAT_COUNT {
-        let start = (RESERVED_SECTORS + fat_index * SECTORS_PER_FAT) * BYTES_PER_SECTOR;
-        for (i, entry) in fat.iter().enumerate() {
-            img[start + i * 2..start + i * 2 + 2].copy_from_slice(&entry.to_le_bytes());
-        }
-    }
-
-    let root_start = (RESERVED_SECTORS + FAT_COUNT * SECTORS_PER_FAT) * BYTES_PER_SECTOR;
-    write_dir_entry(
-        &mut img[root_start..root_start + 32],
-        "EFI",
-        "",
-        0x10,
-        EFI_CLUSTER,
-        0,
+fn validate_roadmap_docs(root: &Path) -> Result<()> {
+    validate_status_doc(root)?;
+    validate_file_contains(
+        root,
+        "docs/syscalls.md",
+        &[
+            "write",
+            "open",
+            "close",
+            "fork",
+            "execve",
+            "exit",
+            "wait4",
+            "EFAULT-safe",
+        ],
     )?;
-    write_dir_entry(
-        &mut img[root_start + 32..root_start + 64],
-        "STARTUP",
-        "NSH",
-        0x20,
-        startup_cluster as u16,
-        startup_bytes.len() as u32,
+    validate_file_contains(
+        root,
+        "docs/milestones.md",
+        &[
+            "M1",
+            "M2",
+            "M3",
+            "M4",
+            "M5",
+            "BOOT_MINIMAL_OK",
+            "FULL_OS_USERSPACE_OK",
+        ],
     )?;
-
-    let efi_dir_start = cluster_offset(EFI_CLUSTER, FIRST_DATA_SECTOR, BYTES_PER_SECTOR);
-    write_dir_entry(
-        &mut img[efi_dir_start..efi_dir_start + 32],
-        ".",
-        "",
-        0x10,
-        EFI_CLUSTER,
-        0,
+    validate_file_contains(
+        root,
+        "docs/architecture.md",
+        &[
+            "Primary architecture: x86_64",
+            "Secondary architecture: aarch64",
+            "Code organisation rules",
+        ],
     )?;
-    write_dir_entry(
-        &mut img[efi_dir_start + 32..efi_dir_start + 64],
-        "..",
-        "",
-        0x10,
-        0,
-        0,
+    validate_file_contains(
+        root,
+        "docs/fault_inject.md",
+        &[
+            "FAULT_PMM_ALLOC",
+            "FAULT_VMM_MAP",
+            "FAULT_SYSCALL_RESOURCE",
+            "fault-inject",
+        ],
     )?;
-    write_dir_entry(
-        &mut img[efi_dir_start + 64..efi_dir_start + 96],
-        "BOOT",
-        "",
-        0x10,
-        BOOT_CLUSTER,
-        0,
-    )?;
-
-    let boot_dir_start = cluster_offset(BOOT_CLUSTER, FIRST_DATA_SECTOR, BYTES_PER_SECTOR);
-    write_dir_entry(
-        &mut img[boot_dir_start..boot_dir_start + 32],
-        ".",
-        "",
-        0x10,
-        BOOT_CLUSTER,
-        0,
-    )?;
-    write_dir_entry(
-        &mut img[boot_dir_start + 32..boot_dir_start + 64],
-        "..",
-        "",
-        0x10,
-        EFI_CLUSTER,
-        0,
-    )?;
-    write_file_dir_entries(
-        &mut img[boot_dir_start + 64..boot_dir_start + 64 + 32 * 4],
-        efi_name,
-        FILE_FIRST_CLUSTER,
-        file.len() as u32,
-    )?;
-
-    let file_start = cluster_offset(FILE_FIRST_CLUSTER, FIRST_DATA_SECTOR, BYTES_PER_SECTOR);
-    img[file_start..file_start + file.len()].copy_from_slice(&file);
-    let startup_start = cluster_offset(startup_cluster as u16, FIRST_DATA_SECTOR, BYTES_PER_SECTOR);
-    img[startup_start..startup_start + startup_bytes.len()].copy_from_slice(startup_bytes);
-    fs::write(img_path, img).with_context(|| format!("write {}", img_path.display()))?;
     Ok(())
 }
 
-fn write_boot_sector(img: &mut [u8], total_sectors: u16, sectors_per_fat: u16, root_entries: u16) {
-    img[0..3].copy_from_slice(&[0xeb, 0x3c, 0x90]);
-    img[3..11].copy_from_slice(b"RUSTOS  ");
-    img[11..13].copy_from_slice(&512u16.to_le_bytes());
-    img[13] = 1;
-    img[14..16].copy_from_slice(&1u16.to_le_bytes());
-    img[16] = 2;
-    img[17..19].copy_from_slice(&root_entries.to_le_bytes());
-    img[19..21].copy_from_slice(&total_sectors.to_le_bytes());
-    img[21] = 0xf8;
-    img[22..24].copy_from_slice(&sectors_per_fat.to_le_bytes());
-    img[24..26].copy_from_slice(&32u16.to_le_bytes());
-    img[26..28].copy_from_slice(&64u16.to_le_bytes());
-    img[36] = 0x80;
-    img[38] = 0x29;
-    img[39..43].copy_from_slice(&0x5255_5354u32.to_le_bytes());
-    img[43..54].copy_from_slice(b"RUSTOS ESP ");
-    img[54..62].copy_from_slice(b"FAT16   ");
-    img[510] = 0x55;
-    img[511] = 0xaa;
-}
-
-fn cluster_offset(cluster: u16, first_data_sector: usize, bytes_per_sector: usize) -> usize {
-    (first_data_sector + (cluster as usize - 2)) * bytes_per_sector
-}
-
-fn write_file_dir_entries(
-    entries: &mut [u8],
-    filename: &str,
-    first_cluster: u16,
-    size: u32,
-) -> Result<()> {
-    if let Ok((stem, ext)) = split_83(filename) {
-        return write_dir_entry(&mut entries[0..32], &stem, &ext, 0x20, first_cluster, size);
-    }
-
-    let (stem, ext) = short_alias(filename)?;
-    let mut short = [b' '; 11];
-    short[..stem.len()].copy_from_slice(stem.as_bytes());
-    short[8..8 + ext.len()].copy_from_slice(ext.as_bytes());
-    let checksum = lfn_checksum(&short);
-    let utf16: Vec<u16> = filename.encode_utf16().collect();
-    let lfn_count = utf16.len().div_ceil(13);
-    if entries.len() < (lfn_count + 1) * 32 {
-        bail!("not enough directory space for long filename {filename}");
-    }
-
-    for i in 0..lfn_count {
-        let ordinal = lfn_count - i;
-        let start = (ordinal - 1) * 13;
-        let end = utf16.len().min(start + 13);
-        let mut ord = ordinal as u8;
-        if ordinal == lfn_count {
-            ord |= 0x40;
-        }
-        write_lfn_entry(
-            &mut entries[i * 32..i * 32 + 32],
-            ord,
-            &utf16[start..end],
-            checksum,
-        );
-    }
-    write_dir_entry(
-        &mut entries[lfn_count * 32..lfn_count * 32 + 32],
-        &stem,
-        &ext,
-        0x20,
-        first_cluster,
-        size,
+fn validate_status_doc(root: &Path) -> Result<()> {
+    validate_file_contains(
+        root,
+        "docs/status.md",
+        &[
+            "boot_minimal",
+            "userspace_boot",
+            "syscall",
+            "fault-inject",
+            "Wayland",
+            "x86_64",
+            "aarch64",
+        ],
     )
 }
 
-fn short_alias(filename: &str) -> Result<(String, String)> {
-    let mut parts = filename.split('.');
-    let stem = parts.next().unwrap_or_default();
-    let ext = parts.next().unwrap_or_default();
-    if parts.next().is_some() || stem.is_empty() || ext.len() > 3 {
-        bail!("cannot create short alias for {filename}");
-    }
-    let clean: String = stem
-        .chars()
-        .filter(|ch| ch.is_ascii_alphanumeric())
-        .take(6)
-        .collect::<String>()
-        .to_ascii_uppercase();
-    if clean.is_empty() {
-        bail!("cannot create short alias for {filename}");
-    }
-    Ok((format!("{clean}~1"), ext.to_ascii_uppercase()))
+fn stage_esp(root: &Path, opts: &BuildOpts) -> Result<PathBuf> {
+    let boot_dir = esp_boot_dir(root, opts.arch);
+    fs::create_dir_all(&boot_dir)
+        .with_context(|| format!("create ESP boot dir {}", boot_dir.display()))?;
+
+    let artifact = artifact_path(root, opts)
+        .ok_or_else(|| anyhow!("kernel artifact not found — did `build_kernel` succeed?"))?;
+
+    let dest = boot_dir.join(efi_boot_filename(opts.arch));
+    fs::copy(&artifact, &dest)
+        .with_context(|| format!("copy {} → {}", artifact.display(), dest.display()))?;
+
+    log(format!(
+        "staged {} → {}",
+        artifact.display(),
+        dest.display()
+    ));
+    Ok(root.join("target/esp").join(arch_str(opts.arch)))
 }
 
-fn lfn_checksum(short_name: &[u8; 11]) -> u8 {
-    let mut sum = 0u8;
-    for byte in short_name {
-        sum = ((sum & 1) << 7).wrapping_add(sum >> 1).wrapping_add(*byte);
-    }
-    sum
+fn build_fat_image(root: &Path, esp_dir: &Path, arch: Arch) -> Result<PathBuf> {
+    let img = root.join(image_name(arch));
+    build_partitioned_fat_image(&img, esp_dir, arch)
 }
 
-fn write_lfn_entry(entry: &mut [u8], ordinal: u8, chars: &[u16], checksum: u8) {
-    entry.fill(0xff);
-    entry[0] = ordinal;
-    entry[11] = 0x0f;
-    entry[12] = 0;
-    entry[13] = checksum;
-    entry[26] = 0;
-    entry[27] = 0;
-    let slots = [1usize, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30];
-    for (i, slot) in slots.iter().enumerate() {
-        let value = if i < chars.len() {
-            chars[i]
-        } else if i == chars.len() {
-            0
-        } else {
-            0xffff
-        };
-        entry[*slot..*slot + 2].copy_from_slice(&value.to_le_bytes());
+fn build_partitioned_fat_image(img: &Path, esp_dir: &Path, arch: Arch) -> Result<PathBuf> {
+    const BYTES_PER_SECTOR: usize = 512;
+    const SECTORS_PER_CLUSTER: usize = 4;
+    const RESERVED_SECTORS: usize = 1;
+    const FAT_COUNT: usize = 2;
+    const ROOT_ENTRIES: usize = 512;
+    const ROOT_DIR_SECTORS: usize = ROOT_ENTRIES * 32 / BYTES_PER_SECTOR;
+    const SECTORS_PER_FAT: usize = 256;
+    const DISK_SECTORS: usize = 131_072; // 64 MiB
+    const GPT_ENTRY_COUNT: usize = 128;
+    const GPT_ENTRY_SIZE: usize = 128;
+    const GPT_ENTRY_SECTORS: usize = (GPT_ENTRY_COUNT * GPT_ENTRY_SIZE) / BYTES_PER_SECTOR;
+    const PARTITION_FIRST_LBA: usize = 2048;
+    const PARTITION_LAST_LBA: usize = DISK_SECTORS - GPT_ENTRY_SECTORS - 2;
+    const PARTITION_SECTORS: usize = PARTITION_LAST_LBA - PARTITION_FIRST_LBA + 1;
+    const CLUSTER_SIZE: usize = BYTES_PER_SECTOR * SECTORS_PER_CLUSTER;
+
+    let efi_path = esp_dir.join("EFI/BOOT").join(efi_boot_filename(arch));
+    let efi = fs::read(&efi_path)
+        .with_context(|| format!("read staged EFI binary {}", efi_path.display()))?;
+    let file_clusters = efi.len().div_ceil(CLUSTER_SIZE);
+    if file_clusters == 0 {
+        bail!("staged EFI binary is empty: {}", efi_path.display());
     }
+
+    let first_data_sector = RESERVED_SECTORS + (FAT_COUNT * SECTORS_PER_FAT) + ROOT_DIR_SECTORS;
+    let data_clusters = (PARTITION_SECTORS - first_data_sector) / SECTORS_PER_CLUSTER;
+    let file_start_cluster = 4usize;
+    let last_file_cluster = file_start_cluster + file_clusters - 1;
+    if last_file_cluster >= data_clusters + 2 {
+        bail!(
+            "staged EFI binary is too large for {}: {} bytes",
+            img.display(),
+            efi.len()
+        );
+    }
+    if (last_file_cluster + 1) * 2 > SECTORS_PER_FAT * BYTES_PER_SECTOR {
+        bail!(
+            "staged EFI binary needs more FAT16 entries than {} provides",
+            img.display()
+        );
+    }
+
+    let mut image = vec![0u8; DISK_SECTORS * BYTES_PER_SECTOR];
+    write_protective_mbr(&mut image, DISK_SECTORS as u32);
+    write_gpt(
+        &mut image,
+        DISK_SECTORS as u64,
+        PARTITION_FIRST_LBA as u64,
+        PARTITION_LAST_LBA as u64,
+    );
+
+    let partition_offset = PARTITION_FIRST_LBA * BYTES_PER_SECTOR;
+    let partition_end = partition_offset + PARTITION_SECTORS * BYTES_PER_SECTOR;
+    let partition = &mut image[partition_offset..partition_end];
+
+    // BIOS Parameter Block for a FAT16 ESP-style image.
+    partition[0..3].copy_from_slice(&[0xEB, 0x3C, 0x90]);
+    partition[3..11].copy_from_slice(b"RUSTOS  ");
+    put_u16(partition, 11, BYTES_PER_SECTOR as u16);
+    partition[13] = SECTORS_PER_CLUSTER as u8;
+    put_u16(partition, 14, RESERVED_SECTORS as u16);
+    partition[16] = FAT_COUNT as u8;
+    put_u16(partition, 17, ROOT_ENTRIES as u16);
+    put_u16(partition, 19, 0);
+    partition[21] = 0xF8;
+    put_u16(partition, 22, SECTORS_PER_FAT as u16);
+    put_u16(partition, 24, 32);
+    put_u16(partition, 26, 64);
+    put_u32(partition, 28, PARTITION_FIRST_LBA as u32);
+    put_u32(partition, 32, PARTITION_SECTORS as u32);
+    partition[36] = 0x80;
+    partition[38] = 0x29;
+    put_u32(partition, 39, 0x5255_5354);
+    partition[43..54].copy_from_slice(b"RUSTOS ESP ");
+    partition[54..62].copy_from_slice(b"FAT16   ");
+    partition[510] = 0x55;
+    partition[511] = 0xAA;
+
+    for fat_index in 0..FAT_COUNT {
+        let fat_base = (RESERVED_SECTORS + fat_index * SECTORS_PER_FAT) * BYTES_PER_SECTOR;
+        put_u16(partition, fat_base, 0xFFF8);
+        put_u16(partition, fat_base + 2, 0xFFFF);
+        put_u16(partition, fat_base + 2 * 2, 0xFFFF); // EFI directory
+        put_u16(partition, fat_base + 3 * 2, 0xFFFF); // BOOT directory
+        for cluster in file_start_cluster..=last_file_cluster {
+            let next = if cluster == last_file_cluster {
+                0xFFFF
+            } else {
+                (cluster + 1) as u16
+            };
+            put_u16(partition, fat_base + cluster * 2, next);
+        }
+    }
+
+    let root_dir = (RESERVED_SECTORS + FAT_COUNT * SECTORS_PER_FAT) * BYTES_PER_SECTOR;
+    write_dir_entry(
+        &mut partition[root_dir..root_dir + 32],
+        b"EFI     ",
+        b"   ",
+        0x10,
+        2,
+        0,
+    );
+
+    let efi_dir = cluster_offset(first_data_sector, 2);
+    write_dir_entry(
+        &mut partition[efi_dir..efi_dir + 32],
+        b".       ",
+        b"   ",
+        0x10,
+        2,
+        0,
+    );
+    write_dir_entry(
+        &mut partition[efi_dir + 32..efi_dir + 64],
+        b"..      ",
+        b"   ",
+        0x10,
+        0,
+        0,
+    );
+    write_dir_entry(
+        &mut partition[efi_dir + 64..efi_dir + 96],
+        b"BOOT    ",
+        b"   ",
+        0x10,
+        3,
+        0,
+    );
+
+    let boot_dir = cluster_offset(first_data_sector, 3);
+    write_dir_entry(
+        &mut partition[boot_dir..boot_dir + 32],
+        b".       ",
+        b"   ",
+        0x10,
+        3,
+        0,
+    );
+    write_dir_entry(
+        &mut partition[boot_dir + 32..boot_dir + 64],
+        b"..      ",
+        b"   ",
+        0x10,
+        2,
+        0,
+    );
+    write_dir_entry(
+        &mut partition[boot_dir + 64..boot_dir + 96],
+        match arch {
+            Arch::AArch64 => b"BOOTAA64",
+            Arch::X86_64 => b"BOOTX64 ",
+        },
+        b"EFI",
+        0x20,
+        file_start_cluster as u16,
+        efi.len() as u32,
+    );
+
+    let file_offset = cluster_offset(first_data_sector, file_start_cluster);
+    partition[file_offset..file_offset + efi.len()].copy_from_slice(&efi);
+
+    fs::write(img, image).with_context(|| format!("write FAT image {}", img.display()))?;
+    log(format!(
+        "built partitioned FAT16 ESP image: {}",
+        img.display()
+    ));
+    Ok(img.to_path_buf())
 }
 
-fn split_83(name: &str) -> Result<(String, String)> {
-    let mut parts = name.split('.');
-    let stem = parts.next().unwrap_or_default().to_ascii_uppercase();
-    let ext = parts.next().unwrap_or_default().to_ascii_uppercase();
-    if parts.next().is_some() || stem.is_empty() || stem.len() > 8 || ext.len() > 3 {
-        bail!("built-in ESP writer only supports 8.3 filenames; got {name}");
-    }
-    Ok((stem, ext))
+fn write_protective_mbr(image: &mut [u8], disk_sectors: u32) {
+    const PARTITION_OFFSET: usize = 446;
+
+    image[PARTITION_OFFSET + 1] = 0x00;
+    image[PARTITION_OFFSET + 2] = 0x02;
+    image[PARTITION_OFFSET + 3] = 0x00;
+    image[PARTITION_OFFSET + 4] = 0xEE;
+    image[PARTITION_OFFSET + 5] = 0xFF;
+    image[PARTITION_OFFSET + 6] = 0xFF;
+    image[PARTITION_OFFSET + 7] = 0xFF;
+    put_u32(image, PARTITION_OFFSET + 8, 1);
+    put_u32(image, PARTITION_OFFSET + 12, disk_sectors.saturating_sub(1));
+    image[510] = 0x55;
+    image[511] = 0xAA;
+}
+
+fn write_gpt(
+    image: &mut [u8],
+    disk_sectors: u64,
+    partition_first_lba: u64,
+    partition_last_lba: u64,
+) {
+    const BYTES_PER_SECTOR: usize = 512;
+    const GPT_ENTRY_COUNT: usize = 128;
+    const GPT_ENTRY_SIZE: usize = 128;
+    const GPT_ENTRY_BYTES: usize = GPT_ENTRY_COUNT * GPT_ENTRY_SIZE;
+    const PRIMARY_HEADER_LBA: u64 = 1;
+    const PRIMARY_ENTRIES_LBA: u64 = 2;
+    const EFI_SYSTEM_PARTITION_GUID: [u8; 16] = [
+        0x28, 0x73, 0x2A, 0xC1, 0x1F, 0xF8, 0xD2, 0x11, 0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9,
+        0x3B,
+    ];
+    const RUSTOS_DISK_GUID: [u8; 16] = [
+        0x54, 0x53, 0x55, 0x52, 0x49, 0x44, 0x4B, 0x53, 0x80, 0x00, 0x12, 0x34, 0x56, 0x78, 0x9A,
+        0xBC,
+    ];
+    const RUSTOS_ESP_GUID: [u8; 16] = [
+        0x54, 0x53, 0x55, 0x52, 0x53, 0x4F, 0x00, 0x40, 0x80, 0x00, 0x12, 0x34, 0x56, 0x78, 0x9A,
+        0xBC,
+    ];
+
+    let backup_header_lba = disk_sectors - 1;
+    let backup_entries_lba = disk_sectors - 33;
+    let first_usable_lba = 34;
+    let last_usable_lba = disk_sectors - 34;
+
+    let mut entries = [0u8; GPT_ENTRY_BYTES];
+    entries[0..16].copy_from_slice(&EFI_SYSTEM_PARTITION_GUID);
+    entries[16..32].copy_from_slice(&RUSTOS_ESP_GUID);
+    put_u64(&mut entries, 32, partition_first_lba);
+    put_u64(&mut entries, 40, partition_last_lba);
+    write_utf16le(&mut entries[56..128], "RustOS ESP");
+
+    let entries_crc = crc32(&entries);
+    let primary_entries_offset = PRIMARY_ENTRIES_LBA as usize * BYTES_PER_SECTOR;
+    image[primary_entries_offset..primary_entries_offset + GPT_ENTRY_BYTES]
+        .copy_from_slice(&entries);
+
+    let backup_entries_offset = backup_entries_lba as usize * BYTES_PER_SECTOR;
+    image[backup_entries_offset..backup_entries_offset + GPT_ENTRY_BYTES].copy_from_slice(&entries);
+
+    write_gpt_header(
+        &mut image[BYTES_PER_SECTOR..BYTES_PER_SECTOR * 2],
+        GptHeader {
+            current_lba: PRIMARY_HEADER_LBA,
+            backup_lba: backup_header_lba,
+            first_usable_lba,
+            last_usable_lba,
+            disk_guid: RUSTOS_DISK_GUID,
+            entries_lba: PRIMARY_ENTRIES_LBA,
+            entry_count: GPT_ENTRY_COUNT as u32,
+            entry_size: GPT_ENTRY_SIZE as u32,
+            entries_crc,
+        },
+    );
+
+    let backup_header_offset = backup_header_lba as usize * BYTES_PER_SECTOR;
+    write_gpt_header(
+        &mut image[backup_header_offset..backup_header_offset + BYTES_PER_SECTOR],
+        GptHeader {
+            current_lba: backup_header_lba,
+            backup_lba: PRIMARY_HEADER_LBA,
+            first_usable_lba,
+            last_usable_lba,
+            disk_guid: RUSTOS_DISK_GUID,
+            entries_lba: backup_entries_lba,
+            entry_count: GPT_ENTRY_COUNT as u32,
+            entry_size: GPT_ENTRY_SIZE as u32,
+            entries_crc,
+        },
+    );
+}
+
+struct GptHeader {
+    current_lba: u64,
+    backup_lba: u64,
+    first_usable_lba: u64,
+    last_usable_lba: u64,
+    disk_guid: [u8; 16],
+    entries_lba: u64,
+    entry_count: u32,
+    entry_size: u32,
+    entries_crc: u32,
+}
+
+fn write_gpt_header(sector: &mut [u8], header: GptHeader) {
+    sector.fill(0);
+    sector[0..8].copy_from_slice(b"EFI PART");
+    put_u32(sector, 8, 0x0001_0000);
+    put_u32(sector, 12, 92);
+    put_u64(sector, 24, header.current_lba);
+    put_u64(sector, 32, header.backup_lba);
+    put_u64(sector, 40, header.first_usable_lba);
+    put_u64(sector, 48, header.last_usable_lba);
+    sector[56..72].copy_from_slice(&header.disk_guid);
+    put_u64(sector, 72, header.entries_lba);
+    put_u32(sector, 80, header.entry_count);
+    put_u32(sector, 84, header.entry_size);
+    put_u32(sector, 88, header.entries_crc);
+
+    let header_crc = crc32(&sector[..92]);
+    put_u32(sector, 16, header_crc);
+}
+
+fn cluster_offset(first_data_sector: usize, cluster: usize) -> usize {
+    const BYTES_PER_SECTOR: usize = 512;
+    const SECTORS_PER_CLUSTER: usize = 4;
+    (first_data_sector + (cluster - 2) * SECTORS_PER_CLUSTER) * BYTES_PER_SECTOR
 }
 
 fn write_dir_entry(
     entry: &mut [u8],
-    name: &str,
-    ext: &str,
+    name: &[u8; 8],
+    ext: &[u8; 3],
     attr: u8,
     first_cluster: u16,
     size: u32,
-) -> Result<()> {
-    entry.fill(0);
-    let mut raw_name = [b' '; 8];
-    let mut raw_ext = [b' '; 3];
-    let name_bytes = name.as_bytes();
-    let ext_bytes = ext.as_bytes();
-    if name_bytes.len() > 8 || ext_bytes.len() > 3 {
-        bail!("invalid 8.3 directory entry: {name}.{ext}");
-    }
-    raw_name[..name_bytes.len()].copy_from_slice(name_bytes);
-    raw_ext[..ext_bytes.len()].copy_from_slice(ext_bytes);
-    entry[0..8].copy_from_slice(&raw_name);
-    entry[8..11].copy_from_slice(&raw_ext);
+) {
+    entry[..8].copy_from_slice(name);
+    entry[8..11].copy_from_slice(ext);
     entry[11] = attr;
     entry[26..28].copy_from_slice(&first_cluster.to_le_bytes());
     entry[28..32].copy_from_slice(&size.to_le_bytes());
+}
+
+fn put_u16(bytes: &mut [u8], offset: usize, value: u16) {
+    bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+}
+
+fn put_u32(bytes: &mut [u8], offset: usize, value: u32) {
+    bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+}
+
+fn put_u64(bytes: &mut [u8], offset: usize, value: u64) {
+    bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+}
+
+fn write_utf16le(bytes: &mut [u8], value: &str) {
+    for (index, code_unit) in value.encode_utf16().take(bytes.len() / 2).enumerate() {
+        put_u16(bytes, index * 2, code_unit);
+    }
+}
+
+fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for byte in bytes {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            let mask = 0u32.wrapping_sub(crc & 1);
+            crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
+        }
+    }
+    !crc
+}
+
+// ── OVMF firmware resolution (x86_64) ─────────────────────────────────────
+
+fn find_system_ovmf() -> Option<PathBuf> {
+    OVMF_SYSTEM_CANDIDATES
+        .iter()
+        .find(|p| std::path::Path::new(p).exists())
+        .map(PathBuf::from)
+}
+
+fn ovmf_cache_path(root: &Path) -> PathBuf {
+    root.join(".ovmf/OVMF_CODE.fd")
+}
+
+fn ensure_ovmf(root: &Path) -> Result<PathBuf> {
+    if let Ok(env_path) = env::var("OVMF_CODE") {
+        let p = PathBuf::from(&env_path);
+        if p.exists() {
+            return Ok(p);
+        }
+        log(format!(
+            "OVMF_CODE={env_path} does not exist — searching system paths"
+        ));
+    }
+
+    if let Some(p) = find_system_ovmf() {
+        log(format!("found system OVMF: {}", p.display()));
+        return Ok(p);
+    }
+
+    let cache = ovmf_cache_path(root);
+    if cache.exists() {
+        log(format!("using cached OVMF: {}", cache.display()));
+        return Ok(cache);
+    }
+
+    // Download
+    log("OVMF not found — downloading firmware (one-time)...");
+    let rpm = root.join(".ovmf/ovmf.rpm");
+    fs::create_dir_all(root.join(".ovmf")).context("create .ovmf dir")?;
+
+    let mut downloaded_rpm = false;
+    for url in OVMF_DOWNLOAD_URLS {
+        let direct_fd = url.ends_with(".fd");
+        let download_path = if direct_fd { &cache } else { &rpm };
+        match run(Command::new("curl")
+            .args(["-fsSL", "-o"])
+            .arg(download_path)
+            .arg(url))
+        {
+            Ok(()) => {
+                if direct_fd {
+                    return Ok(cache);
+                }
+                downloaded_rpm = true;
+                break;
+            },
+            Err(err) => {
+                log(format!("OVMF download failed from {url}: {err}"));
+                let _ = fs::remove_file(download_path);
+            },
+        }
+    }
+    if !downloaded_rpm {
+        bail!(
+            "Could not download OVMF from any configured mirror.\n\
+             Install OVMF via your package manager, or set OVMF_CODE=/path/to/OVMF_CODE.fd"
+        );
+    }
+
+    // Extract the .fd file from the RPM (requires rpm2cpio + cpio, or bsdtar)
+    if which_first(&["rpm2cpio"]).is_some() && which_first(&["cpio"]).is_some() {
+        run(Command::new("sh")
+            .current_dir(root.join(".ovmf"))
+            .arg("-c")
+            .arg("rpm2cpio ovmf.rpm | cpio -idm --quiet"))?;
+        // Locate the firmware inside the extracted tree. Fedora packages have
+        // used both paths across releases.
+        for rel in [
+            "usr/share/edk2/x64/OVMF_CODE.fd",
+            "usr/share/edk2/ovmf/OVMF_CODE.fd",
+            "usr/share/edk2/ovmf/OVMF_CODE_4M.fd",
+        ] {
+            let extracted = root.join(".ovmf").join(rel);
+            if extracted.exists() {
+                fs::rename(&extracted, &cache).context("move OVMF_CODE.fd")?;
+                return Ok(cache);
+            }
+        }
+    }
+
+    bail!(
+        "Could not extract OVMF from RPM.\n\
+         Install OVMF via your package manager, or set OVMF_CODE=/path/to/OVMF_CODE.fd"
+    )
+}
+
+// ── QEMU launch ────────────────────────────────────────────────────────────
+
+fn launch_qemu_x86_64(
+    _root: &Path,
+    img: &Path,
+    ovmf: &Path,
+    initrd: Option<&Path>,
+    debug_port: Option<u16>,
+) -> Result<()> {
+    ensure_qemu_for_arch(Arch::X86_64)?;
+
+    let mut cmd = Command::new("qemu-system-x86_64");
+    cmd.args([
+        "-machine",
+        "q35",
+        "-accel",
+        "tcg",
+        "-cpu",
+        "qemu64,+xsave,+avx",
+        "-m",
+        "256M",
+        "-drive",
+        &format!("if=pflash,format=raw,readonly=on,file={}", ovmf.display()),
+        "-drive",
+        &format!("if=virtio,format=raw,file={}", img.display()),
+        "-serial",
+        "stdio",
+        "-display",
+        "none",
+        "-no-reboot",
+        "-no-shutdown",
+    ]);
+
+    if let Some(initrd) = initrd {
+        cmd.arg("-initrd").arg(initrd);
+    }
+
+    if let Some(port) = debug_port {
+        cmd.args(["-s", "-S", "-gdb", &format!("tcp::{port}")]);
+    }
+
+    run(&mut cmd)
+}
+
+fn launch_qemu_aarch64(
+    _root: &Path,
+    img: &Path,
+    initrd: Option<&Path>,
+    debug_port: Option<u16>,
+) -> Result<()> {
+    ensure_qemu_for_arch(Arch::AArch64)?;
+
+    // Locate AArch64 UEFI firmware
+    let fw_candidates = [
+        "/usr/share/AAVMF/AAVMF_CODE.fd",
+        "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
+        "/usr/share/qemu/edk2-aarch64-code.fd",
+    ];
+    let fw = fw_candidates
+        .iter()
+        .find(|p| std::path::Path::new(p).exists())
+        .map(PathBuf::from)
+        .or_else(|| env::var("QEMU_EFI").ok().map(PathBuf::from))
+        .ok_or_else(|| {
+            anyhow!(
+                "AArch64 UEFI firmware not found.\n\
+                 Install with: apt install qemu-efi-aarch64\n\
+                 or set QEMU_EFI=/path/to/QEMU_EFI.fd"
+            )
+        })?;
+
+    let mut cmd = Command::new("qemu-system-aarch64");
+    cmd.args([
+        "-machine",
+        "virt",
+        "-cpu",
+        "cortex-a57",
+        "-m",
+        "512M",
+        "-bios",
+        fw.to_str().unwrap(),
+        "-drive",
+        &format!("if=none,id=esp,format=raw,file={}", img.display()),
+        "-device",
+        "virtio-blk-device,drive=esp",
+        "-serial",
+        "stdio",
+        "-display",
+        "none",
+        "-no-reboot",
+        "-no-shutdown",
+    ]);
+
+    if let Some(initrd) = initrd {
+        cmd.arg("-initrd").arg(initrd);
+    }
+
+    if let Some(port) = debug_port {
+        cmd.args(["-s", "-S", "-gdb", &format!("tcp::{port}")]);
+    }
+
+    run(&mut cmd)
+}
+
+fn smoke_marker_regex() -> &'static str {
+    "BOOT_MINIMAL_OK|FULL_OS_USERSPACE_OK|entering cpu_idle"
+}
+
+fn serial_has_smoke_marker(log_path: &Path) -> Result<bool> {
+    match fs::read_to_string(log_path) {
+        Ok(serial) => Ok(serial.contains("BOOT_MINIMAL_OK")
+            || serial.contains("FULL_OS_USERSPACE_OK")
+            || serial.contains("entering cpu_idle")),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err).with_context(|| format!("read smoke log {}", log_path.display())),
+    }
+}
+
+fn run_until_smoke_marker(cmd: &mut Command, log_path: &Path, timeout: Duration) -> Result<()> {
+    log(format!("running: {:?}", cmd));
+    let mut child = cmd.spawn().context("failed to spawn QEMU")?;
+    let deadline = Instant::now() + timeout;
+
+    loop {
+        if serial_has_smoke_marker(log_path)? {
+            let _ = child.kill();
+            let _ = child.wait();
+            log(format!("smoke marker found in {}", log_path.display()));
+            return Ok(());
+        }
+
+        if let Some(status) = child.try_wait().context("poll QEMU status")? {
+            if status.success() && serial_has_smoke_marker(log_path)? {
+                log(format!("smoke marker found in {}", log_path.display()));
+                return Ok(());
+            }
+            bail!("QEMU exited before smoke marker appeared with {status}");
+        }
+
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!(
+                "smoke marker not found in {} before timeout; expected {}",
+                log_path.display(),
+                smoke_marker_regex()
+            );
+        }
+
+        thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn run_smoke(root: &Path, opts: &BuildOpts) -> Result<()> {
+    ensure_qemu_for_arch(opts.arch)?;
+
+    let initrd = ensure_initrd(root, opts)?;
+    build_kernel(root, opts)?;
+    let esp = stage_esp(root, opts)?;
+    let img = build_fat_image(root, &esp, opts.arch)?;
+    let log_path = root.join(format!("target/smoke-{}.log", arch_str(opts.arch)));
+    if let Some(parent) = log_path.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    }
+
+    match opts.arch {
+        Arch::X86_64 => {
+            let ovmf = ensure_ovmf(root)?;
+            let mut cmd = Command::new("qemu-system-x86_64");
+            cmd.args([
+                "-machine",
+                "q35",
+                "-accel",
+                "tcg",
+                "-cpu",
+                "qemu64,+xsave,+avx",
+                "-m",
+                "256M",
+                "-drive",
+                &format!("if=pflash,format=raw,readonly=on,file={}", ovmf.display()),
+                "-drive",
+                &format!("if=virtio,format=raw,file={}", img.display()),
+                "-serial",
+                &format!("file:{}", log_path.display()),
+                "-display",
+                "none",
+                "-no-reboot",
+                "-no-shutdown",
+            ]);
+            if let Some(initrd) = initrd.as_deref() {
+                cmd.arg("-initrd").arg(initrd);
+            }
+            run_until_smoke_marker(&mut cmd, &log_path, Duration::from_secs(60))?;
+        },
+        Arch::AArch64 => {
+            let fw_candidates = [
+                "/usr/share/AAVMF/AAVMF_CODE.fd",
+                "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
+                "/usr/share/qemu/edk2-aarch64-code.fd",
+            ];
+            let fw = fw_candidates
+                .iter()
+                .find(|p| std::path::Path::new(p).exists())
+                .map(PathBuf::from)
+                .or_else(|| env::var("QEMU_EFI").ok().map(PathBuf::from))
+                .ok_or_else(|| {
+                    anyhow!(
+                        "AArch64 UEFI firmware not found; install qemu-efi-aarch64 or set QEMU_EFI"
+                    )
+                })?;
+            let mut cmd = Command::new("qemu-system-aarch64");
+            cmd.args([
+                "-machine",
+                "virt",
+                "-cpu",
+                "cortex-a57",
+                "-m",
+                "512M",
+                "-bios",
+                fw.to_str().unwrap(),
+                "-drive",
+                &format!("if=none,id=esp,format=raw,file={}", img.display()),
+                "-device",
+                "virtio-blk-device,drive=esp",
+                "-serial",
+                &format!("file:{}", log_path.display()),
+                "-display",
+                "none",
+                "-no-reboot",
+                "-no-shutdown",
+            ]);
+            if let Some(initrd) = initrd.as_deref() {
+                cmd.arg("-initrd").arg(initrd);
+            }
+            run_until_smoke_marker(&mut cmd, &log_path, Duration::from_secs(45))?;
+        },
+    }
     Ok(())
+}
+
+// ── initramfs / userspace build ────────────────────────────────────────────
+
+fn build_init(root: &Path, arch: Arch) -> Result<()> {
+    let target = match arch {
+        Arch::X86_64 => "x86_64-unknown-none",
+        Arch::AArch64 => "aarch64-unknown-none",
+    };
+
+    // Ensure the freestanding userspace target is installed.
+    run(Command::new("rustup").args(["target", "add", target]))?;
+
+    // Build userspace/init
+    let mut cmd = cargo();
+    cmd.current_dir(root.join("userspace/init"))
+        .args(["build", "--release", "--target", target]);
+    run(&mut cmd)?;
+
+    // Stage as /init in a minimal initramfs tree
+    let init_src = root
+        .join("userspace/init/target")
+        .join(target)
+        .join("release/init");
+    let initramfs_root = root.join("initramfs_root");
+    fs::create_dir_all(&initramfs_root).context("create initramfs_root")?;
+    let init_dst = initramfs_root.join("init");
+    fs::copy(&init_src, &init_dst)
+        .with_context(|| format!("copy {} → {}", init_src.display(), init_dst.display()))?;
+
+    // Write a minimal /etc/os-release
+    let etc = initramfs_root.join("etc");
+    fs::create_dir_all(&etc).context("create initramfs_root/etc")?;
+    fs::write(etc.join("os-release"), OS_RELEASE_CONTENT).context("write os-release")?;
+
+    // Pack initramfs.cpio
+    let cpio_out = root.join("initramfs.cpio");
+    pack_cpio_newc(&initramfs_root, &cpio_out)?;
+
+    log(format!("initramfs packed: {}", cpio_out.display()));
+    Ok(())
+}
+
+fn pack_cpio_newc(root: &Path, out: &Path) -> Result<()> {
+    let mut entries = Vec::new();
+    collect_initramfs_entries(root, root, &mut entries)?;
+    entries.sort();
+
+    let mut archive = Vec::new();
+    for rel in entries {
+        let path = root.join(&rel);
+        let meta = fs::metadata(&path).with_context(|| format!("metadata {}", path.display()))?;
+        let name = rel.to_string_lossy().replace('\\', "/");
+        let mode = meta.permissions().mode();
+        if meta.is_dir() {
+            write_cpio_entry(&mut archive, &name, mode | 0o040000, &[])?;
+        } else if meta.is_file() {
+            let data = fs::read(&path).with_context(|| format!("read {}", path.display()))?;
+            write_cpio_entry(&mut archive, &name, mode | 0o100000, &data)?;
+        }
+    }
+    write_cpio_entry(&mut archive, "TRAILER!!!", 0, &[])?;
+    fs::write(out, archive).with_context(|| format!("write {}", out.display()))?;
+    Ok(())
+}
+
+fn collect_initramfs_entries(root: &Path, dir: &Path, entries: &mut Vec<PathBuf>) -> Result<()> {
+    for entry in fs::read_dir(dir).with_context(|| format!("read dir {}", dir.display()))? {
+        let entry = entry.with_context(|| format!("read dir entry {}", dir.display()))?;
+        let path = entry.path();
+        let rel = path
+            .strip_prefix(root)
+            .with_context(|| format!("strip prefix {}", path.display()))?
+            .to_path_buf();
+        entries.push(rel.clone());
+        if entry
+            .file_type()
+            .with_context(|| format!("file type {}", path.display()))?
+            .is_dir()
+        {
+            collect_initramfs_entries(root, &path, entries)?;
+        }
+    }
+    Ok(())
+}
+
+fn write_cpio_entry(archive: &mut Vec<u8>, name: &str, mode: u32, data: &[u8]) -> Result<()> {
+    let namesize = name
+        .len()
+        .checked_add(1)
+        .ok_or_else(|| anyhow!("cpio name too long"))?;
+    let filesize = data.len();
+    let header = format!(
+        "070701{ino:08x}{mode:08x}{uid:08x}{gid:08x}{nlink:08x}{mtime:08x}{filesize:08x}{devmajor:08x}{devminor:08x}{rdevmajor:08x}{rdevminor:08x}{namesize:08x}{check:08x}",
+        ino = 0u32,
+        mode = mode,
+        uid = 0u32,
+        gid = 0u32,
+        nlink = 1u32,
+        mtime = 0u32,
+        filesize = filesize,
+        devmajor = 0u32,
+        devminor = 0u32,
+        rdevmajor = 0u32,
+        rdevminor = 0u32,
+        namesize = namesize,
+        check = 0u32,
+    );
+    archive.extend_from_slice(header.as_bytes());
+    archive.extend_from_slice(name.as_bytes());
+    archive.push(0);
+    pad_to_4(archive);
+    archive.extend_from_slice(data);
+    pad_to_4(archive);
+    Ok(())
+}
+
+fn pad_to_4(bytes: &mut Vec<u8>) {
+    while !bytes.len().is_multiple_of(4) {
+        bytes.push(0);
+    }
+}
+
+// ── lint-modules subcommand ────────────────────────────────────────────────
+
+fn lint_modules(root: &Path) -> Result<()> {
+    // Walk src/ looking for files that use `use super::` across module
+    // boundaries (a canary for circular deps or incorrect visibility).
+    // This is intentionally lightweight — a full linter would use syn.
+    let src = root.join("src");
+    let mut violations = Vec::new();
+
+    fn walk(dir: &Path, violations: &mut Vec<String>) -> std::io::Result<()> {
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, violations)?;
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                let content = fs::read_to_string(&path)?;
+                for (i, line) in content.lines().enumerate() {
+                    // Flag `pub(crate) use` that crosses a top-level module
+                    // boundary — a heuristic only.
+                    if line.contains("pub(crate) use crate::") && !line.contains(" as sys_") {
+                        violations.push(format!(
+                            "{}:{}: suspicious pub(crate) use across crate root",
+                            path.display(),
+                            i + 1
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    walk(&src, &mut violations).context("walking src/")?;
+
+    if violations.is_empty() {
+        log("lint-modules: OK");
+        Ok(())
+    } else {
+        for v in &violations {
+            eprintln!("[xtask] lint: {v}");
+        }
+        bail!("{} module hygiene violation(s)", violations.len());
+    }
+}
+
+// ── FAT helpers (used by build_fat_image) ──────────────────────────────────
+
+// ── main ────────────────────────────────────────────────────────────────────
+
+fn main() {
+    let mut args = env::args().skip(1).collect::<Vec<_>>();
+    if args.is_empty() {
+        print_help();
+        return;
+    }
+
+    let subcommand = args.remove(0);
+    let root = workspace_root();
+
+    match subcommand.as_str() {
+        "build" => {
+            let opts = parse_build_args(&args);
+            if let Err(e) = build_kernel(&root, &opts) {
+                eprintln!("[xtask] build failed: {e:#}");
+                exit(1);
+            }
+        },
+
+        "check" => {
+            let opts = parse_build_args(&args);
+            if let Err(e) = check_kernel(&root, &opts) {
+                eprintln!("[xtask] check failed: {e:#}");
+                exit(1);
+            }
+        },
+
+        "test" => {
+            if let Err(e) = test_host(&root) {
+                eprintln!("[xtask] test failed: {e:#}");
+                exit(1);
+            }
+        },
+
+        "image" => {
+            let opts = parse_build_args(&args);
+            if let Err(e) = (|| -> Result<()> {
+                build_kernel(&root, &opts)?;
+                let esp = stage_esp(&root, &opts)?;
+                build_fat_image(&root, &esp, opts.arch)?;
+                Ok(())
+            })() {
+                eprintln!("[xtask] image failed: {e:#}");
+                exit(1);
+            }
+        },
+
+        "run" => {
+            let opts = parse_build_args(&args);
+            if let Err(e) = (|| -> Result<()> {
+                ensure_qemu_for_arch(opts.arch)?;
+                let initrd = ensure_initrd(&root, &opts)?;
+                build_kernel(&root, &opts)?;
+                let esp = stage_esp(&root, &opts)?;
+                let img = build_fat_image(&root, &esp, opts.arch)?;
+                match opts.arch {
+                    Arch::X86_64 => {
+                        let ovmf = ensure_ovmf(&root)?;
+                        launch_qemu_x86_64(&root, &img, &ovmf, initrd.as_deref(), None)?;
+                    },
+                    Arch::AArch64 => {
+                        launch_qemu_aarch64(&root, &img, initrd.as_deref(), None)?;
+                    },
+                }
+                Ok(())
+            })() {
+                eprintln!("[xtask] run failed: {e:#}");
+                exit(1);
+            }
+        },
+
+        "smoke" => {
+            let opts = parse_build_args(&args);
+            if let Err(e) = run_smoke(&root, &opts) {
+                eprintln!("[xtask] smoke failed: {e:#}");
+                exit(1);
+            }
+        },
+
+        "debug" => {
+            let opts = parse_build_args(&args);
+            if let Err(e) = (|| -> Result<()> {
+                ensure_qemu_for_arch(opts.arch)?;
+                let initrd = ensure_initrd(&root, &opts)?;
+                build_kernel(&root, &opts)?;
+                let esp = stage_esp(&root, &opts)?;
+                let img = build_fat_image(&root, &esp, opts.arch)?;
+                match opts.arch {
+                    Arch::X86_64 => {
+                        let ovmf = ensure_ovmf(&root)?;
+                        launch_qemu_x86_64(&root, &img, &ovmf, initrd.as_deref(), Some(1234))?;
+                    },
+                    Arch::AArch64 => {
+                        launch_qemu_aarch64(&root, &img, initrd.as_deref(), Some(1234))?;
+                    },
+                }
+                Ok(())
+            })() {
+                eprintln!("[xtask] debug failed: {e:#}");
+                exit(1);
+            }
+        },
+
+        "build-init" => {
+            let arch = args
+                .iter()
+                .position(|a| a == "--arch")
+                .and_then(|i| args.get(i + 1))
+                .map(|a| match a.as_str() {
+                    "aarch64" => Arch::AArch64,
+                    "x86_64" => Arch::X86_64,
+                    other => {
+                        eprintln!("[xtask] unknown --arch: {other}");
+                        exit(1);
+                    },
+                })
+                .unwrap_or(Arch::X86_64);
+
+            if let Err(e) = build_init(&root, arch) {
+                eprintln!("[xtask] build-init failed: {e:#}");
+                exit(1);
+            }
+        },
+
+        "ci-local" => {
+            if let Err(e) = ci_local(&root) {
+                eprintln!("[xtask] ci-local failed: {e:#}");
+                exit(1);
+            }
+        },
+
+        "status-check" => {
+            if let Err(e) = validate_status_doc(&root) {
+                eprintln!("[xtask] status-check failed: {e:#}");
+                exit(1);
+            }
+        },
+
+        "roadmap-check" => {
+            if let Err(e) = validate_roadmap_docs(&root) {
+                eprintln!("[xtask] roadmap-check failed: {e:#}");
+                exit(1);
+            }
+        },
+
+        "lint-modules" => {
+            if let Err(e) = lint_modules(&root) {
+                eprintln!("[xtask] lint-modules failed: {e:#}");
+                exit(1);
+            }
+        },
+
+        "help" | "--help" | "-h" => print_help(),
+
+        other => {
+            eprintln!("[xtask] unknown subcommand: {other}");
+            print_help();
+            exit(1);
+        },
+    }
+}
+
+fn print_help() {
+    eprintln!(
+        r#"cargo xtask — RustOS build automation
+
+SUBCOMMANDS:
+  build    [--arch <arch>] [--boot <boot>] [--profile <p>] [--features <f>]
+             Compile the kernel only.
+
+  check    [--arch <arch>] [--boot <boot>] [--profile <p>] [--features <f>]
+             Type-check the kernel using the same target/feature handling as build.
+
+  test
+             Run host-side Rust unit tests with the std test runtime.
+
+  image    [--arch <arch>] [--boot <boot>] [--profile <p>] [--features <f>]
+             Build kernel + stage ESP + assemble FAT disk image.
+
+  run      [--arch <arch>] [--boot <boot>] [--debug] [--initrd]
+             Build, image, and launch under QEMU.
+
+  smoke   [--arch <arch>] [--boot <boot>] [--profile <p>] [--features <f>] [--initrd]
+             Build, boot under QEMU with serial captured, and assert a boot marker.
+
+  debug    [--arch <arch>] [--boot <boot>] [--debug]
+             Like `run` but starts QEMU with GDB server on tcp::1234.
+
+  build-init [--arch <arch>]
+             Build userspace/init and pack initramfs.cpio.
+
+  lint-modules
+             Check module hygiene (pub(crate) use heuristics).
+
+  status-check
+             Validate docs/status.md covers required roadmap topics.
+
+  roadmap-check
+             Validate status, syscall, milestone, architecture, and fault docs.
+
+  ci-local
+             Run the fast local CI gate: check, host tests, lint-modules,
+             stub guard, roadmap-check.
+
+  help       Print this message.
+
+ARCHITECTURES (--arch):
+  aarch64   AArch64 — UEFI (default boot) or baremetal
+  x86_64    x86-64  — UEFI only
+
+BOOT MODES (--boot):
+  uefi        UEFI PE/COFF image (default)
+  baremetal   Bare-metal ELF (aarch64 only)
+
+PROFILES (--profile):
+  dev / debug    Debug build with full symbols (default)
+  release        Optimised release build
+  release-boot   Lean boot image profile
+
+ENVIRONMENT:
+  OVMF_CODE   Path to OVMF firmware for x86_64 UEFI boot
+  QEMU_EFI    Path to AArch64 UEFI firmware (QEMU_EFI.fd / AAVMF_CODE.fd)
+  CARGO       Override cargo binary (default: cargo)
+  QEMU        Override QEMU binary
+"#
+    );
 }

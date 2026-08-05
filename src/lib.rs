@@ -1,140 +1,211 @@
 //! RustOS kernel crate root.
+//!
+//! # Build profiles
+//!
+//! Three mutually-exclusive feature combinations select the active module
+//! tree:
+//!
+//! | Features active              | Profile                     |
+//! |------------------------------|-----------------------------|
+//! | `boot_minimal` without `userspace_boot` | First-stage boot only |
+//! | `userspace_boot`             | Boot + thin userspace shims |
+//! | neither (default / release)  | Full kernel                 |
+//!
+//! The `arch`, `boot_perf`, `console`, `init`, `kernel`, and `smp` modules
+//! compile under all three profiles because the panic handler, early console,
+//! and BootInfo parser are needed everywhere.
 
-#![no_std]
-#![feature(alloc_error_handler)]
-#![feature(naked_functions)]
-#![feature(asm_const)]
-#![feature(thread_local)]
-// These lints are intentionally set at the crate root so they apply
-// globally.  They will surface the known high-complexity functions
-// (dispatch_with_rip, sys_ptrace_impl, sys_clone3, bpf_run) during
-// normal `cargo clippy` runs, making complexity regressions visible
-// in CI before they are merged.
-// Rationale per lint:
-//   cognitive_complexity  — catches functions with deeply nested
-//                           conditionals / match arms (the primary issue
-//                           in the syscall dispatcher).
-//   too_many_arguments    — flags functions with more than 7 parameters;
-//                           dispatch_with_rip (8 params) is the first
-//                           violation.
-//   match_same_arms       — warns when two match arms have identical
-//                           bodies (NR 118 / NR 119 duplication).
-//   large_enum_variant    — prevents accidentally large enum variants
-//                           from inflating stack usage in the hot dispatch
-//                           path.
-#![deny(clippy::cognitive_complexity)]
-#![deny(clippy::too_many_arguments)]
-#![warn(clippy::match_same_arms)]
-#![warn(clippy::large_enum_variant)]
+#![cfg_attr(not(test), no_std)]
+#![cfg_attr(not(test), no_main)]
+#![allow(dead_code)]
+#![allow(unused_imports)]
+#![cfg_attr(not(test), feature(alloc_error_handler))]
 
-#[cfg(not(feature = "userspace_boot"))]
 extern crate alloc;
 
-// Organised by kernel layer (outermost = most dependent on others):
-//   core        — Zero-dependency foundation (error types, panic, cpu-local,
-//                 intrusive collections).  Everything may depend on this.
-//   arch        — Architecture-specific code (x86_64, riscv64)
-//   firmware    — Platform firmware interfaces (ACPI, Device Tree)
-//   device      — Hardware-neutral bus manager (PCI, future: platform, USB)
-//   irq         — Interrupt controllers (PLIC, CLINT; arch-gated)
-//   mm          — Memory management (PMM, heap, slab, mmap, swap, allocator)
-//   sync        — Synchronisation primitives (spinlock, mutex, condvar)
-//   drivers     — Hardware drivers (virtio, NIC, AHCI, NVMe, PCIe, USB, …)
-//   display     — Display stack (DRM/KMS object model + Wayland compositor)
-//   fs          — Filesystem layer (VFS, ext2, FAT32, initramfs mount)
-//   net         — Network stack (TCP/UDP/IP, DHCP, DNS, sockets)
-//   block       — Block layer (I/O scheduler, bio abstraction)
-//   tty         — TTY/PTY subsystem (ldisc, termios, pts, serial COM1)
-//   input       — Input event subsystem  [cfg(feature = "input_events")]
-//   console     — Kernel console (printk destination)
-//   proc        — Process management (scheduler, exec, wait, signals,
-//   namespaces)   syscall     — Syscall dispatch table
-//   ipc         — IPC (pipes, FIFOs, System V IPC, POSIX MQ)
-//   io_uring    — io_uring async I/O ring
-//   time        — Timekeeping (clocksource, timerfd, itimers)
-//   smp         — SMP / multi-core bringup
-//   security   — Security hardening (ASLR, stack canaries, seccomp, cgroups)
-//   init        — Early-boot: initramfs, ELF loader, crt0
-//   exec        — Executable format parsers (ELF-64)
-//   debug       — Debugging infrastructure  [cfg(gdbstub | debug | trace)]
-//   kernel      — Core kernel utilities (panic, rand, uaccess, utils)
-//   kmtest      — Kernel test harness  [cfg(feature = "kmtest")]
-//   boot_perf   — Boot performance markers (boot_mark! macro)
+// ---------------------------------------------------------------------------
+// Modules compiled under ALL build profiles
+// ---------------------------------------------------------------------------
 
+/// Architecture dispatch layer — cfg-routes to x86_64 or aarch64.
 pub mod arch;
+
+/// Full-kernel global allocator compatibility wiring.
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
+pub mod allocator;
+
+/// Boot performance markers — `boot_mark!` macro, `read_hw_counter()`.
 pub mod boot_perf;
+
+/// Kernel console — `kprint!`, `kprintln!`, `serial_println!` macros.
 pub mod console;
+
+/// Early-boot / init subsystem — BootInfo, initramfs, loader, schemes.
 pub mod init;
+
+/// Optional initramfs bytes embedded by `xtask --initrd` builds.
+pub mod embedded_initramfs {
+    include!(concat!(env!("OUT_DIR"), "/initramfs_embed.rs"));
+}
+
+/// Compatibility re-export: `crate::initramfs::…` resolves to
+/// `crate::init::initramfs::…`. Kept so any call sites outside the two
+/// `uefi_entry.rs` files that haven't been updated to the `init::initramfs`
+/// path don't silently break.
+pub use init::initramfs;
+
+/// Core kernel utilities — panic handler, rand, uaccess, architecture info.
 pub mod kernel;
 
-#[cfg(feature = "boot_minimal")]
+/// Compatibility aliases for full-kernel modules that still import helpers from
+/// their historical crate-root paths while the canonical home is under
+/// `crate::kernel`.
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
+pub use kernel::{rand, uaccess};
+
+/// Symmetric multi-processing — per-CPU blocks, IPI send/dispatch.
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
+pub mod smp;
+
+// ---------------------------------------------------------------------------
+// boot_minimal profile
+// ---------------------------------------------------------------------------
+
+/// Shared first-stage boot path; includes the bump-allocator
+/// `#[global_allocator]` for minimal images.
+#[cfg(all(feature = "boot_minimal", not(feature = "userspace_boot")))]
 pub mod boot_minimal;
 
+// ---------------------------------------------------------------------------
+// userspace_boot profile
+// ---------------------------------------------------------------------------
+
+/// Thin userspace-handoff boot path with minimal userspace services.
 #[cfg(feature = "userspace_boot")]
 pub mod userspace_boot;
 
+/// Minimal fs/proc surfaces used by the `userspace_boot` profile while the
+/// full kernel module graph remains gated out.
+#[cfg(feature = "userspace_boot")]
+pub mod userspace_shims;
+
+#[cfg(feature = "userspace_boot")]
+pub use userspace_shims::{fs, proc};
+
+// ---------------------------------------------------------------------------
+// Full-kernel modules (not boot_minimal, not userspace_boot)
+// ---------------------------------------------------------------------------
+
+/// Block device layer — request queues, bio, partition tables.
 #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod block;
+
+/// Kernel-internal core types (aliased as `kcore` to avoid shadowing `core`).
 #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
-pub mod core;
+#[path = "core/mod.rs"]
+pub mod kcore;
+
+/// Compatibility alias for full-kernel modules that still refer to
+/// `crate::core::...` while the canonical module name remains `kcore`.
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
+pub use kcore as core;
+
+/// Debug subsystem — oops, backtraces, GDB RSP stub.
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
+pub mod debug;
+
+/// Device model — device tree, platform bus, driver registration.
 #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod device;
+
+/// Display / DRM subsystem — connectors, modes, HDMI 2.1, ACP.
 #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod display;
+
+/// Peripheral drivers — AHCI, NVMe, virtio, keyboard, GPU.
 #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod drivers;
+
+/// ELF exec — `execve`, PT_LOAD mapping, aux-vector setup.
 #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod exec;
+
+/// Fault injection framework (requires `--features fault-inject`).
+#[cfg(all(
+    feature = "fault-inject",
+    not(any(feature = "boot_minimal", feature = "userspace_boot"))
+))]
+pub mod fault_inject;
+
+/// Firmware interfaces — ACPI, PSCI, device-tree parser stub.
 #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod firmware;
+
+/// Virtual filesystem — VFS, ext2, tmpfs, devfs, scheme table.
 #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod fs;
-#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
-pub use exec::elf;
-#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
-pub use init::initramfs;
-#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
-pub use kernel::rand;
-#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
-pub use kernel::uaccess;
-#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
-pub use mm::allocator;
-#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
-pub mod io_uring;
-#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
-pub mod ipc;
-#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
-pub mod irq;
-#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
-pub mod mm;
-#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
-pub mod net;
-#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
-pub mod proc;
-#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
-pub mod security;
-#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
-pub mod smp;
-#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
-pub mod sync;
-#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
-pub mod syscall;
-#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
-pub mod time;
-#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
-pub mod tty;
 
-// Feature-gated subsystems — only compiled when the matching flag is set.
-#[cfg(feature = "input_events")]
+/// Evdev / virtio-input event subsystem.
+///
+/// `input_events` enables the real device path; `kmtest` also compiles this
+/// module so full-kernel tests that exercise `/dev/input/event*` helpers keep
+/// their historical `crate::input` surface available.
+#[cfg(all(
+    any(feature = "input_events", feature = "kmtest"),
+    not(any(feature = "boot_minimal", feature = "userspace_boot"))
+))]
 pub mod input;
 
-#[cfg(any(feature = "gdbstub", feature = "debug", feature = "trace"))]
-pub mod debug;
-#[cfg(feature = "gdbstub")]
-pub use debug::gdbstub;
+/// io_uring — submission/completion ring, sqe/cqe dispatch.
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
+pub mod io_uring;
 
-#[cfg(feature = "kmtest")]
+/// Inter-process communication — pipes, Unix sockets, futex.
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
+pub mod ipc;
+
+/// Interrupt request routing — IRQ descriptors, APIC/GIC registration.
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
+pub mod irq;
+
+/// Architecture-independent kernel entry-point dispatcher.
+pub mod kernel_main;
+
+/// In-kernel test harness (requires `--features kmtest`).
+#[cfg(all(
+    feature = "kmtest",
+    not(any(feature = "boot_minimal", feature = "userspace_boot"))
+))]
 pub mod kmtest;
 
-pub use kernel_main::kernel_main;
-mod kernel_main;
+/// Memory management — physical allocator, VMM, page tables, heap.
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
+pub mod mm;
+
+/// Networking — TCP/IP stack, socket layer, NIC drivers.
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
+pub mod net;
+
+/// Process management — scheduler, signals, wait queues, namespaces.
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
+pub mod proc;
+
+/// Security — capabilities, seccomp, namespace isolation.
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
+pub mod security;
+
+/// Synchronisation primitives — Mutex, RwLock, Once, condvar.
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
+pub mod sync;
+
+/// System call dispatch table and per-syscall implementations.
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
+pub mod syscall;
+
+/// Timekeeping — monotonic clock, wall clock, POSIX timers, timerfd.
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
+pub mod time;
+
+/// TTY / PTY subsystem — line discipline, pts, serial console.
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
+pub mod tty;

@@ -1,5 +1,5 @@
 /// build.rs
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const CRT_DIR: &str = "src/init/crt";
@@ -9,20 +9,6 @@ const CRT_SOURCES: &[&str] = &[
     "memcpy.c",
     "memmove.c",
     "memset.c",
-];
-
-const RISCV_ASM_SRC: &str = "src/arch/riscv64/uentry.S";
-const RISCV_OBJ_NAME: &str = "uentry_riscv64.o";
-const RISCV_LIB_NAME: &str = "libuentry_riscv64.a";
-const RISCV_CLANG_TARGET: &str = "riscv64-unknown-elf";
-const RISCV_CLANG_FLAGS: &[&str] = &[
-    "-c",
-    "-x",
-    "assembler-with-cpp",
-    "-ffreestanding",
-    "-march=rv64gc",
-    "-mabi=lp64d",
-    "-mno-relax",
 ];
 
 const CRT_COMPILE_FLAGS: &[&str] = &[
@@ -37,29 +23,64 @@ const CRT_COMPILE_FLAGS: &[&str] = &[
 fn main() {
     let out = PathBuf::from(std::env::var("OUT_DIR").unwrap());
     let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
-
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let boot_minimal = std::env::var("CARGO_FEATURE_BOOT_MINIMAL").is_ok();
 
     println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_ARCH");
     println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_OS");
+    println!("cargo:rerun-if-env-changed=RUSTOS_INITRAMFS");
+    println!("cargo:rerun-if-env-changed=RUSTOS_INITRAMFS_FINGERPRINT");
+    write_initramfs_embed(&out);
 
-    if target_os != "uefi" && !boot_minimal {
-        compile_crt(&target_arch);
+    // ----------------------------------------------------------------
+    // Bare-metal ELF targets only (x86_64-kernel.json, aarch64-kernel.json)
+    // UEFI PE/COFF targets (x86_64-uefi-loader.json, aarch64-uefi-loader.json)
+    // have target_os == "uefi"; they use the PE/COFF layout built into
+    // lld-link and must NOT have an ELF linker script injected.
+    // ----------------------------------------------------------------
+    if target_os != "uefi" {
+        let script = match target_arch.as_str() {
+            "x86_64" => "linker/x86_64.ld",
+            "aarch64" => "linker/aarch64.ld",
+            other => {
+                println!("cargo:warning=build.rs: no linker script for arch '{other}'");
+                ""
+            },
+        };
+        if !script.is_empty() {
+            println!("cargo:rerun-if-changed={script}");
+        }
+
+        // CRT stubs are only needed for bare-metal ELF builds.
+        if !boot_minimal {
+            compile_crt(&target_arch);
+        }
     }
-
-    if target_arch == "riscv64" {
-        assemble_riscv_uentry(&out);
-    }
-
-    // UEFI image production is handled by `cargo xtask build/image` after Cargo
-    // has produced the final `rustos` ELF. Doing this from build.rs is too early
-    // in Cargo's build graph and previously used stale target paths.
 
     if std::env::var("CARGO_FEATURE_TRACE").is_ok() {
-        println!("cargo:rustc-flags=-Z instrument-functions");
         println!("cargo:rerun-if-env-changed=CARGO_FEATURE_TRACE");
+        println!("cargo:rerun-if-env-changed=RUSTFLAGS");
+
+        let rustflags = std::env::var("RUSTFLAGS").unwrap_or_default();
+        if !rustflags.contains("-Z instrument-functions") {
+            println!(
+                "cargo:warning=trace feature enabled without RUSTFLAGS='-Z instrument-functions'; ftrace callbacks will not be inserted"
+            );
+        }
     }
+}
+
+fn write_initramfs_embed(out: &Path) {
+    let dest = out.join("initramfs_embed.rs");
+    let content = match std::env::var("RUSTOS_INITRAMFS") {
+        Ok(path) if !path.is_empty() && std::path::Path::new(&path).exists() => {
+            println!("cargo:rerun-if-changed={path}");
+            let escaped = path.replace('\\', "\\\\").replace('"', "\\\"");
+            format!("pub static INITRAMFS: &[u8] = include_bytes!(\"{escaped}\");\n")
+        },
+        _ => "pub static INITRAMFS: &[u8] = &[];\n".to_string(),
+    };
+    std::fs::write(dest, content).expect("write initramfs_embed.rs");
 }
 
 /// Compile C runtime stubs into a static archive `librustos_crt.a`.
@@ -94,10 +115,6 @@ fn configure_crt_compiler(build: &mut cc::Build, target_arch: &str) {
     }
 
     match target_arch {
-        "riscv64" if command_exists("clang") => {
-            build.compiler("clang");
-            build.flag("--target=riscv64-unknown-elf");
-        },
         "aarch64" if command_exists("clang") => {
             build.compiler("clang");
             build.flag("--target=aarch64-none-elf");
@@ -133,101 +150,4 @@ fn command_exists(name: &str) -> bool {
         .status()
         .map(|status| status.success())
         .unwrap_or(false)
-}
-
-fn which_first(names: &[&str]) -> Option<String> {
-    names
-        .iter()
-        .find(|name| command_exists(name))
-        .map(|name| (*name).to_string())
-}
-
-/// Assemble the RISC-V uentry trampoline and archive it as a static library.
-///
-/// Uses LLVM-provided tooling (`clang` as the assembler driver and `llvm-ar`
-/// from `llvm-tools-preview` / a host `llvm` install) rather than the GNU
-/// `riscv64-unknown-elf-{as,ar}` binutils. This removes the need for a
-/// cross binutils package on CI hosts when only the Rust + LLVM toolchain
-/// is available.
-fn assemble_riscv_uentry(out: &PathBuf) {
-    println!("cargo:rerun-if-changed={RISCV_ASM_SRC}");
-
-    if !std::path::Path::new(RISCV_ASM_SRC).exists() {
-        // No user-entry trampoline source in this tree; nothing to assemble.
-        return;
-    }
-
-    let obj = out.join(RISCV_OBJ_NAME);
-    let lib = out.join(RISCV_LIB_NAME);
-
-    // Assembler: prefer clang (with explicit cross target) over a GNU
-    // riscv64-unknown-elf-as. clang ships with rustup's `llvm-tools-preview`
-    // and is otherwise readily available on CI runners.
-    let Some(asm_driver) = which_first(&["clang", "clang-19", "clang-18", "clang-17"]) else {
-        println!(
-            "cargo:warning=RISC-V assembly skipped; no clang available to assemble {RISCV_ASM_SRC}"
-        );
-        return;
-    };
-
-    if !run_command(
-        {
-            let mut cmd = Command::new(&asm_driver);
-            cmd.args(["--target", RISCV_CLANG_TARGET])
-                .args(RISCV_CLANG_FLAGS)
-                .arg("-o")
-                .arg(&obj)
-                .arg(RISCV_ASM_SRC);
-            cmd
-        },
-        &format!("{asm_driver} assembly"),
-    ) {
-        println!("cargo:warning=RISC-V assembly skipped; {asm_driver} failed on {RISCV_ASM_SRC}");
-        return;
-    }
-
-    // Archiver: prefer llvm-ar (host install, rustup component, or versioned
-    // binary) over the GNU riscv64-unknown-elf-ar. llvm-ar is target-agnostic.
-    let Some(ar_bin) = which_first(&["llvm-ar", "llvm-ar-19", "llvm-ar-18", "llvm-ar-17", "ar"])
-    else {
-        println!("cargo:warning=RISC-V archival skipped; no llvm-ar/ar available");
-        return;
-    };
-
-    if !run_command(
-        {
-            let mut cmd = Command::new(&ar_bin);
-            cmd.args(["crs"]).arg(&lib).arg(&obj);
-            cmd
-        },
-        &format!("{ar_bin} archival"),
-    ) {
-        println!("cargo:warning=RISC-V archival failed; skipping uentry linking");
-        return;
-    }
-
-    println!("cargo:rustc-link-search=native={}", out.display());
-    println!("cargo:rustc-link-lib=static=uentry_riscv64");
-}
-
-fn must_run(mut cmd: Command, context: &str) {
-    match cmd.status() {
-        Ok(status) if status.success() => {},
-        Ok(status) => panic!("{context} failed with status {status}"),
-        Err(e) => panic!("{context} failed: {e}"),
-    }
-}
-
-fn run_command(mut cmd: Command, context: &str) -> bool {
-    match cmd.status() {
-        Ok(status) if status.success() => true,
-        Ok(status) => {
-            println!("cargo:warning={context} failed with status {status}");
-            false
-        },
-        Err(e) => {
-            println!("cargo:warning={context} failed: {e}");
-            false
-        },
-    }
 }

@@ -210,22 +210,22 @@ static mut BOOT_STACK: BootStackStorage = BootStackStorage([0u8; 32768]);
 pub static BOOT_STACK_TOP: [u8; 0] = [];
 
 #[no_mangle]
-pub unsafe extern "efiapi" fn efi_main(
+unsafe extern "efiapi" fn efi_main(
     image_handle: EfiHandle,
     system_table: *mut EfiSystemTable,
 ) -> ! {
     // Null-check: non-conformant firmware or misconfigured QEMU can pass NULL.
     if system_table.is_null() {
-        #[cfg(not(feature = "boot_minimal"))]
+        #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
         crate::arch::aarch64::hal::init();
-        kernel_main_jump(&BOOT_INFO);
+        kernel_main_jump(&raw const BOOT_INFO);
     }
 
     let st = &*system_table;
     if st.boot_services.is_null() {
-        #[cfg(not(feature = "boot_minimal"))]
+        #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
         crate::arch::aarch64::hal::init();
-        kernel_main_jump(&BOOT_INFO);
+        kernel_main_jump(&raw const BOOT_INFO);
     }
     let bs = &*st.boot_services;
 
@@ -236,15 +236,15 @@ pub unsafe extern "efiapi" fn efi_main(
     );
 
     // 2. Capture GOP framebuffer — graceful fallback if firmware has no GOP.
-    #[cfg(not(feature = "boot_minimal"))]
+    #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
     let gop_ok =
         crate::drivers::gop::capture_from_boot_services(st.boot_services as *mut core::ffi::c_void);
-    #[cfg(feature = "boot_minimal")]
+    #[cfg(any(feature = "boot_minimal", feature = "userspace_boot"))]
     let gop_ok = false;
     if !gop_ok {
         efi_print(
             st.con_out,
-            "rustos: GOP not available — serial-only mode\r\n",
+            "rustos: GOP not available - serial-only mode\r\n",
         );
     }
 
@@ -262,7 +262,7 @@ pub unsafe extern "efiapi" fn efi_main(
             let byte_size = *data.add(1) as usize;
             if phys_start != 0 && byte_size > 0 {
                 #[cfg(not(feature = "boot_minimal"))]
-                crate::initramfs::set_initramfs_range(phys_start, byte_size);
+                crate::init::initramfs::set_initramfs_range(phys_start, byte_size);
                 initramfs = BootRange::new(phys_start, byte_size);
                 ovmf_initrd_found = true;
             }
@@ -272,6 +272,15 @@ pub unsafe extern "efiapi" fn efi_main(
     // 4a. LoadFile2 protocol initramfs (systemd-boot / GRUB2 on real hardware).
     if !ovmf_initrd_found {
         if let Some(range) = load_initrd_via_loadfile2(bs) {
+            initramfs = range;
+        }
+    }
+
+    // 4b. xtask fallback: embed initramfs.cpio into the EFI image for QEMU/OVMF
+    // runs where fw_cfg/LoadFile2 is not surfaced as an EFI initrd handle.
+    #[cfg(not(feature = "boot_minimal"))]
+    if initramfs.is_empty() {
+        if let Some(range) = load_embedded_initramfs(bs) {
             initramfs = range;
         }
     }
@@ -352,10 +361,15 @@ pub unsafe extern "efiapi" fn efi_main(
         halt();
     }
 
-    // 6. Switch to kernel boot stack and tail-call kernel_main.
-    #[cfg(not(feature = "boot_minimal"))]
+    // 6. Bring up serial before common kernel_main emits boot markers.
+    unsafe {
+        crate::arch::aarch64::serial::init(13, 1);
+    }
+
+    // 7. Switch to kernel boot stack and tail-call kernel_main.
+    #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
     crate::arch::aarch64::hal::init();
-    kernel_main_jump(&BOOT_INFO);
+    kernel_main_jump(&raw const BOOT_INFO);
 }
 
 /// Switch to the static kernel boot stack, then jump to `kernel_main`.
@@ -364,13 +378,13 @@ pub unsafe extern "efiapi" fn efi_main(
 /// then branch to the common entry.  We use `sym` operands so the
 /// assembler emits PC-relative ADR instructions (no GOT needed).
 #[inline(never)]
-unsafe fn kernel_main_jump(boot_info: &'static BootInfo) -> ! {
+unsafe fn kernel_main_jump(boot_info: *const BootInfo) -> ! {
     extern "C" {
         fn kernel_main(boot_info: &'static BootInfo) -> !;
     }
     #[cfg(feature = "boot_minimal")]
     {
-        kernel_main(boot_info)
+        kernel_main(&*boot_info)
     }
     #[cfg(not(feature = "boot_minimal"))]
     asm!(
@@ -382,7 +396,7 @@ unsafe fn kernel_main_jump(boot_info: &'static BootInfo) -> ! {
         "br  x10",
         stack_top = sym BOOT_STACK_TOP,
         km = sym kernel_main,
-        in("x0") boot_info as *const BootInfo,
+        in("x0") boot_info,
         options(noreturn),
     );
 }
@@ -436,10 +450,28 @@ unsafe fn load_initrd_via_loadfile2(bs: &EfiBootServices) -> Option<BootRange> {
     );
     if status == EFI_SUCCESS {
         #[cfg(not(feature = "boot_minimal"))]
-        crate::initramfs::set_initramfs_range(initrd_buf as usize, initrd_size);
+        crate::init::initramfs::set_initramfs_range(initrd_buf as usize, initrd_size);
         return Some(BootRange::new(initrd_buf as usize, initrd_size));
     }
     None
+}
+
+#[cfg(not(feature = "boot_minimal"))]
+unsafe fn load_embedded_initramfs(bs: &EfiBootServices) -> Option<BootRange> {
+    let bytes = crate::embedded_initramfs::INITRAMFS;
+    if bytes.is_empty() {
+        return None;
+    }
+
+    let mut initrd_buf: *mut u8 = core::ptr::null_mut();
+    let alloc_status = (bs.allocate_pool)(EFI_LOADER_DATA, bytes.len(), &mut initrd_buf);
+    if alloc_status != EFI_SUCCESS || initrd_buf.is_null() {
+        return None;
+    }
+
+    core::ptr::copy_nonoverlapping(bytes.as_ptr(), initrd_buf, bytes.len());
+    crate::init::initramfs::set_initramfs_range(initrd_buf as usize, bytes.len());
+    Some(BootRange::new(initrd_buf as usize, bytes.len()))
 }
 
 unsafe fn efi_print(con_out: *mut EfiSimpleTextOutput, s: &str) {

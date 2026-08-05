@@ -8,7 +8,6 @@
 //! | Architecture | Register | Convention |
 //! |---|---|---|
 //! | x86_64  | `%gs`  | `SWAPGS` swaps to the kernel GS base on entry |
-//! | riscv64 | `tp`   | Thread Pointer holds per-hart data |
 //!
 //! `CpuLocal<T>` is a zero-sized marker; the actual per-CPU memory is
 //! allocated inside `PerCpuBlock` by the SMP bringup code
@@ -128,19 +127,6 @@ pub unsafe fn current_cpu_block() -> *mut PerCpuBlock {
         ptr
     }
 
-    #[cfg(target_arch = "riscv64")]
-    {
-        let ptr: *mut PerCpuBlock;
-        unsafe {
-            core::arch::asm!(
-                "mv {ptr}, tp",
-                ptr = out(reg) ptr,
-                options(nostack, nomem)
-            );
-        }
-        ptr
-    }
-
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "riscv64")))]
+    #[cfg(not(target_arch = "x86_64"))]
     compile_error!("cpu_local: unsupported architecture")
 }

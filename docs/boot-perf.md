@@ -56,11 +56,10 @@ BOOT_MARK label=BOOT_INIT_EXEC ticks=12380000
 |--------------|---------------|-----------------------------------|-------------------------|
 | x86\_64      | `rdtsc`       | `IA32_TSC` (Time Stamp Counter)   | CPU core clock (GHz)    |
 | AArch64      | `mrs cntvct_el0` | Virtual timer counter          | `CNTFRQ_EL0` Hz (usually 25–100 MHz) |
-| RISC-V 64    | `rdtime`      | `time` CSR                        | Platform-defined (typically 1–10 MHz) |
 
-All three counters are:
+Both counters are:
 - **Monotonic** — never decrease within a single boot.
-- **Readable without privilege escalation** — accessible from EL1 / S-mode / kernel mode without extra CSR writes.
+- **Readable without privilege escalation** — accessible from EL1 / kernel mode without extra setup.
 - **Available before the memory allocator** — the `boot_mark!` macro calls only `read_hw_counter()` and `serial_println!`; no heap allocation is performed.
 
 > **Converting ticks to wall time** — divide the delta by the counter
@@ -98,8 +97,7 @@ print.  Adding a new milestone requires only one line of Rust at the callsite.
 
 ### Workflow
 
-`.github/workflows/boot-perf.yml` runs on every push to `main` and every pull
-request.  It:
+A boot-performance CI job is planned. When enabled, it should:
 
 1. Builds the kernel for x86_64 and aarch64.
 2. Boots each image under QEMU and captures serial output.
@@ -168,5 +166,5 @@ suitable strategy is:
 - **No floating point** — tick counts are printed as raw integers; unit
   conversion is left to the CI script running on the host.
 - **Stable format** — the `BOOT_MARK label= ticks=` grammar is considered
-  stable from Phase 5 onward.  Parsers may rely on it.  Changing the
+  stable from current onward.  Parsers may rely on it.  Changing the
   format requires a documentation update and a CI script update.

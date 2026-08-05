@@ -2,12 +2,11 @@
 //!
 //! ## POSIX requirements implemented
 //! * Directory entry is removed immediately.
-//! * Inode free is **deferred** until `nlink == 0` AND no open file
-//!   descriptions remain (via `inode_ref::mark_unlinked`).
+//! * Inode free is **deferred** until `nlink == 0` AND no open file descriptions remain (via
+//!   `inode_ref::mark_unlinked`).
 //! * `EISDIR`  — target is a directory; use `rmdir` instead.
 //! * `ENOENT`  — target does not exist.
-//! * `EACCES` / `EPERM` — write permission on parent dir missing, or
-//!   sticky bit blocks the caller.
+//! * `EACCES` / `EPERM` — write permission on parent dir missing, or sticky bit blocks the caller.
 
 extern crate alloc;
 
@@ -40,7 +39,7 @@ pub enum UnlinkOutcome {
     DeferFree,
 }
 
-const S_IFMT:  u16 = 0o170000;
+const S_IFMT: u16 = 0o170000;
 const S_IFDIR: u16 = 0o040000;
 
 #[inline]
@@ -55,10 +54,7 @@ fn is_dir(mode: u16) -> bool {
 /// On `Ok(UnlinkOutcome::DeferFree)` the caller should delete the directory
 /// entry only; the backend frees the inode when `inode_ref::dec_open` later
 /// returns `true`.
-pub fn unlink_preflight(
-    creds: Creds,
-    target: UnlinkTarget,
-) -> Result<UnlinkOutcome, isize> {
+pub fn unlink_preflight(creds: Creds, target: UnlinkTarget) -> Result<UnlinkOutcome, isize> {
     // EISDIR: unlink may not remove directories.
     if is_dir(target.target_mode) {
         return Err(-21); // EISDIR
@@ -98,12 +94,32 @@ mod tests {
     use crate::fs::vfs::inode_ref::{inc_open, InodeKey};
     use crate::fs::vfs::perm::{Creds, InodePerm};
 
-    fn key(ino: u64) -> InodeKey { InodeKey { dev: 2, ino } }
-    fn root() -> Creds { Creds { uid: 0, gid: 0, euid: 0, egid: 0 } }
-    fn user() -> Creds { Creds { uid: 1000, gid: 1000, euid: 1000, egid: 1000 } }
+    fn key(ino: u64) -> InodeKey {
+        InodeKey { dev: 2, ino }
+    }
+    fn root() -> Creds {
+        Creds {
+            uid: 0,
+            gid: 0,
+            euid: 0,
+            egid: 0,
+        }
+    }
+    fn user() -> Creds {
+        Creds {
+            uid: 1000,
+            gid: 1000,
+            euid: 1000,
+            egid: 1000,
+        }
+    }
 
     fn dir_perm(uid: u32, mode: u16) -> InodePerm {
-        InodePerm { uid, gid: uid, mode }
+        InodePerm {
+            uid,
+            gid: uid,
+            mode,
+        }
     }
 
     fn make_target(key: InodeKey, mode: u16, nlink: u32) -> UnlinkTarget {
@@ -155,7 +171,12 @@ mod tests {
         t.parent_perm = dir_perm(0, 0o041777); // drwxrwxrwt
         t.target_uid = 1000;
         // Caller is uid 2000 — not file owner, not dir owner, not root.
-        let other = Creds { uid: 2000, gid: 2000, euid: 2000, egid: 2000 };
+        let other = Creds {
+            uid: 2000,
+            gid: 2000,
+            euid: 2000,
+            egid: 2000,
+        };
         let r = unlink_preflight(other, t);
         assert_eq!(r, Err(-13)); // EACCES
     }

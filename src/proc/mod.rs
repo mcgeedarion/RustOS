@@ -84,14 +84,14 @@ pub mod time_ns;
 
 // The real `pid_ns`, `task_group`, `sched_helpers`, `user_ns` modules.
 pub mod pid_ns;
-pub mod task_group;
 pub mod sched_helpers;
+pub mod task_group;
 pub mod user_ns;
 
 pub mod wait;
 
-// CoW page-fault handler re-exported from mm.
-pub use crate::mm::cow_fault;
+// CoW page-fault handler.
+pub mod cow_fault;
 
 /// Returns the effective credentials of the currently-running task as a
 /// `perm::Creds` value ready for VFS DAC checks.
@@ -101,10 +101,27 @@ pub use crate::mm::cow_fault;
 pub fn current_creds() -> crate::fs::vfs::perm::Creds {
     let pid = crate::proc::scheduler::current_pid();
     crate::proc::scheduler::with_proc(pid, |p| crate::fs::vfs::perm::Creds {
-        uid:  p.uid,
-        gid:  p.gid,
+        uid: p.uid,
+        gid: p.gid,
         euid: p.euid,
         egid: p.egid,
     })
-    .unwrap_or(crate::fs::vfs::perm::Creds { uid: 0, gid: 0, euid: 0, egid: 0 })
+    .unwrap_or(crate::fs::vfs::perm::Creds {
+        uid: 0,
+        gid: 0,
+        euid: 0,
+        egid: 0,
+    })
+}
+
+/// Best-effort task label for panic/oops reporting.
+pub fn current_task_info() -> Option<(alloc::string::String, usize)> {
+    let pid = crate::proc::scheduler::current_pid() as usize;
+    crate::proc::scheduler::with_proc(pid, |p| {
+        let name = p
+            .exe_path
+            .clone()
+            .unwrap_or_else(|| alloc::format!("pid{}", p.pid));
+        (name, p.pid)
+    })
 }

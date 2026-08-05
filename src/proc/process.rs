@@ -27,7 +27,7 @@
 //! ## mm_lock (TOCTOU fix)
 //!
 //! `Pcb::mm_lock` is a `spin::RwLock<()>` that guards the virtual-memory
-//! state of the process (`vmas`, `user_satp`, `brk`).  Two rules apply:
+//! state of the process (`vmas`, `user_pagetable`, `brk`).  Two rules apply:
 //!
 //!   - **Writers** (`munmap`, `mmap`, `brk`, `exec`) take the write side before modifying `vmas` or
 //!     remapping pages.
@@ -167,7 +167,7 @@ pub struct Pcb {
     pub sp: usize,
 
     // Address space
-    pub user_satp: usize,
+    pub user_pagetable: usize,
 
     // Virtual memory areas + mm_lock
     pub vmas: Vec<Vma>,
@@ -185,11 +185,10 @@ pub struct Pcb {
 
     /// Physical address of this process's trapframe page.
     /// Allocated by `map_trampoline_for_process` (or carved from the kstack
-    /// for processes set up via `rebuild_trap_frame_riscv`).
     /// 0 on x86_64 (unused).
     pub trapframe_pa: usize,
     /// User virtual address at which the trapframe page is mapped in this
-    /// process's address space.  Equal to `TRAPFRAME_VADDR` on RISC-V.
+    /// process's address space.
     /// 0 on x86_64 (unused).
     pub trapframe_virt: usize,
 
@@ -252,6 +251,10 @@ pub struct Pcb {
     pub supp_groups: Vec<u32>,
 }
 
+/// Compatibility alias for call sites that still use the older `Process`
+/// type name for the canonical process-control block.
+pub type Process = Pcb;
+
 // SAFETY: Pcb is accessed only under ProcLock::inner (spin::Mutex).
 unsafe impl Send for Pcb {}
 unsafe impl Sync for Pcb {}
@@ -279,7 +282,7 @@ impl Pcb {
             sgid: 0,
             pc: 0,
             sp: 0,
-            user_satp: 0,
+            user_pagetable: 0,
             vmas: Vec::new(),
             mm_lock: Arc::new(spin::RwLock::new(())),
             next_va: Self::INITIAL_NEXT_VA,

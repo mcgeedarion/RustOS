@@ -47,22 +47,11 @@ fn hw_seed_raw() -> u64 {
         core::arch::asm!("rdtsc", out("eax") lo, out("edx") hi, options(nostack, nomem, preserves_flags));
         (hi as u64) << 32 | lo as u64
     }
-    #[cfg(target_arch = "riscv64")]
-    unsafe {
-        let cycle: u64;
-        let instret: u64;
-        core::arch::asm!("csrr {c}, mcycle", "csrr {i}, minstret", c = out(reg) cycle, i = out(reg) instret, options(nostack, nomem));
-        cycle ^ instret
-    }
     #[cfg(target_arch = "aarch64")]
     {
         crate::arch::aarch64::hal::time_now_cycles()
     }
-    #[cfg(not(any(
-        target_arch = "x86_64",
-        target_arch = "riscv64",
-        target_arch = "aarch64"
-    )))]
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     compile_error!("rand::hw_seed_raw: unsupported architecture")
 }
 
@@ -78,28 +67,8 @@ pub fn arch_entropy() -> u64 {
         );
         next_u64()
     }
-    // V7 fix: mix mcycle^minstret into the xorshift state before sampling so
-    // that the output is not linearly predictable from user-visible rdcycle.
-    #[cfg(target_arch = "riscv64")]
-    unsafe {
-        let cycle: u64;
-        let instret: u64;
-        core::arch::asm!(
-            "csrr {c}, mcycle", "csrr {i}, minstret",
-            c = out(reg) cycle, i = out(reg) instret,
-            options(nostack, nomem)
-        );
-        let hw = cycle ^ instret;
-        // Mix hardware counter into the xorshift state.
-        let s = STATE.load(Ordering::Relaxed);
-        let mixed = (s ^ hw).wrapping_mul(0x9E37_79B9_7F4A_7C15);
-        // Best-effort CAS; a missed update is acceptable for entropy mixing.
-        let _ = STATE.compare_exchange_weak(s, mixed, Ordering::Relaxed, Ordering::Relaxed);
-        // Draw a post-whitened sample from the updated state.
-        let s2 = next_u64();
-        let s2 = s2 ^ (s2 >> 30);
-        s2 ^ hw.rotate_left(17)
-    }
+    // Mix the architecture timer into the xorshift state before sampling so
+    // that the output is not linearly predictable from user-visible counters.
     #[cfg(target_arch = "aarch64")]
     {
         let hw = crate::arch::aarch64::hal::time_now_cycles();
@@ -108,11 +77,7 @@ pub fn arch_entropy() -> u64 {
         let _ = STATE.compare_exchange_weak(s, mixed, Ordering::Relaxed, Ordering::Relaxed);
         next_u64() ^ hw.rotate_left(17)
     }
-    #[cfg(not(any(
-        target_arch = "x86_64",
-        target_arch = "riscv64",
-        target_arch = "aarch64"
-    )))]
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     compile_error!("rand::arch_entropy: unsupported architecture")
 }
 

@@ -5,7 +5,6 @@
  * userspace crates compiled with #![no_std]).  Provides just enough C
  * surface area for init and shell to link against without a full libc:
  *
- *   - Raw syscall wrappers (x86_64 and riscv64)
  *   - write / read / open / close / exit / fork / execve / waitpid
  *   - nanosleep / sched_yield / getcwd / chdir
  *   - A tiny string library: strlen, strcmp, memcpy, memset

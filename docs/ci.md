@@ -1,114 +1,48 @@
-# CI Serial Sentinel Contract
+# CI and Local Validation Contract
 
-RustOS emits a stable, machine-readable sentinel string on the serial
-console just before the kernel enters its idle loop.  CI jobs and
-automated test scripts **must** use this sentinel to detect a successful
-end-to-end boot instead of parsing verbose log output.
+_Last reviewed: 2026-07-01._
 
----
+RustOS uses `cargo xtask` as the canonical automation layer. Raw `cargo` commands
+are useful for debugging, but CI and pre-push validation should go through
+`xtask` so target specs, features, firmware staging, FAT image creation, and
+serial-log checks stay consistent.
 
-## Status badge
+## Primary commands
 
-Add this to your `README.md` to show live CI status for the x86\_64 UEFI
-boot smoke job:
+| Command | Purpose |
+|---|---|
+| `cargo xtask check --arch x86_64` | Type-check the default x86_64 UEFI/minimal path |
+| `cargo xtask smoke --arch x86_64` | Build, image, boot QEMU, and assert a serial marker |
+| `cargo xtask smoke --arch aarch64` | Same contract for AArch64 UEFI, subject to local firmware availability |
+| `cargo xtask build-init --arch x86_64` | Build userspace init and pack `initramfs.cpio` |
+| `cargo xtask roadmap-check` | Validate roadmap/status/syscall/fault docs contain required topics |
+| `bash scripts/ci/check-stubs.sh` | Guard documented stub classifications |
+| `cargo xtask ci-local` | Fast aggregate local gate: check, host tests, module lint, stub guard, docs guard |
 
-```markdown
-[![Boot Smoke – x86_64 UEFI](https://github.com/mcgeedarion/RustOS/actions/workflows/boot-smoke.yml/badge.svg?branch=main&job=x86_64-uefi)](https://github.com/mcgeedarion/RustOS/actions/workflows/boot-smoke.yml)
+## Serial success markers
+
+`cargo xtask smoke` captures QEMU serial output to `target/smoke-<arch>.log` and
+passes when any of these strings is present:
+
+```text
+BOOT_MINIMAL_OK|FULL_OS_USERSPACE_OK|entering cpu_idle
 ```
 
-Rendered:
+Timeout status from QEMU is tolerated because a successfully booted kernel may
+be parked in the idle loop; the serial marker check is the actual pass/fail
+signal.
 
-[![Boot Smoke – x86_64 UEFI](https://github.com/mcgeedarion/RustOS/actions/workflows/boot-smoke.yml/badge.svg?branch=main)](https://github.com/mcgeedarion/RustOS/actions/workflows/boot-smoke.yml)
+## QEMU defaults
 
----
+| Architecture | Machine | Firmware | Timeout | Log path |
+|---|---|---|---:|---|
+| x86_64 | `q35` | `OVMF_CODE` or discovered OVMF | 60s | `target/smoke-x86_64.log` |
+| aarch64 | `virt` | `QEMU_EFI` or discovered AAVMF/QEMU EFI | 45s | `target/smoke-aarch64.log` |
 
-## Sentinel strings
+## Adding CI coverage
 
-| Configuration | Sentinel | Source location |
-|---|---|---|
-| Default (full kernel, x86\_64) | `RUSTOS_BOOT_OK v1` | `src/arch/x86_64/kernel_main.rs` |
-| `boot_minimal` (all arches) | `RustOS: BOOT_MINIMAL_OK` | `src/boot_minimal.rs` |
-
----
-
-## Position in the boot sequence
-
-For the **default** configuration the sentinel is printed at step 14
-of the x86\_64 boot sequence, immediately after:
-
-1. All hardware subsystems are initialised (serial, GDT/IDT, PMM, ACPI, PCIe, APIC).
-2. Storage is probed and the root filesystem is mounted.
-3. The init process (PID 1) has been spawned (or the fallback idle path
-   has been chosen).
-
-The sentinel is therefore a guarantee that **all critical boot phases
-completed without a panic or triple-fault**.
-
-For `boot_minimal` builds the sentinel is printed after the common
-minimal path completes, just before the CPU parks in a halt loop.
-
----
-
-## Stability guarantee
-
-- The sentinel string **will not change** without a deliberate version bump
-  in both the Rust source and this document.
-- The current version token is **`v1`**. When the format changes the token
-  becomes `v2`, etc., allowing CI to support both during a transition window.
-- The sentinel is printed **exactly once** per boot on the boot CPU.
-  It is not printed on AP bring-up, nor repeated by the scheduler.
-
----
-
-## CI usage
-
-### Bash / GitHub Actions
-
-```bash
-# Pass if the sentinel appears anywhere in the serial log.
-grep -q 'RUSTOS_BOOT_OK' qemu-x86_64-boot.log
-```
-
-The `boot-smoke` workflow (`.github/workflows/boot-smoke.yml`) contains an
-"Assert boot sentinel: RUSTOS\_BOOT\_OK" step that performs exactly this
-check as the **canonical CI gate** for the x86\_64 UEFI path.
-
-### Matching with version awareness
-
-If your script needs to distinguish versions:
-
-```bash
-grep -qE 'RUSTOS_BOOT_OK v[0-9]+' qemu-x86_64-boot.log
-```
-
-### QEMU timeout handling
-
-QEMU is launched with `timeout 60` for x86\_64 (45 s for aarch64, 60 s
-for riscv64). A timeout exit code of `124` is treated as success at the
-QEMU level — the kernel is still running in the idle loop — but the
-subsequent `grep` step will fail if the sentinel was never emitted,
-correctly failing the job.
-
----
-
-## Caching strategy
-
-The `boot-smoke` workflow uses three `actions/cache` layers:
-
-| Layer | Path | Cache key |
-|---|---|---|
-| Registry index + crate sources | `~/.cargo/registry` | `cargo-registry-<OS>-<Cargo.lock hash>` |
-| Git-sourced deps | `~/.cargo/git/db` | same as registry |
-| Compiled artifacts | `target/` | `cargo-target-<arch>-<OS>-<toolchain hash>-<Cargo.lock hash>` |
-
-The `target/` cache key includes both `rust-toolchain.toml` and
-`Cargo.lock`, so a nightly date bump or dependency update automatically
-invalidates the artifact cache while the registry layer remains warm.
-
----
-
-## Version history
-
-| Version | Sentinel text | Introduced |
-|---|---|---|
-| v1 | `RUSTOS_BOOT_OK v1` | 2026-06-23 |
+1. Prefer adding an `xtask` subcommand or extending an existing one over adding
+   a one-off shell command.
+2. Capture serial output to a file and assert markers, not sleeps.
+3. Update `docs/status.md`, `docs/milestones.md`, and this file when the gate
+   changes what is considered supported.

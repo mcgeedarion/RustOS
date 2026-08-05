@@ -19,6 +19,15 @@
 //!  12. wake vfork_parent
 //!  13. notify_exit (wakes parent waitpid, sends SIGCHLD)
 //!  14. schedule()   — never returns
+//!
+//! PID 1 exit policy:
+//!   RustOS treats `/init` exiting as a valid smoke-test completion path during
+//!   early bring-up.  PID 1 follows the same teardown path as every other
+//!   process, emits a serial marker before resources are destroyed, becomes a
+//!   zombie, and the boot CPU falls back to the scheduler/idle loop.  Later
+//!   service-manager policy may choose to reboot or respawn init, but the low
+//!   level exit syscall must remain panic-free for both zero and non-zero
+//!   statuses.
 
 extern crate alloc;
 
@@ -50,9 +59,7 @@ fn clear_child_tid(pid: usize) {
 fn is_last_live_thread(pid: usize, tgid: usize) -> bool {
     scheduler::with_procs_ro(|pl_vec| {
         !pl_vec.iter().any(|pl| {
-            pl.pid as usize != pid
-                && pl.tgid as usize == tgid
-                && pl.load_state() != State::Zombie
+            pl.pid as usize != pid && pl.tgid as usize == tgid && pl.load_state() != State::Zombie
         })
     })
 }
@@ -63,9 +70,7 @@ fn is_last_live_thread(pid: usize, tgid: usize) -> bool {
 /// PID 0 (the idle task / kernel), which won't collect them but prevents UAF.
 fn reparent_orphans(pid: usize) {
     // Determine the new parent — prefer PID 1 (init), fall back to 0.
-    let init_pid: usize = if pid != 1
-        && scheduler::with_proc(1, |_| ()).is_some()
-    {
+    let init_pid: usize = if pid != 1 && scheduler::with_proc(1, |_| ()).is_some() {
         1
     } else {
         0
@@ -75,10 +80,7 @@ fn reparent_orphans(pid: usize) {
     let children: alloc::vec::Vec<usize> = scheduler::with_procs_ro(|pl_vec| {
         pl_vec
             .iter()
-            .filter(|pl| {
-                scheduler::with_proc(pl.pid as usize, |p| p.ppid == pid)
-                    .unwrap_or(false)
-            })
+            .filter(|pl| scheduler::with_proc(pl.pid as usize, |p| p.ppid == pid).unwrap_or(false))
             .map(|pl| pl.pid as usize)
             .collect()
     });
@@ -111,9 +113,7 @@ fn ns_exit(pid: usize) {
                 pl_vec.iter().any(|pl| {
                     pl.pid as usize != pid
                         && pl.load_state() != State::Zombie
-                        && scheduler::with_proc(pl.pid as usize, getter)
-                            .unwrap_or(INIT_NS)
-                            == ns_id
+                        && scheduler::with_proc(pl.pid as usize, getter).unwrap_or(INIT_NS) == ns_id
                 })
             })
         };
@@ -145,8 +145,19 @@ fn zombify(pid: usize, code: i32) -> usize {
     vfork_parent
 }
 
+fn emit_pid1_exit_marker(pid: usize, code: i32) {
+    if pid == 1 {
+        crate::serial_println!(
+            "INIT_EXIT_CLEAN pid=1 status={} policy=scheduler-idle",
+            code
+        );
+    }
+}
+
 pub fn do_exit(pid: usize, code: i32) {
     let tgid = thread::tgid_of(pid);
+
+    emit_pid1_exit_marker(pid, code);
 
     robust_list_on_exit(pid);
     clear_child_tid(pid);
@@ -169,8 +180,8 @@ pub fn do_exit(pid: usize, code: i32) {
 
     let last = is_last_live_thread(pid, tgid);
     if last {
-        let user_satp = scheduler::with_proc(pid, |p| p.user_satp).unwrap_or(0);
-        free_address_space(pid, user_satp);
+        let user_pagetable = scheduler::with_proc(pid, |p| p.user_pagetable).unwrap_or(0);
+        free_address_space(pid, user_pagetable);
         crate::proc::signal::group_pending_clear(tgid);
         ns_exit(pid);
     }
@@ -218,9 +229,10 @@ pub fn sys_exit_group(status: i32) -> isize {
         crate::ipc::endpoint_cleanup_pid(sibling);
         crate::fs::process_fd::proc_fd_free(sibling);
         reparent_orphans(sibling);
-        let user_satp_sibling = scheduler::with_proc(sibling, |p| p.user_satp).unwrap_or(0);
-        if user_satp_sibling != 0 {
-            free_address_space(sibling, user_satp_sibling);
+        let user_pagetable_sibling =
+            scheduler::with_proc(sibling, |p| p.user_pagetable).unwrap_or(0);
+        if user_pagetable_sibling != 0 {
+            free_address_space(sibling, user_pagetable_sibling);
         }
         crate::proc::cgroup::cgroup_exit(sibling);
         let vfork_parent = zombify(sibling, status);

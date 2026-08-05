@@ -94,11 +94,6 @@ impl ConsoleOutput for SerialConsole {
         for &b in bytes {
             crate::arch::x86_64::serial::serial_write_byte(b);
         }
-
-        #[cfg(target_arch = "riscv64")]
-        for &b in bytes {
-            crate::arch::riscv64::uart::uart_write_byte(b);
-        }
     }
 }
 

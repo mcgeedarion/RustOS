@@ -4,10 +4,6 @@
 //!   BSP: kernel_main → smp::init() → enumerate MADTs →
 //! ap_boot::start_all_aps()   AP:  trampoline (real→long) → ap_entry() →
 //! percpu_init() → scheduler::ap_idle()
-//!
-//! Boot sequence (RISC-V):
-//!   Hart 0: kernel_main → smp::init() → sbi_hsm_hart_start() per hart
-//!   AP hart: ap_entry() → percpu_init() → scheduler::ap_idle()
 
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -39,7 +35,7 @@ pub enum CoreType {
 pub struct CpuInfo {
     /// Logical CPU id assigned by us (0-based, stable).
     pub cpu_id: u32,
-    /// x86_64: Local APIC id.  RISC-V: hart id.
+    /// x86_64: Local APIC id.  AArch64: MPIDR_EL1 affinity.
     pub hw_id: u32,
     /// NUMA node this CPU belongs to.
     pub node: u32,
@@ -145,23 +141,6 @@ pub fn init() {
             log::info!("smp: uniprocessor mode");
         }
     }
-    #[cfg(target_arch = "riscv64")]
-    {
-        use crate::arch::riscv64::smp as rv_smp;
-        ONLINE_CPUS.fetch_add(1, Ordering::Relaxed);
-        let total = num_cpus();
-        if total > 1 {
-            log::info!("smp: starting {} harts", total - 1);
-            rv_smp::start_all_harts();
-            AP_GO.store(true, Ordering::Release);
-            while ONLINE_CPUS.load(Ordering::Acquire) < total {
-                core::hint::spin_loop();
-            }
-            log::info!("smp: all {} harts online", total);
-        } else {
-            AP_GO.store(true, Ordering::Release);
-        }
-    }
 }
 
 /// AP C-level entry point (called from arch trampoline after paging is on).
@@ -178,11 +157,6 @@ pub extern "C" fn ap_entry(cpu_id: u32) -> ! {
         idt::load();
         // Enable local APIC and set up timer vector.
         crate::arch::x86_64::apic::ap_init_local();
-    }
-    #[cfg(target_arch = "riscv64")]
-    unsafe {
-        crate::arch::riscv64::trap::init_hart();
-        crate::arch::riscv64::smp::ap_init_plic();
     }
 
     ap_online();

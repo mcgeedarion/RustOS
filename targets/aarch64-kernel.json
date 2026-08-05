@@ -3,7 +3,7 @@
   "target-endian": "little",
   "target-pointer-width": 64,
   "target-c-int-width": 32,
-  "data-layout": "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-n32:64-S128",
+  "data-layout": "e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32",
   "arch": "aarch64",
 
   "os": "none",
@@ -23,13 +23,11 @@
 
   "code-model": "small",
 
-  "features": "-neon,-fp-armv8,+strict-align",
+  "features": "+strict-align",
 
   "max-atomic-width": 128,
 
   "frame-pointer": "always",
-
-  "eliminate-frame-pointer": false,
 
   "no-default-libraries": true,
 

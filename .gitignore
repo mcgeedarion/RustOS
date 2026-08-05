@@ -9,16 +9,19 @@
 
 # Legacy QEMU / EDK2 transient artifacts. Current scripts place VARS files under /target/.
 /edk2-aarch64-vars.fd
-/edk2-riscv-vars.fd
 
 # Legacy UEFI ESP staging directory. Current scripts use /target/esp/<arch>/.
 /esp/
 
 # Disk images produced by cargo xtask image
 /boot-aarch64.img
-/boot-riscv64.img
-/boot.img
 /boot-x86_64.img
+/boot.img
+
+# Initramfs artifacts produced by cargo xtask build-init
+/initramfs.cpio
+/initramfs_root/
+/userspace/init/target/
 
 # Editor / OS clutter
 *.swp

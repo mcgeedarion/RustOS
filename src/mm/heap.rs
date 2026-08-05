@@ -22,9 +22,9 @@
 //!      to the linked_list_allocator via `add_free_region`.
 //!
 //!   4. On both supported architectures the kernel direct map covers the entire physical address
-//!      space in the higher half (x86-64: `PHYS_OFFSET + pa`; RISC-V: `KERNEL_PHYS_BASE + pa`).
-//!      Newly allocated pages are therefore immediately addressable without any additional
-//!      `map_page()` call.
+//!      space in the higher half (x86-64: `PHYS_OFFSET + pa`; AArch64 via its VA48 physmap). Newly
+//!      allocated pages are therefore immediately addressable without any additional `map_page()`
+//!      call.
 //!
 //! ## Boot pool
 //! `BOOT_HEAP` is a `static mut [u8; BOOT_HEAP_SIZE]` baked into the kernel
@@ -54,23 +54,16 @@ use spin::Mutex;
 // Architecture-specific page size
 // ---------------------------------------------------------------------------
 // AArch64 supports 4 KiB, 16 KiB, and 64 KiB translation granules.
-// x86-64 and RISC-V only support 4 KiB pages in the configurations rustos uses.
+// x86-64 uses 4 KiB pages in the configurations rustos uses.
 // If a new architecture is added, define its granule size here.
 
 #[cfg(target_arch = "x86_64")]
 const PAGE_SIZE: usize = 4096;
 
-#[cfg(target_arch = "riscv64")]
-const PAGE_SIZE: usize = 4096;
-
 #[cfg(target_arch = "aarch64")]
 const PAGE_SIZE: usize = crate::arch::aarch64::mem_layout::GRANULE_SIZE;
 
-#[cfg(not(any(
-    target_arch = "x86_64",
-    target_arch = "riscv64",
-    target_arch = "aarch64",
-)))]
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64",)))]
 compile_error!(
     "Unsupported architecture: define PAGE_SIZE and phys_to_kernel_virt for this target in src/mm/heap.rs"
 );
@@ -79,7 +72,6 @@ compile_error!(
 // Architecture-specific physmap translation
 // ---------------------------------------------------------------------------
 // On x86-64 rustos identity-maps all of physical RAM at PHYS_OFFSET.
-// On RISC-V it is mapped at KERNEL_PHYS_BASE (same role, different name).
 // Both are flat-offset maps: virt = phys + BASE.
 
 #[cfg(target_arch = "x86_64")]
@@ -87,15 +79,6 @@ compile_error!(
 fn phys_to_kernel_virt(pa: usize) -> usize {
     const PHYS_OFFSET: usize = 0xFFFF_8000_0000_0000;
     pa + PHYS_OFFSET
-}
-
-#[cfg(target_arch = "riscv64")]
-#[inline]
-fn phys_to_kernel_virt(pa: usize) -> usize {
-    extern "C" {
-        static KERNEL_PHYS_BASE: usize;
-    }
-    unsafe { pa + KERNEL_PHYS_BASE }
 }
 
 #[cfg(target_arch = "aarch64")]

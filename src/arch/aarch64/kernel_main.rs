@@ -85,10 +85,10 @@ pub fn init(boot_info: &'static BootInfo) -> ! {
         if crate::fs::ext2::mount() {
             crate::serial_println!("ext2: root mounted at /");
         } else {
-            crate::serial_println!("ext2: mount failed — ramfs only");
+            crate::serial_println!("ext2: mount failed - ramfs only");
         }
     } else {
-        crate::serial_println!("block: no disk — ramfs only");
+        crate::serial_println!("block: no disk - ramfs only");
     }
 
     // 11. PID 1.
@@ -106,7 +106,7 @@ pub fn init(boot_info: &'static BootInfo) -> ! {
         }
     }
     if !spawned {
-        crate::serial_println!("init: no init binary found — idle");
+        crate::serial_println!("init: no init binary found - idle");
     }
 
     // 12. SMP.

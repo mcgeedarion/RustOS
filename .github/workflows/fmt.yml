@@ -36,8 +36,5 @@ jobs:
 
       - name: Check formatting
         run: |
-          # virtio_gpu.rs currently contains markdown (not Rust) — exclude it
-          # until the real driver is written.
-          find src tests xtask -name '*.rs' \
-            ! -path 'src/drivers/virtio_gpu.rs' \
-            | xargs rustfmt --edition 2021 --check
+          find src xtask crates -name '*.rs' -print0 \
+            | xargs -0 rustfmt --edition 2021 --check

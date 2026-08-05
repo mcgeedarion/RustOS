@@ -15,11 +15,8 @@
 #   3. Run the normal build matrix:
 #        cargo build
 #        cargo xtask image --arch aarch64 --debug
-#        cargo build --target targets/riscv64-uefi-loader.json --features uefi_boot
-#        cargo xtask image --arch riscv64 --debug
 #        cargo build --target targets/x86_64-kernel.json
 #        cargo xtask image --arch x86_64 --debug
-#        cargo build --target riscv64gc-unknown-none-elf --no-default-features
 #   4. Run formatting and lint checks.
 #   5. Document the upgrade reason in CHANGELOG.md.
 
@@ -35,11 +32,8 @@ components = [
 ]
 
 targets = [
-  "riscv64gc-unknown-none-elf",  # RISC-V SBI / bare-metal fallback target.
   "x86_64-unknown-none",         # Optional bare-metal target; UEFI uses targets/x86_64-kernel.json.
 ]
 
 # Custom JSON targets are not rustup-installed targets:
-#   - targets/aarch64-uefi-loader.json
-#   - targets/riscv64-uefi-loader.json
 #   - targets/x86_64-kernel.json

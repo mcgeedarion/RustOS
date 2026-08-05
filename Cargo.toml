@@ -43,14 +43,19 @@ log = { version = "0.4", default-features = false }
 cc = "1"
 
 [features]
-# Normal development build: keep the UEFI path enabled for the repository
-# default x86_64
-# UEFI/SBI builds through their target-specific commands.
-default = ["uefi_boot", "userspace_boot"]
+# ---------------------------------------------------------------------------
+# Default: only the UEFI firmware handoff path is active for plain
+# `cargo check` / `cargo xtask build --arch x86_64` runs.
+#
+# `userspace_boot` must be opted in explicitly via --features userspace_boot
+# so that the stub fs/proc shims (and the bump allocator) are clearly
+# intentional rather than accidentally compiled into every build.
+# ---------------------------------------------------------------------------
+default = ["uefi_boot"]
 
 # Compile only the firmware handoff, common BootInfo path, early console,
 # panic handler, and an architecture idle loop. This is the first-stage boot
-# target used to keep x86_64/aarch64/riscv64 bring-up paths aligned before
+# target used to keep x86_64/aarch64 bring-up paths aligned before
 # re-enabling the full kernel services.
 boot_minimal = []
 
@@ -58,6 +63,10 @@ boot_minimal = []
 # subsystems that are still API-inconsistent. This path keeps the firmware
 # handoff, common BootInfo path, early console, and a userspace handoff marker
 # enabled as the default "boot to userspace" milestone.
+#
+# NOTE: crate::fs and crate::proc are provided as thin stubs (no-op /
+# returns-false) while the real mm/fs/proc stack is still being stabilised.
+# See src/lib.rs for the stub definitions and the Phase 3 replacement plan.
 userspace_boot = []
 
 # Evdev / virtio-input subsystem.
@@ -73,11 +82,8 @@ cgroups = []
 gdbstub = []
 
 # Build as a UEFI loader/application.
-uefi_boot = []
+uefi_boot = ["boot_minimal"]
 
-# Explicitly opt in to the riscv64 UEFI boot path. RV64 PE/COFF is defined
-# by the UEFI specification; only RV64 is supported (RV32 has no UEFI profile).
-riscv64_uefi_boot = []
 
 # Full debug build: GDB RSP stub + rich oops/backtrace + trace drain.
 # Use `--features debug` as the single flag for a debug kernel.
@@ -114,7 +120,7 @@ fault-inject = []
 # Syscall profiling / tracing (Phase 5 — Performance and polish)
 #
 # Enables per-syscall atomic invocation counters and cumulative hardware-cycle
-# timing (TSC on x86_64, mcycle on RISC-V, PMCCNTR_EL0 on AArch64).
+# timing (TSC on x86_64, PMCCNTR_EL0 on AArch64).
 #
 # Profiling data is exposed via /proc/syscall_stats and can be dumped to the
 # debug serial port on demand via dump_syscall_stats().
@@ -127,11 +133,37 @@ fault-inject = []
 # ---------------------------------------------------------------------------
 syscall-trace = []
 
+# ---------------------------------------------------------------------------
+# Meta-features for build profiles.
+#
+# `release-boot` is the lean CI / normal-boot image:
+#   - No kmtest harness
+#   - No fault-inject framework
+#   - No syscall-trace profiling hooks
+#   - No GDB stub or trace ring buffer
+#
+# Debug and profiling images opt into these explicitly via `--features`.
+# ---------------------------------------------------------------------------
+release-boot = []
+
 [profile.release]
 opt-level = 3
 lto = true
 codegen-units = 1
 strip = false
+
+[profile.release-boot]
+inherits = "release"
+# No DWARF / debuginfo for the boot image; keep symbols in separate debug builds.
+debug = 0
+# Make sure cfg(debug_assertions) is off even if other profiles flip it on.
+debug-assertions = false
+# Optimise for size; LTO + single codegen unit keeps hot paths inlined.
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+# Strip debuginfo and most symbol names from the final binary.
+strip = "debuginfo"
 
 [profile.dev]
 opt-level = 0

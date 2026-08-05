@@ -12,7 +12,6 @@
 #
 # Options:
 #   MUSL=1            - Use musl-libc instead of shim
-#   ARCH=riscv64      - Target architecture (x86_64 or riscv64)
 #   V=1               - Verbose build output
 #   INSTALL_DIR=...   - Installation directory (default: /usr/local/bin)
 
@@ -20,11 +19,11 @@
 # Variable Definitions
 # ============================================================================
 
-ARCH              ??= x86_64
-MUSL              ??= 0
+ARCH              ?= x86_64
+MUSL              ?= 0
 SHIM_DIR          := ../libc-shim
 OUT               := rustos-shell
-INSTALL_DIR       ??= /usr/local/bin
+INSTALL_DIR       ?= /usr/local/bin
 
 # Verbose output control
 V                 ?= 0
@@ -45,12 +44,12 @@ DEPS              := $(SRCS:.c=.d)
 # ============================================================================
 
 ifeq ($(MUSL),1)
-  CC              ??= musl-gcc
+  CC              ?= musl-gcc
   CFLAGS          := -std=c11 -static -O2 -Wall -Wextra
   LDFLAGS         := -static
   LINK_TARGET     := MUSL
 else
-  CC              ??= gcc
+  CC              ?= gcc
   CFLAGS          := -std=c11 -ffreestanding -nostdlib \
                      -fno-stack-protector -fno-builtin \
                      -Wall -Wextra -O2 \
@@ -64,11 +63,8 @@ endif
 ifeq ($(ARCH),x86_64)
   CFLAGS          += -mno-red-zone -mcmodel=small
   ARCH_TARGET     := x86_64
-else ifeq ($(ARCH),riscv64)
-  CFLAGS          += -march=rv64gc -mabi=lp64d
-  ARCH_TARGET     := riscv64
 else
-  $(error Unsupported architecture: $(ARCH). Use x86_64 or riscv64)
+  $(error Unsupported architecture: $(ARCH). Use x86_64)
 endif
 
 # ============================================================================
@@ -132,13 +128,12 @@ help:
 	@echo ""
 	@echo "Options:"
 	@echo "  MUSL=1      - Use musl-libc (default: 0)"
-	@echo "  ARCH=...    - Target: x86_64 (default) or riscv64"
+	@echo "  ARCH=...    - Target: x86_64 (default)"
 	@echo "  V=1         - Enable verbose output"
 	@echo "  INSTALL_DIR - Installation directory (default: $(INSTALL_DIR))"
 	@echo ""
 	@echo "Examples:"
 	@echo "  make                    # Build with default settings"
 	@echo "  make MUSL=1             # Build with musl-libc"
-	@echo "  make ARCH=riscv64 V=1   # Build for RISC-V with verbose output"
 	@echo "  make install            # Build and install to system"
 	@echo ""

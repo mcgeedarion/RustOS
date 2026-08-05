@@ -11,11 +11,8 @@
  *   musl-gcc -static -O2 -o build/x86_64/hello hello/hello.c
  */
 
-extern long write(int fd, const void *buf, unsigned long count);
-extern void exit(int status);
-
 int main(void) {
     const char msg[] = "Hello from rustos userspace!\n";
     write(1, msg, sizeof(msg) - 1);
-    exit(0);
+    _exit(0);
 }

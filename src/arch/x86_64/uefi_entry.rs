@@ -200,11 +200,34 @@ pub static mut EFI_DESC_SIZE: usize = 0;
 
 static mut BOOT_INFO: BootInfo = BootInfo::empty();
 
+/// Raw x86_64 UEFI entry point shared by linker-selected entry symbols.
+///
+/// # Safety
+///
+/// The firmware must call this with a valid image handle and a valid pointer to
+/// an EFI system table for the lifetime of the handoff. The function never
+/// returns and assumes UEFI boot services are still available on entry.
 pub unsafe extern "efiapi" fn efi_entry_raw(
     image_handle: *mut core::ffi::c_void,
     system_table: *mut core::ffi::c_void,
 ) -> ! {
     uefi_start(image_handle, system_table as *mut EfiSystemTable)
+}
+
+/// Firmware-visible x86_64 UEFI application entry point.
+///
+/// # Safety
+///
+/// The UEFI firmware must provide a valid image handle and system table pointer.
+/// This entry point is reached before `ExitBootServices`, so it assumes boot
+/// services and firmware-owned memory descriptors are valid while it prepares
+/// the kernel handoff.
+#[no_mangle]
+pub unsafe extern "efiapi" fn efi_main(
+    image_handle: *mut core::ffi::c_void,
+    system_table: *mut core::ffi::c_void,
+) -> ! {
+    efi_entry_raw(image_handle, system_table)
 }
 
 #[no_mangle]
@@ -237,7 +260,7 @@ unsafe extern "efiapi" fn uefi_start(
     if !gop_ok {
         efi_print(
             st.con_out,
-            "rustos: GOP not available — serial-only mode\r\n",
+            "rustos: GOP not available - serial-only mode\r\n",
         );
     }
 
@@ -254,8 +277,8 @@ unsafe extern "efiapi" fn uefi_start(
             let phys_start = *data as usize;
             let byte_size = *data.add(1) as usize;
             if phys_start != 0 && byte_size > 0 {
-                #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
-                crate::initramfs::set_initramfs_range(phys_start, byte_size);
+                #[cfg(not(feature = "boot_minimal"))]
+                crate::init::initramfs::set_initramfs_range(phys_start, byte_size);
                 initramfs = BootRange::new(phys_start, byte_size);
                 ovmf_initrd_found = true;
             }
@@ -265,6 +288,15 @@ unsafe extern "efiapi" fn uefi_start(
     // 4a. LoadFile2 protocol initramfs (real bootloaders: systemd-boot, GRUB2).
     if !ovmf_initrd_found {
         if let Some(range) = load_initrd_via_loadfile2(bs) {
+            initramfs = range;
+        }
+    }
+
+    // 4b. xtask fallback: embed initramfs.cpio into the EFI image for QEMU/OVMF
+    // runs where fw_cfg/LoadFile2 is not surfaced as an EFI initrd handle.
+    #[cfg(not(feature = "boot_minimal"))]
+    if initramfs.is_empty() {
+        if let Some(range) = load_embedded_initramfs(bs) {
             initramfs = range;
         }
     }
@@ -355,7 +387,10 @@ unsafe extern "efiapi" fn uefi_start(
         halt();
     }
 
-    // 6. Switch to kernel boot stack and call kernel_main.
+    // 6. Bring up serial before common kernel_main emits boot markers.
+    crate::arch::x86_64::serial::early_init();
+
+    // 7. Switch to kernel boot stack and call kernel_main.
     extern "C" {
         fn kernel_main(boot_info: &'static BootInfo) -> !;
     }
@@ -420,8 +455,8 @@ unsafe fn load_initrd_via_loadfile2(bs: &EfiBootServices) -> Option<BootRange> {
         initrd_buf as *mut core::ffi::c_void,
     );
     if status == EFI_SUCCESS {
-        #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
-        crate::initramfs::set_initramfs_range(initrd_buf as usize, initrd_size);
+        #[cfg(not(feature = "boot_minimal"))]
+        crate::init::initramfs::set_initramfs_range(initrd_buf as usize, initrd_size);
         return Some(BootRange::new(initrd_buf as usize, initrd_size));
     }
     None
@@ -441,6 +476,24 @@ unsafe fn efi_print(con_out: *mut EfiSimpleTextOutput, s: &str) {
 }
 
 #[inline(never)]
+#[cfg(not(feature = "boot_minimal"))]
+unsafe fn load_embedded_initramfs(bs: &EfiBootServices) -> Option<BootRange> {
+    let bytes = crate::embedded_initramfs::INITRAMFS;
+    if bytes.is_empty() {
+        return None;
+    }
+
+    let mut initrd_buf: *mut u8 = core::ptr::null_mut();
+    let alloc_status = (bs.allocate_pool)(EFI_LOADER_DATA, bytes.len(), &mut initrd_buf);
+    if alloc_status != EFI_SUCCESS || initrd_buf.is_null() {
+        return None;
+    }
+
+    core::ptr::copy_nonoverlapping(bytes.as_ptr(), initrd_buf, bytes.len());
+    crate::init::initramfs::set_initramfs_range(initrd_buf as usize, bytes.len());
+    Some(BootRange::new(initrd_buf as usize, bytes.len()))
+}
+
 fn halt() -> ! {
     loop {
         unsafe {

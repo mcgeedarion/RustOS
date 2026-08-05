@@ -21,18 +21,17 @@
 //! ### Enqueue
 //! When a task with `tg_id != 0` is enqueued:
 //!   1. The task is placed in `group.grq[cpu].inner_heap`.
-//!   2. If `grq[cpu].on_top_rq == false`, a sentinel `CfsEntry` whose
-//!      `task_ptr` is `null` and whose `vruntime` is the group's current
-//!      `vruntime[cpu]` is pushed onto the top-level `cfs_heap`, and
-//!      `on_top_rq` is set to true.
+//!   2. If `grq[cpu].on_top_rq == false`, a sentinel `CfsEntry` whose `task_ptr` is `null` and
+//!      whose `vruntime` is the group's current `vruntime[cpu]` is pushed onto the top-level
+//!      `cfs_heap`, and `on_top_rq` is set to true.
 //!
 //! ### Dequeue (top-level)
 //! When `dequeue_cfs` pops a `CfsEntry` with `task_ptr == null`, it calls
 //! `group_dequeue_next(tg_id, cpu)` which:
 //!   1. Locks the group, pops the lowest-vruntime task from `grq[cpu]`.
 //!   2. Advances `group.vruntime[cpu]` by `elapsed * NICE0_WEIGHT / weight`.
-//!   3. If the inner heap is still non-empty, re-inserts the group sentinel
-//!      with the updated vruntime so the group competes again next tick.
+//!   3. If the inner heap is still non-empty, re-inserts the group sentinel with the updated
+//!      vruntime so the group competes again next tick.
 //!   4. Returns the concrete task pointer to the caller.
 //!
 //! ## Weight
@@ -241,12 +240,11 @@ pub fn group_enqueue(
 /// Called by the top-level `dequeue_cfs` when it pops a group sentinel entry.
 ///
 /// 1. Pops the lowest-vruntime task from `grq[cpu].inner_heap`.
-/// 2. Advances `group.vruntime[cpu]` proportionally to group weight so heavier
-///    groups run more.
-/// 3. If the inner heap is still non-empty, returns a new sentinel `CfsEntry`
-///    with the updated vruntime so the group re-enters the top-level heap.
-/// 4. Returns the concrete task pointer (or `null` if the inner heap was
-///    already empty — caller should skip this slot).
+/// 2. Advances `group.vruntime[cpu]` proportionally to group weight so heavier groups run more.
+/// 3. If the inner heap is still non-empty, returns a new sentinel `CfsEntry` with the updated
+///    vruntime so the group re-enters the top-level heap.
+/// 4. Returns the concrete task pointer (or `null` if the inner heap was already empty — caller
+///    should skip this slot).
 pub struct GroupDequeueResult {
     /// The concrete task to run.  Null if the group inner heap was empty.
     pub task: *mut crate::proc::task_types::Task,

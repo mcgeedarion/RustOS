@@ -86,12 +86,23 @@ fn resolve(fd: usize) -> isize {
     proc_fd_backing(cpid(), fd)
 }
 
+const O_ACCMODE: i32 = 0o3;
+const O_RDONLY: i32 = 0;
+const O_WRONLY: i32 = 1;
 const O_APPEND: i32 = 0o2000;
 
 const RLIMIT_FSIZE: usize = 1;
 const RLIM_INFINITY: u64 = u64::MAX;
 const SIGXFSZ: u32 = 25;
 const EFBIG: isize = -27;
+
+fn fd_allows_read(fd: usize) -> bool {
+    (proc_fd_getfl(cpid(), fd) & O_ACCMODE) != O_WRONLY
+}
+
+fn fd_allows_write(fd: usize) -> bool {
+    (proc_fd_getfl(cpid(), fd) & O_ACCMODE) != O_RDONLY
+}
 
 fn check_fsize_limit(bfd: usize, count: usize) -> Result<usize, isize> {
     let pid = cpid();
@@ -121,6 +132,12 @@ pub fn sys_read(fd: usize, buf_va: usize, count: usize) -> isize {
         n if n < 0 => return n,
         n => n as usize,
     };
+
+    // Standard descriptors are direction-specific in the early console path:
+    // fd 0 is stdin only, while fd 1/2 are write-only stdout/stderr.
+    if bfd == 1 || bfd == 2 {
+        return -9; // EBADF
+    }
 
     let mut kbuf = alloc::vec![0u8; count];
     let n: isize;
@@ -152,6 +169,8 @@ pub fn sys_read(fd: usize, buf_va: usize, count: usize) -> isize {
         n = crate::fs::eventfd::eventfd_read(bfd, &mut kbuf);
     } else if crate::fs::timerfd::is_timerfd(bfd) {
         n = crate::fs::timerfd::timerfd_read(bfd, &mut kbuf);
+    } else if crate::fs::signalfd::is_signalfd(bfd) {
+        n = crate::fs::signalfd::signalfd_read(bfd, &mut kbuf);
     } else if crate::fs::pipe::is_pipe(bfd) {
         n = crate::fs::pipe::pipe_read(bfd, &mut kbuf);
     } else if crate::net::socket::is_socket_fd(bfd) {
@@ -184,6 +203,12 @@ pub fn sys_write(fd: usize, buf_va: usize, count: usize) -> isize {
         n if n < 0 => return n,
         n => n as usize,
     };
+
+    // fd 0 is stdin; writes to it should fail instead of falling through to
+    // VFS fd 0 or another unrelated backing object.
+    if bfd == 0 {
+        return -9; // EBADF
+    }
 
     let mut kbuf = alloc::vec![0u8; count];
     if copy_from_user(&mut kbuf, buf_va).is_err() {
@@ -406,9 +431,28 @@ pub fn sys_pwrite64(fd: usize, buf_va: usize, count: usize, offset: i64) -> isiz
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 struct IoVec {
     base: usize,
     len: usize,
+}
+
+fn load_iovecs(iov_va: usize, iovcnt: usize) -> Result<Vec<IoVec>, isize> {
+    let iov_size = core::mem::size_of::<IoVec>();
+    if !validate_user_ptr(iov_va, iovcnt * iov_size) {
+        return Err(-14);
+    }
+
+    let mut iovecs = Vec::with_capacity(iovcnt);
+    for i in 0..iovcnt {
+        let mut raw = [0u8; core::mem::size_of::<IoVec>()];
+        if copy_from_user(&mut raw, iov_va + i * iov_size).is_err() {
+            return Err(-14);
+        }
+        let iov: IoVec = unsafe { core::mem::transmute(raw) };
+        iovecs.push(iov);
+    }
+    Ok(iovecs)
 }
 
 /// sys_writev(fd, iov_va, iovcnt)  [NR 20]
@@ -424,18 +468,15 @@ pub fn sys_writev(fd: usize, iov_va: usize, iovcnt: usize) -> isize {
         n if n < 0 => return n,
         n => n as usize,
     };
-    let iov_size = core::mem::size_of::<IoVec>();
-    if !validate_user_ptr(iov_va, iovcnt * iov_size) {
-        return -14;
+    if !fd_allows_write(fd) {
+        return -9;
     }
-
+    let iovecs = match load_iovecs(iov_va, iovcnt) {
+        Ok(iovecs) => iovecs,
+        Err(e) => return e,
+    };
     let mut total_len: usize = 0;
-    for i in 0..iovcnt {
-        let mut raw = [0u8; 16];
-        if copy_from_user(&mut raw, iov_va + i * iov_size).is_err() {
-            return -14;
-        }
-        let iov: IoVec = unsafe { core::mem::transmute(raw) };
+    for iov in &iovecs {
         total_len = total_len.saturating_add(iov.len);
     }
 
@@ -461,12 +502,7 @@ pub fn sys_writev(fd: usize, iov_va: usize, iovcnt: usize) -> isize {
     }
 
     let mut written = 0isize;
-    for i in 0..iovcnt {
-        let mut raw = [0u8; 16];
-        if copy_from_user(&mut raw, iov_va + i * iov_size).is_err() {
-            return -14;
-        }
-        let iov: IoVec = unsafe { core::mem::transmute(raw) };
+    for iov in iovecs {
         if iov.len == 0 {
             continue;
         }
@@ -484,19 +520,22 @@ pub fn sys_readv(fd: usize, iov_va: usize, iovcnt: usize) -> isize {
     if iovcnt == 0 {
         return 0;
     }
+    if iovcnt > 1024 {
+        return -22;
+    }
     let bfd = match resolve(fd) {
         n if n < 0 => return n,
         n => n as usize,
     };
-    let iov_size = core::mem::size_of::<IoVec>();
+    if !fd_allows_read(fd) {
+        return -9;
+    }
+    let iovecs = match load_iovecs(iov_va, iovcnt) {
+        Ok(iovecs) => iovecs,
+        Err(e) => return e,
+    };
     let mut total = 0isize;
-    for i in 0..iovcnt {
-        let ptr = iov_va + i * iov_size;
-        let mut raw = [0u8; 16];
-        if copy_from_user(&mut raw, ptr).is_err() {
-            return -14;
-        }
-        let iov: IoVec = unsafe { core::mem::transmute(raw) };
+    for iov in iovecs {
         if iov.len == 0 {
             continue;
         }
@@ -515,6 +554,9 @@ pub fn sys_readv(fd: usize, iov_va: usize, iovcnt: usize) -> isize {
 fn read_bfd(bfd: usize, buf_va: usize, count: usize) -> isize {
     if !validate_user_ptr(buf_va, count) {
         return -14;
+    }
+    if bfd == 1 || bfd == 2 {
+        return -9;
     }
     let mut kbuf = alloc::vec![0u8; count];
     let n: isize;
@@ -565,6 +607,9 @@ fn read_bfd(bfd: usize, buf_va: usize, count: usize) -> isize {
 fn write_bfd(bfd: usize, buf_va: usize, count: usize) -> isize {
     if !validate_user_ptr(buf_va, count) {
         return -14;
+    }
+    if bfd == 0 {
+        return -9;
     }
     let mut kbuf = alloc::vec![0u8; count];
     if copy_from_user(&mut kbuf, buf_va).is_err() {

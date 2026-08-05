@@ -1,0 +1,87 @@
+name: Boot Image Size Gate
+
+# ---------------------------------------------------------------------------
+# Fails if boot-x86_64.img exceeds the configured size limit.
+# Uploads image size as an artifact for trend tracking.
+# ---------------------------------------------------------------------------
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: image-size-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUSTFLAGS: ""
+  # Maximum allowed size for the release-boot ESP image in bytes (64 MiB)
+  IMAGE_SIZE_LIMIT_BYTES: 67108864
+
+jobs:
+  image-size-x86_64:
+    name: Image size check (x86_64 release-boot)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
+          components: rust-src, llvm-tools-preview
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends \
+            clang lld llvm mtools
+
+      - name: Build release-boot image
+        run: |
+          set -o pipefail
+          cargo xtask image --arch x86_64 --profile release-boot 2>&1 | tee build-image-size.log
+          test -f boot-x86_64.img || { echo "ERROR: boot-x86_64.img not produced" >&2; exit 1; }
+
+      - name: Check image size
+        run: |
+          IMAGE_SIZE=$(stat --format='%s' boot-x86_64.img)
+          echo "boot-x86_64.img size: $IMAGE_SIZE bytes (limit: $IMAGE_SIZE_LIMIT_BYTES)"
+
+          # Write size record for artifact upload
+          echo "{\"image\": \"boot-x86_64.img\", \"size_bytes\": $IMAGE_SIZE, \"limit_bytes\": $IMAGE_SIZE_LIMIT_BYTES, \"sha\": \"${{ github.sha }}\"}" > image-size.json
+          cat image-size.json
+
+          if [ "$IMAGE_SIZE" -gt "$IMAGE_SIZE_LIMIT_BYTES" ]; then
+            echo "FAIL: image size $IMAGE_SIZE exceeds limit $IMAGE_SIZE_LIMIT_BYTES bytes" >&2
+            exit 1
+          fi
+          echo "OK: image size within limit"
+
+      - name: Upload image size artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-size-x86_64
+          path: |
+            build-image-size.log
+            image-size.json

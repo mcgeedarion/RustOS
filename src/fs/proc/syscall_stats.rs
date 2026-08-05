@@ -56,20 +56,4 @@ pub fn read_syscall_stats() -> String {
     }
 }
 
-/// Register this handler with the procfs VFS node at kernel init.
-/// Call from `src/fs/proc/mod.rs` or equivalent init sequence.
-pub fn register_procfs_node() {
-    // The procfs subsystem exposes a register_ro_file(path, handler) API.
-    // Adapt to whatever signature your VFS uses; this is the canonical call.
-    #[cfg(feature = "syscall-trace")]
-    crate::fs::proc::register_ro_file("/proc/syscall_stats", |_req| {
-        read_syscall_stats().into_bytes()
-    });
-
-    // When the feature is off we still register the node so /proc/syscall_stats
-    // exists — it just returns the informational placeholder.
-    #[cfg(not(feature = "syscall-trace"))]
-    crate::fs::proc::register_ro_file("/proc/syscall_stats", |_req| {
-        read_syscall_stats().into_bytes()
-    });
-}
+// The procfs generator calls `read_syscall_stats` directly for `/proc/syscall_stats`.

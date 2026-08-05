@@ -24,7 +24,7 @@
 
 #![cfg(feature = "fault-inject")]
 
-use crate::fault_inject::points::{FAULT_SYSCALL_RESOURCE, FAULT_SYSCALL_FDTABLE};
+use crate::fault_inject::points::{FAULT_SYSCALL_FDTABLE, FAULT_SYSCALL_RESOURCE};
 
 /// Errno codes used by the fault injection layer.
 ///

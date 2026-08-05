@@ -134,11 +134,19 @@ fn dup_backing(bfd: usize) -> usize {
     } else if crate::net::socket::is_socket_fd(bfd) {
         crate::net::socket::socket_dup(bfd);
         bfd
+    } else if crate::security::landlock::is_landlock_fd(bfd) {
+        crate::security::landlock::dup_landlock_fd(bfd)
+    } else if crate::security::bpf::is_bpf_fd(bfd) {
+        crate::security::bpf::dup_bpf_fd(bfd);
+        bfd
     } else if crate::fs::eventfd::is_eventfd(bfd) {
         crate::fs::eventfd::efd_dup(bfd);
         bfd
     } else if crate::fs::timerfd::is_timerfd(bfd) {
         crate::fs::timerfd::tfd_dup(bfd);
+        bfd
+    } else if crate::fs::signalfd::is_signalfd(bfd) {
+        crate::fs::signalfd::sfd_dup(bfd);
         bfd
     } else if crate::fs::inotify::is_inotify_fd(bfd) {
         crate::fs::inotify::inotify_dup(bfd);
@@ -310,33 +318,38 @@ pub fn proc_fd_open(pid: usize, path: &str, flags: u32, _mode: u32) -> isize {
                     (errno, None)
                 },
             }
-        } else if let Some(fd) = crate::fs::devfs::try_open(path, flags) {
-            (fd as isize, None)
-        } else if path.starts_with("/proc") {
-            let fd = crate::fs::procfs::procfs_open(path, flags);
-            (fd, Some(path.into()))
-        } else if path.starts_with("/sys/fs/cgroup") {
-            let fd = crate::fs::cgroupfs::cgroupfs_open(path);
-            (fd, Some(path.into()))
-        } else if path.starts_with("/sys") {
-            let fd = crate::fs::sysfs::sysfs_open(path, flags);
-            (fd, Some(path.into()))
         } else {
-            match crate::fs::vfs::open(path, flags) {
-                Ok(fd) => (fd as isize, Some(path.into())),
-                Err(e) => {
-                    if flags & O_CREAT != 0 && e == -2 {
-                        if crate::fs::vfs::create(path).is_ok() {
-                            match crate::fs::vfs::open(path, flags & !O_CREAT) {
-                                Ok(fd) => (fd as isize, Some(path.into())),
-                                Err(e2) => (e2, None),
+            match crate::fs::devfs::try_open(path, flags) {
+                Ok(Some(fd)) => (fd as isize, None),
+                Err(e) => (e, None),
+                Ok(None) if path.starts_with("/proc") => {
+                    let fd = crate::fs::procfs::procfs_open(path, flags);
+                    (fd, Some(path.into()))
+                },
+                Ok(None) if path.starts_with("/sys/fs/cgroup") => {
+                    let fd = crate::fs::cgroupfs::cgroupfs_open(path);
+                    (fd, Some(path.into()))
+                },
+                Ok(None) if path.starts_with("/sys") => {
+                    let fd = crate::fs::sysfs::sysfs_open(path, flags);
+                    (fd, Some(path.into()))
+                },
+                Ok(None) => match crate::fs::vfs::open(path, flags) {
+                    Ok(fd) => (fd as isize, Some(path.into())),
+                    Err(e) => {
+                        if flags & O_CREAT != 0 && e == -2 {
+                            if crate::fs::vfs::create(path).is_ok() {
+                                match crate::fs::vfs::open(path, flags & !O_CREAT) {
+                                    Ok(fd) => (fd as isize, Some(path.into())),
+                                    Err(e2) => (e2, None),
+                                }
+                            } else {
+                                (-13, None)
                             }
                         } else {
-                            (-13, None)
+                            (e, None)
                         }
-                    } else {
-                        (e, None)
-                    }
+                    },
                 },
             }
         };
@@ -509,6 +522,10 @@ fn close_backing(bfd: usize) {
         crate::fs::inotify::inotify_close(bfd);
     } else if crate::fs::fanotify::is_fanotify_fd(bfd) {
         crate::fs::fanotify::fanotify_close(bfd);
+    } else if crate::security::landlock::is_landlock_fd(bfd) {
+        crate::security::landlock::close_landlock_fd(bfd);
+    } else if crate::security::bpf::is_bpf_fd(bfd) {
+        crate::security::bpf::close_bpf_fd(bfd);
     } else if crate::fs::eventfd::is_eventfd(bfd) {
         crate::fs::eventfd::sys_close_efd(bfd);
     } else if crate::fs::timerfd::is_timerfd(bfd) {

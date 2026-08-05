@@ -111,8 +111,14 @@ pub const SYS_SET_ROBUST_LIST: usize = 273;
 pub const SYS_GET_ROBUST_LIST: usize = 274;
 
 pub const SYS_UNSHARE: usize = 272;
+pub const SYS_SIGNALFD: usize = 282;
+pub const SYS_SIGNALFD4: usize = 289;
 pub const SYS_SETNS: usize = 308;
 pub const SYS_SECCOMP: usize = 317;
+pub const SYS_BPF: usize = 321;
+pub const SYS_LANDLOCK_CREATE_RULESET: usize = 444;
+pub const SYS_LANDLOCK_ADD_RULE: usize = 445;
+pub const SYS_LANDLOCK_RESTRICT_SELF: usize = 446;
 
 // Linux's strict mode only permits read(0), write(1), exit(60),
 // exit_group(231), and rt_sigreturn(15).  These constants are gathered

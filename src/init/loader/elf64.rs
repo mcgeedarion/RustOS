@@ -1,38 +1,56 @@
 //! 64-bit ELF loader.
 //!
 //! Parses an ELF64 executable and maps its PT_LOAD segments into a new
-//! address space.  Called by proc::exec::sys_execve and kernel_main.
-//!
-//! ## What this does
-//!   1. Validate ELF header (magic, class=64, type=EXEC or DYN).
-//!   2. Walk PT_LOAD program headers:
-//!        - Allocate physical pages via pmm::alloc_page.
-//!        - Copy file data (filesz bytes).
-//!        - Zero-fill the BSS region (memsz - filesz bytes).
-//!        - Map each page into the process CR3/SATP via paging::map_page.
-//!   3. Return entry point, brk, and PHDR metadata for auxv.
+//! address space.  Called from `exec.rs`.
 
-extern crate alloc;
+use crate::mm::vma::{MappingFlags, VmaKind};
+use crate::proc::process::Process;
 use alloc::vec::Vec;
+use core::mem;
 
-#[cfg(target_arch = "x86_64")]
-use crate::arch::x86_64::paging;
+// ELF machine types we accept
+const EM_X86_64: u16 = 62;
+const EM_AARCH64: u16 = 183;
 
-const ELFMAG: &[u8; 4] = b"\x7FELF";
+// ELF class / data / version constants
 const ELFCLASS64: u8 = 2;
+const ELFDATA2LSB: u8 = 1;
+const EV_CURRENT: u8 = 1;
+
+// e_type values
 const ET_EXEC: u16 = 2;
 const ET_DYN: u16 = 3;
-const EM_X86_64: u16 = 62;
-const EM_RISCV: u16 = 243;
+
+// Program header types
 const PT_LOAD: u32 = 1;
+const PT_INTERP: u32 = 3;
 const PT_PHDR: u32 = 6;
-const PF_X: u32 = 1;
-const PF_W: u32 = 2;
-const PF_R: u32 = 4;
+const PT_TLS: u32 = 7;
 
-const PAGE: usize = 4096;
+// Program header flags
+const PF_X: u32 = 0x1;
+const PF_W: u32 = 0x2;
+const PF_R: u32 = 0x4;
 
+/// Errors returned by the ELF loader.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ElfError {
+    TooSmall,
+    BadMagic,
+    Not64Bit,
+    WrongEndian,
+    BadVersion,
+    NotExecutableOrDyn,
+    WrongArch,
+    OverlappingSegments,
+    MmapFailed,
+    InterpNotFound,
+    BadPhdrTable,
+}
+
+/// Minimal ELF64 file header (52 bytes we care about).
 #[repr(C)]
+#[derive(Debug, Clone, Copy)]
 struct Elf64Ehdr {
     e_ident: [u8; 16],
     e_type: u16,
@@ -50,7 +68,9 @@ struct Elf64Ehdr {
     e_shstrndx: u16,
 }
 
+/// ELF64 program header.
 #[repr(C)]
+#[derive(Debug, Clone, Copy)]
 struct Elf64Phdr {
     p_type: u32,
     p_flags: u32,
@@ -62,210 +82,155 @@ struct Elf64Phdr {
     p_align: u64,
 }
 
+/// Result of a successful ELF load.
 pub struct LoadedElf {
-    pub entry: usize,
-    pub brk: usize,
-    pub is_dyn: bool,
-    pub base: usize,
-    pub pages: Vec<usize>,
-    pub phdr_va: usize,
-    pub phdr_count: usize,
-    pub phdr_size: usize,
+    /// Virtual address of the first instruction.
+    pub entry: u64,
+    /// Load bias applied to all PT_LOAD segments (0 for ET_EXEC).
+    pub load_bias: u64,
+    /// Virtual address of the program-header table in the loaded image.
+    pub phdr_vaddr: u64,
+    /// Number of program headers.
+    pub phdr_count: u16,
+    /// Path of the PT_INTERP interpreter, if present.
+    pub interp_path: Option<alloc::string::String>,
+    /// TLS template info (vaddr, filesz, memsz) if PT_TLS present.
+    pub tls: Option<(u64, u64, u64)>,
 }
 
-pub fn load(image: &[u8], cr3: usize) -> Option<LoadedElf> {
-    if image.len() < core::mem::size_of::<Elf64Ehdr>() {
-        return None;
+/// Load an ELF64 image into `proc`'s address space.
+///
+/// `data` is the raw file bytes (already read into kernel memory).
+/// `load_base` is the preferred base for `ET_DYN`; ignored for `ET_EXEC`.
+pub fn load_elf64(proc: &mut Process, data: &[u8], load_base: u64) -> Result<LoadedElf, ElfError> {
+    // ── header validation ──────────────────────────────────────────────────
+    if data.len() < mem::size_of::<Elf64Ehdr>() {
+        return Err(ElfError::TooSmall);
     }
+    // SAFETY: we just checked the length.
+    let ehdr: &Elf64Ehdr = unsafe { &*(data.as_ptr() as *const Elf64Ehdr) };
 
-    let ehdr = unsafe { &*(image.as_ptr() as *const Elf64Ehdr) };
-
-    if &ehdr.e_ident[0..4] != ELFMAG.as_slice() {
-        return None;
+    if &ehdr.e_ident[0..4] != b"\x7fELF" {
+        return Err(ElfError::BadMagic);
     }
     if ehdr.e_ident[4] != ELFCLASS64 {
-        return None;
+        return Err(ElfError::Not64Bit);
+    }
+    if ehdr.e_ident[5] != ELFDATA2LSB {
+        return Err(ElfError::WrongEndian);
+    }
+    if ehdr.e_ident[6] != EV_CURRENT {
+        return Err(ElfError::BadVersion);
+    }
+    if ehdr.e_type != ET_EXEC && ehdr.e_type != ET_DYN {
+        return Err(ElfError::NotExecutableOrDyn);
     }
 
-    #[cfg(target_arch = "x86_64")]
-    if ehdr.e_machine != EM_X86_64 {
-        return None;
+    // Accept only the architectures we support.
+    match ehdr.e_machine {
+        EM_X86_64 => {
+            #[cfg(not(target_arch = "x86_64"))]
+            return Err(ElfError::WrongArch);
+        },
+        EM_AARCH64 => {
+            #[cfg(not(target_arch = "aarch64"))]
+            return Err(ElfError::WrongArch);
+        },
+        _ => return Err(ElfError::WrongArch),
     }
-    #[cfg(target_arch = "riscv64")]
-    if ehdr.e_machine != EM_RISCV {
-        return None;
-    }
 
-    let is_dyn = match ehdr.e_type {
-        t if t == ET_EXEC => false,
-        t if t == ET_DYN => true,
-        _ => return None,
-    };
-
-    const ASLR_BASE: usize = 0x0000_1000_0000_0000;
-    const ASLR_RANGE: usize = 0x0000_6000_0000_0000;
-    const ALIGN_2MB: usize = 2 * 1024 * 1024;
-    let bias = if is_dyn {
-        let rand_off = (crate::rand::next_u64() as usize) % (ASLR_RANGE / ALIGN_2MB);
-        ASLR_BASE + rand_off * ALIGN_2MB
-    } else {
-        0
-    };
-
-    let phoff = ehdr.e_phoff as usize;
+    // ── program header table ───────────────────────────────────────────────
+    let phentsize = ehdr.e_phentsize as usize;
     let phnum = ehdr.e_phnum as usize;
-    let phentsz = ehdr.e_phentsize as usize;
-    let entry = ehdr.e_entry as usize + bias;
+    let phoff = ehdr.e_phoff as usize;
 
-    if phoff + phnum * phentsz > image.len() {
-        return None;
+    if phentsize < mem::size_of::<Elf64Phdr>() {
+        return Err(ElfError::BadPhdrTable);
+    }
+    let phdr_end = phoff
+        .checked_add(phentsize.checked_mul(phnum).ok_or(ElfError::BadPhdrTable)?)
+        .ok_or(ElfError::BadPhdrTable)?;
+    if phdr_end > data.len() {
+        return Err(ElfError::BadPhdrTable);
     }
 
-    let mut pages: Vec<usize> = Vec::new();
-    let mut brk: usize = 0;
-    let mut phdr_va: usize = 0;
-    let mut first_load_vaddr_base: Option<usize> = None;
+    // ── compute load bias for ET_DYN ───────────────────────────────────────
+    let bias: u64 = if ehdr.e_type == ET_DYN { load_base } else { 0 };
+
+    // ── first pass: collect PT_LOAD / PT_INTERP / PT_TLS / PT_PHDR ────────
+    let mut interp_path: Option<alloc::string::String> = None;
+    let mut tls: Option<(u64, u64, u64)> = None;
+    let mut phdr_vaddr: u64 = 0;
+
+    let mut load_segments: Vec<Elf64Phdr> = Vec::new();
 
     for i in 0..phnum {
-        let ph = unsafe { &*((image.as_ptr() as usize + phoff + i * phentsz) as *const Elf64Phdr) };
+        let off = phoff + i * phentsize;
+        // SAFETY: bounds checked above.
+        let phdr: &Elf64Phdr = unsafe { &*(data.as_ptr().add(off) as *const Elf64Phdr) };
 
-        if ph.p_type == PT_PHDR {
-            phdr_va = ph.p_vaddr as usize + bias;
-        }
-
-        if ph.p_type != PT_LOAD {
-            continue;
-        }
-
-        let vaddr = ph.p_vaddr as usize + bias;
-        let filesz = ph.p_filesz as usize;
-        let memsz = ph.p_memsz as usize;
-        let offset = ph.p_offset as usize;
-        let flags = ph.p_flags;
-
-        if first_load_vaddr_base.is_none() {
-            first_load_vaddr_base = Some(vaddr.wrapping_sub(offset));
-        }
-
-        if filesz > image.len() || offset + filesz > image.len() {
-            return None;
-        }
-        if memsz == 0 {
-            continue;
-        }
-
-        let vpage_start = vaddr & !(PAGE - 1);
-        let vpage_end = (vaddr + memsz + PAGE - 1) & !(PAGE - 1);
-        let file_end = vaddr + filesz;
-
-        let mut va = vpage_start;
-        while va < vpage_end {
-            let pa = match crate::mm::pmm::alloc_page() {
-                Some(p) => p,
-                None => return None,
-            };
-            pages.push(pa);
-            unsafe {
-                core::ptr::write_bytes(pa as *mut u8, 0, PAGE);
-            }
-
-            let pg_file_start = va.max(vaddr);
-            let pg_file_end = (va + PAGE).min(file_end);
-            if pg_file_start < pg_file_end {
-                let src_off = offset + (pg_file_start - vaddr);
-                let dst_off = pg_file_start - va;
-                let copy_len = pg_file_end - pg_file_start;
-                unsafe {
-                    core::ptr::copy_nonoverlapping(
-                        image.as_ptr().add(src_off),
-                        (pa + dst_off) as *mut u8,
-                        copy_len,
-                    );
+        match phdr.p_type {
+            PT_LOAD => load_segments.push(*phdr),
+            PT_INTERP => {
+                let start = phdr.p_offset as usize;
+                let end = start.saturating_add(phdr.p_filesz as usize);
+                if end > data.len() {
+                    return Err(ElfError::InterpNotFound);
                 }
-            }
-
-            map_page_arch(cr3, va, pa, flags);
-            va += PAGE;
-        }
-
-        let seg_top = vaddr + memsz;
-        if seg_top > brk {
-            brk = seg_top;
+                let bytes = &data[start..end];
+                // strip trailing NUL
+                let s = bytes
+                    .iter()
+                    .position(|&b| b == 0)
+                    .map(|n| &bytes[..n])
+                    .unwrap_or(bytes);
+                interp_path = Some(alloc::string::String::from_utf8_lossy(s).into_owned());
+            },
+            PT_PHDR => {
+                phdr_vaddr = phdr.p_vaddr + bias;
+            },
+            PT_TLS => {
+                tls = Some((phdr.p_vaddr + bias, phdr.p_filesz, phdr.p_memsz));
+            },
+            _ => {},
         }
     }
 
-    if phdr_va == 0 && phoff != 0 {
-        phdr_va = first_load_vaddr_base
-            .and_then(|base| base.checked_add(phoff))
-            .unwrap_or(0);
+    // ── second pass: map PT_LOAD segments ──────────────────────────────────
+    for seg in &load_segments {
+        let vaddr = (seg.p_vaddr + bias) as usize;
+        let memsz = seg.p_memsz as usize;
+
+        let mut flags = MappingFlags::empty();
+        if seg.p_flags & PF_R != 0 {
+            flags |= MappingFlags::READ;
+        }
+        if seg.p_flags & PF_W != 0 {
+            flags |= MappingFlags::WRITE;
+        }
+        if seg.p_flags & PF_X != 0 {
+            flags |= MappingFlags::EXEC;
+        }
+
+        let file_start = seg.p_offset as usize;
+        let file_end = file_start.saturating_add(seg.p_filesz as usize);
+        let file_data = if file_end <= data.len() {
+            &data[file_start..file_end]
+        } else {
+            &[]
+        };
+
+        proc.mm
+            .map_segment(vaddr, memsz, flags, VmaKind::Anonymous, Some(file_data))
+            .map_err(|_| ElfError::MmapFailed)?;
     }
 
-    brk = (brk + PAGE - 1) & !(PAGE - 1);
-
-    Some(LoadedElf {
-        entry,
-        brk,
-        is_dyn,
-        base: bias,
-        pages,
-        phdr_va,
-        phdr_count: phnum,
-        phdr_size: phentsz,
+    Ok(LoadedElf {
+        entry: ehdr.e_entry + bias,
+        load_bias: bias,
+        phdr_vaddr,
+        phdr_count: ehdr.e_phnum,
+        interp_path,
+        tls,
     })
-}
-
-#[cfg(target_arch = "x86_64")]
-fn map_page_arch(cr3: usize, va: usize, pa: usize, flags: u32) {
-    let mut pte: u64 = paging::PTE_PRESENT | paging::PTE_USER;
-    if flags & PF_W != 0 {
-        pte |= paging::PTE_WRITABLE;
-    }
-    if flags & PF_X == 0 {
-        pte |= paging::PTE_NX;
-    }
-    unsafe {
-        paging::map_page(cr3, va, pa, pte);
-    }
-}
-
-#[cfg(target_arch = "riscv64")]
-fn map_page_arch(satp_ppn: usize, va: usize, pa: usize, flags: u32) {
-    use crate::arch::riscv64::paging as rv_paging;
-    let mut pte_flags = rv_paging::PTE_V | rv_paging::PTE_U | rv_paging::PTE_R;
-    if flags & PF_W != 0 {
-        pte_flags |= rv_paging::PTE_W;
-    }
-    if flags & PF_X != 0 {
-        pte_flags |= rv_paging::PTE_X;
-    }
-    unsafe {
-        rv_paging::map_page(satp_ppn, va, pa, pte_flags);
-    }
-}
-
-#[cfg(target_arch = "aarch64")]
-fn map_page_arch(ttbr0: usize, va: usize, pa: usize, flags: u32) {
-    use crate::arch::aarch64::paging;
-    let mut pte_flags =
-        paging::PTE_NORMAL | paging::PTE_USER | paging::PTE_AF | paging::PTE_SH_INNER;
-    if flags & PF_W == 0 {
-        pte_flags &= !paging::PTE_USER;
-        pte_flags |= paging::PTE_USER_RO;
-    }
-    if flags & PF_X == 0 {
-        pte_flags |= paging::PTE_UXN;
-    }
-    pte_flags |= paging::PTE_PXN;
-    unsafe {
-        paging::map_page(ttbr0, va, pa, pte_flags);
-    }
-}
-
-#[cfg(not(any(
-    target_arch = "x86_64",
-    target_arch = "riscv64",
-    target_arch = "aarch64"
-)))]
-fn map_page_arch(_cr3: usize, _va: usize, _pa: usize, _flags: u32) {
-    compile_error!("map_page_arch not implemented for this architecture");
 }

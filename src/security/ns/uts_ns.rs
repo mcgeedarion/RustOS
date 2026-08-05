@@ -18,11 +18,11 @@ pub const HOST_NAME_MAX: usize = 64;
 /// The utsname fields exposed to userspace via `uname(2)`.
 #[derive(Clone)]
 pub struct Utsname {
-    pub sysname: String,    // "Linux"
-    pub nodename: String,   // hostname
-    pub release: String,    // kernel version string
-    pub version: String,    // build timestamp / extra info
-    pub machine: String,    // "x86_64" | "riscv64"
+    pub sysname: String,  // "Linux"
+    pub nodename: String, // hostname
+    pub release: String,  // kernel version string
+    pub version: String,  // build timestamp / extra info
+    pub machine: String,
     pub domainname: String, // NIS domainname
 }
 
@@ -33,10 +33,10 @@ impl Utsname {
             nodename: String::from("rustos"),
             release: String::from("6.1.0-rustos"),
             version: String::from("#1 SMP 2026"),
-            machine: String::from(if cfg!(target_arch = "x86_64") {
-                "x86_64"
+            machine: String::from(if cfg!(target_arch = "aarch64") {
+                "aarch64"
             } else {
-                "riscv64"
+                "x86_64"
             }),
             domainname: String::from("(none)"),
         }

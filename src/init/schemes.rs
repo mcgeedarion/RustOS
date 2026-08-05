@@ -1,6 +1,6 @@
 //! Boot-time scheme registration.
 //!
-//! Called once from `kernel_main` (both x86_64 and RISC-V paths), **after**
+//! Called once from `kernel_main` (supported architecture paths), **after**
 //! all hardware drivers have been initialised and **before** pid 1 is spawned.
 //!
 //! Every subsystem that wants to be reachable via `SCHEME_TABLE.open_url()`

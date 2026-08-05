@@ -56,8 +56,8 @@ pub struct GpioBank {
     pub mmio_base: usize,
     /// Human-readable label (e.g. "gpio0").
     pub label: &'static str,
-    /// PLIC source IDs for this bank's interrupt line (one per bank).
-    pub plic_src: u32,
+    /// Platform interrupt source IDs for this bank's interrupt line (one per bank).
+    pub irq_src: u32,
 }
 
 static BANKS: Mutex<Vec<GpioBank>> = Mutex::new(Vec::new());

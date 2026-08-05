@@ -1,8 +1,8 @@
 //! ftrace-style function entry/exit tracing via LLVM `-Z instrument-functions`.
 //!
-//! When the `trace` Cargo feature is active, rustc is instructed (in
-//! `build.rs`) to pass `-Z instrument-functions` to every compilation unit.
-//! LLVM then inserts calls to `__cyg_profile_func_enter` /
+//! When the `trace` Cargo feature is active and the build is run with
+//! `RUSTFLAGS='-Z instrument-functions'`, LLVM inserts calls to
+//! `__cyg_profile_func_enter` /
 //! `__cyg_profile_func_exit` at every function prologue and epilogue — the same
 //! ABI used by GCC's `-finstrument-functions`.
 //!
@@ -26,7 +26,7 @@ pub mod inner {
     use core::sync::atomic::{AtomicBool, Ordering};
 
     /// Per-CPU recursion guard. We use a single global bool here; replace with
-    /// a per-hart/per-core array once SMP hart-ID helpers are available.
+    /// a per-core array once SMP CPU-ID helpers are available.
     static IN_HOOK: AtomicBool = AtomicBool::new(false);
 
     /// Called by LLVM at every function entry when `-Z instrument-functions` is

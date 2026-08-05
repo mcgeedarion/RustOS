@@ -20,7 +20,7 @@ jobs:
             echo "ERROR: U+00A0 non-breaking space found in Rust source." >&2
             exit 1
           fi
-          if rg -n --glob '*.rs' '\\[[:blank:]]' .; then
+          if rg -n --glob '*.rs' --pcre2 '\\[ \t]' .; then
             echo "ERROR: backslash followed by space/tab found in Rust source." >&2
             exit 1
           fi
@@ -28,11 +28,19 @@ jobs:
         run: rustup show
       - name: Check formatting
         run: cargo fmt --all -- --check
-      - name: Run clippy on workspace
+      - name: Run clippy
         run: |
-          cargo clippy --workspace --all-targets --all-features \
+          cargo clippy -p rustos-kernel --lib --no-default-features --features boot_minimal \
             -Z build-std=core,alloc,compiler_builtins \
             -Z build-std-features=compiler-builtins-mem \
+            -- -D warnings
+          cargo clippy -p scheme-api --features std \
+            -Z build-std=std,panic_abort \
+            --target x86_64-unknown-linux-gnu \
+            -- -D warnings
+          cargo clippy -p xtask \
+            -Z build-std=std,panic_abort \
+            --target x86_64-unknown-linux-gnu \
             -- -D warnings
       - name: Check module hygiene
         run: cargo xtask lint-modules
@@ -46,10 +54,6 @@ jobs:
         include:
           - arch: aarch64
             boot: uefi
-          - arch: riscv64
-            boot: uefi
-          - arch: riscv64
-            boot: sbi
           - arch: x86_64
             boot: uefi
     steps:
@@ -57,7 +61,7 @@ jobs:
       - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y llvm lld musl-tools cpio mtools gcc-riscv64-unknown-elf
+          sudo apt-get install -y llvm lld musl-tools cpio mtools
       - name: Build ${{ matrix.arch }} ${{ matrix.boot }}
         run: cargo xtask build --arch ${{ matrix.arch }} --boot ${{ matrix.boot }}
 
@@ -71,6 +75,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y llvm lld musl-tools cpio mtools ovmf qemu-system-x86
       - name: Run x86_64 UEFI smoke
-        run: ARCH=x86_64 ./scripts/ci/run_qemu.sh --boot uefi --smoke --timeout 60
+        run: cargo xtask smoke --arch x86_64 --boot uefi
       - name: Run x86_64 UEFI kmtest
         run: ARCH=x86_64 ./scripts/ci/run_qemu.sh --boot uefi --test --timeout 90

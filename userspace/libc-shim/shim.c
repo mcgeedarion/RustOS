@@ -4,9 +4,6 @@
  * Compile with:
  *   -nostdlib -ffreestanding -fno-stack-protector
  *
- * Only x86_64 is wired today; the riscv64 path is a commented stub.
- * To add riscv64: replace the inline asm block with ecall equivalents
- * and define ARCH=riscv64 in the build system.
  */
 
 /* Minimal shim definitions to avoid dependency on system headers. */

@@ -173,7 +173,7 @@ unsafe fn _poll() {
             let ev_code = u16::from_le_bytes([raw[2], raw[3]]);
             let ev_value = u32::from_le_bytes([raw[4], raw[5], raw[6], raw[7]]) as i32;
 
-            let ns = crate::drivers::platform::clint::monotonic_ns();
+            let ns = crate::time::monotonic_ns();
             evdev::push(InputEvent {
                 time_sec: (ns / 1_000_000_000) as u32,
                 time_usec: ((ns % 1_000_000_000) / 1_000) as u32,

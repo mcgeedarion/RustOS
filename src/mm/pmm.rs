@@ -828,9 +828,9 @@ pub fn add_region(base: usize, size: usize) {
     pmm_add_region(base, size);
 }
 
-/// GUESS: free a page-table root page allocated for a CR3/satp. Frees the
+/// GUESS: free a page-table root page allocated for a page-table root. Frees the
 /// single page at `pa`. Caller is responsible for already having torn down
-/// any user mappings; PML4/satp root is one 4 KiB page.
+/// any user mappings; page-table root is one 4 KiB page.
 #[inline]
 pub fn free_page_table(pa: usize) {
     free_page(pa);

@@ -3,7 +3,7 @@
 //! ## Architecture
 //!
 //! ```
-//! Clocksource (TSC / HPET / CLINT mtime)
+//! Clocksource (TSC / HPET)
 //!        │  raw nanosecond counter
 //!        ▼
 //! time::clock  ── CLOCK_MONOTONIC  (monotone, never steps)
@@ -22,11 +22,10 @@
 //! ## Clocksource priority
 //!
 //! On x86_64: TSC (if invariant) > HPET > APIC timer.
-//! On RISC-V:  CLINT `mtime` register (always invariant).
+//! On AArch64: arch timer (CNTVCT_EL0).
 //!
 //! The selected clocksource is recorded in `CLOCKSOURCE` at boot.
 
-pub mod clint;
 pub mod clock;
 pub mod hpet;
 pub mod timer;
@@ -41,7 +40,6 @@ use spin::Mutex;
 pub enum ClockSource {
     Tsc,
     Hpet,
-    ClintMtime,
     ApicTimer,
 }
 
@@ -155,7 +153,7 @@ static REALTIME_OFFSET_NS: AtomicI64 = AtomicI64::new(0);
 /// Leap second offset in seconds added to CLOCK_REALTIME for CLOCK_TAI.
 static TAI_OFFSET_S: AtomicI64 = AtomicI64::new(37); // current TAI-UTC as of 2024
 
-/// Called from the tick interrupt handler (APIC / CLINT) every tick.
+/// Called from the tick interrupt handler (APIC) every tick.
 /// `elapsed_ns` is the number of nanoseconds since the last call.
 pub fn tick_advance(elapsed_ns: u64) {
     MONO_NS.fetch_add(elapsed_ns, Ordering::Relaxed);
@@ -176,10 +174,6 @@ pub fn read_monotonic_ns() -> u64 {
     #[cfg(target_arch = "x86_64")]
     if *CLOCKSOURCE.lock() == ClockSource::Tsc {
         return tsc::read_ns();
-    }
-    #[cfg(target_arch = "riscv64")]
-    if *CLOCKSOURCE.lock() == ClockSource::ClintMtime {
-        return clint::read_ns();
     }
     MONO_NS.load(Ordering::Relaxed)
 }
@@ -205,7 +199,7 @@ pub fn set_tai_offset_s(s: i64) {
 }
 
 /// Initialise the timekeeping subsystem.
-/// Must be called after the APIC / CLINT interrupt source is configured.
+/// Must be called after the APIC interrupt source is configured.
 pub fn init() {
     #[cfg(target_arch = "x86_64")]
     {
@@ -213,12 +207,6 @@ pub fn init() {
             set_clocksource(ClockSource::Tsc);
         } else if hpet::init() {
             set_clocksource(ClockSource::Hpet);
-        }
-    }
-    #[cfg(target_arch = "riscv64")]
-    {
-        if clint::init() {
-            set_clocksource(ClockSource::ClintMtime);
         }
     }
     timer::init();

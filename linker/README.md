@@ -1,5 +1,7 @@
 # Linker Scripts
 
+_Last reviewed: 2026-07-01._
+
 This directory contains linker scripts for kernel images. These scripts describe bare-metal ELF layout, not UEFI application layout.
 
 ## Artifact Split

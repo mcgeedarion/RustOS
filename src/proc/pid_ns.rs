@@ -2,23 +2,21 @@
 //!
 //! ## Linux semantics implemented here
 //!
-//! 1. **Multi-level PIDs** — a process in a child namespace has one local PID
-//!    per ancestor namespace up to and including INIT_NS.  The kernel stores
-//!    all of them so that a process in ns[2] is visible to ns[0] and ns[1] with
-//!    its appropriate local PID at each level.
+//! 1. **Multi-level PIDs** — a process in a child namespace has one local PID per ancestor
+//!    namespace up to and including INIT_NS.  The kernel stores all of them so that a process in
+//!    ns[2] is visible to ns[0] and ns[1] with its appropriate local PID at each level.
 //!
-//! 2. **Namespace init (PID 1)** — the first process registered in a new
-//!    namespace automatically becomes its `init_pid`.  When init exits, every
-//!    process still in that namespace receives SIGKILL.
+//! 2. **Namespace init (PID 1)** — the first process registered in a new namespace automatically
+//!    becomes its `init_pid`.  When init exits, every process still in that namespace receives
+//!    SIGKILL.
 //!
-//! 3. **Ancestor visibility** — a process in ns[A] can send signals, waitpid,
-//!    and ptrace a process in ns[B] only if ns[A] is an ancestor (or equal) of
-//!    ns[B].  `ns_is_ancestor_or_equal` implements this check.
+//! 3. **Ancestor visibility** — a process in ns[A] can send signals, waitpid, and ptrace a process
+//!    in ns[B] only if ns[A] is an ancestor (or equal) of ns[B].  `ns_is_ancestor_or_equal`
+//!    implements this check.
 //!
-//! 4. **getpid / getppid translation** — `current_visible_pid` and
-//!    `current_visible_ppid` return the local PID as seen from the calling
-//!    process's own namespace.  If the parent lives outside the namespace, PPID
-//!    is 0.
+//! 4. **getpid / getppid translation** — `current_visible_pid` and `current_visible_ppid` return
+//!    the local PID as seen from the calling process's own namespace.  If the parent lives outside
+//!    the namespace, PPID is 0.
 //!
 //! ## Data model
 //!

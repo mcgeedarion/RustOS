@@ -99,7 +99,7 @@ pub fn sys_mmap(
             p.next_va = page_align_up(v + len + PAGE);
             v
         };
-        (va, p.user_satp)
+        (va, p.user_pagetable)
     })
     .unwrap_or((0, 0));
 
@@ -184,7 +184,7 @@ fn va_end_of(va: usize, len: usize) -> usize {
 // previously only adjusted the VMA list; it now also unmaps page tables and
 // frees underlying physical frames for non-PhysMap mappings (bug #2).
 fn remove_vma_inner(p: &mut crate::proc::process::Pcb, addr: usize, end: usize) {
-    let user_cr3 = p.user_satp;
+    let user_cr3 = p.user_pagetable;
     // Collect pages to free after TLB shootdown.
     let mut to_free: Vec<usize> = Vec::new();
     for page_va in (addr..end).step_by(PAGE) {
@@ -269,7 +269,7 @@ fn mmap_phys(addr: usize, len: usize, prot: u32, flags: u32, pid: usize, offset:
             p.next_va = page_align_up(v + len + PAGE);
             v
         };
-        (va, p.user_satp)
+        (va, p.user_pagetable)
     })
     .unwrap_or((0, 0));
 

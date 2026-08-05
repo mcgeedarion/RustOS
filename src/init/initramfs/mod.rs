@@ -2,12 +2,6 @@
 //!
 //! ## Boot-protocol initramfs discovery
 //!
-//! On **RISC-V / OpenSBI**: QEMU passes the initrd physical address and size
-//! in FDT node `/chosen`, properties `linux,initrd-start` and
-//! `linux,initrd-end`. `pmm::init_from_fdt()` stores those values via
-//! `set_initramfs_range()` before the heap is initialised, so no allocation is
-//! needed.
-//!
 //! On **x86_64 / UEFI**: the UEFI stub receives the initrd via the
 //! `LoadFile2` protocol and calls `set_initramfs_range()` with the physical
 //! address and byte length before jumping to `kernel_main`.
@@ -29,7 +23,7 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 static INITRAMFS_PA: AtomicUsize = AtomicUsize::new(0);
 static INITRAMFS_LEN: AtomicUsize = AtomicUsize::new(0);
 
-/// Called by the boot stub (FDT walker on RISC-V, UEFI stub on x86_64/aarch64)
+/// Called by the boot stub (UEFI stub on x86_64/aarch64)
 /// to register the initramfs physical range before heap init.
 pub fn set_initramfs_range(phys_start: usize, byte_len: usize) {
     INITRAMFS_PA.store(phys_start, Ordering::Relaxed);
@@ -65,16 +59,10 @@ pub fn load() -> InitramfsHandle<'static> {
         crate::kprintln!("initramfs: Pass -initrd <file> to QEMU and ensure");
         crate::kprintln!("initramfs: the boot stub calls set_initramfs_range().");
         loop {
-            #[cfg(target_arch = "riscv64")]
-            unsafe {
-                core::arch::asm!("wfi");
-            }
             #[cfg(target_arch = "x86_64")]
             unsafe {
                 core::arch::asm!("hlt");
             }
-            #[cfg(not(any(target_arch = "riscv64", target_arch = "x86_64")))]
-            core::hint::spin_loop();
         }
     }
 
@@ -159,57 +147,55 @@ impl<'a> Iterator for CpioIter<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         let buf = self.data;
 
-        loop {
-            let off = self.offset;
-            if off + HEADER_LEN > buf.len() {
-                return None;
-            }
-            if &buf[off..off + 6] != NEWC_MAGIC {
-                return None;
-            }
-
-            let mode = parse_hex8(&buf[off + 14..off + 22]);
-            let uid = parse_hex8(&buf[off + 22..off + 30]);
-            let gid = parse_hex8(&buf[off + 30..off + 38]);
-            let nlink = parse_hex8(&buf[off + 38..off + 46]);
-            let mtime = parse_hex8(&buf[off + 46..off + 54]);
-            let filesize = parse_hex8(&buf[off + 54..off + 62]) as usize;
-            let namesize = parse_hex8(&buf[off + 94..off + 102]) as usize;
-
-            let name_start = off + HEADER_LEN;
-            let name_end = name_start + namesize;
-            if name_end > buf.len() {
-                return None;
-            }
-
-            let raw_name = core::str::from_utf8(&buf[name_start..name_end])
-                .unwrap_or("")
-                .trim_end_matches('\0');
-            let name = raw_name.trim_start_matches("./").trim_start_matches('/');
-
-            let data_start = align_up(name_end, 4);
-            let data_end = data_start + filesize;
-            if data_end > buf.len() {
-                return None;
-            }
-
-            self.offset = align_up(data_end, 4);
-
-            if name == TRAILER {
-                return None;
-            }
-
-            return Some(CpioEntry {
-                name,
-                data: &buf[data_start..data_end],
-                mode,
-                size: filesize,
-                uid,
-                gid,
-                mtime,
-                nlink,
-            });
+        let off = self.offset;
+        if off + HEADER_LEN > buf.len() {
+            return None;
         }
+        if &buf[off..off + 6] != NEWC_MAGIC {
+            return None;
+        }
+
+        let mode = parse_hex8(&buf[off + 14..off + 22]);
+        let uid = parse_hex8(&buf[off + 22..off + 30]);
+        let gid = parse_hex8(&buf[off + 30..off + 38]);
+        let nlink = parse_hex8(&buf[off + 38..off + 46]);
+        let mtime = parse_hex8(&buf[off + 46..off + 54]);
+        let filesize = parse_hex8(&buf[off + 54..off + 62]) as usize;
+        let namesize = parse_hex8(&buf[off + 94..off + 102]) as usize;
+
+        let name_start = off + HEADER_LEN;
+        let name_end = name_start + namesize;
+        if name_end > buf.len() {
+            return None;
+        }
+
+        let raw_name = core::str::from_utf8(&buf[name_start..name_end])
+            .unwrap_or("")
+            .trim_end_matches('\0');
+        let name = raw_name.trim_start_matches("./").trim_start_matches('/');
+
+        let data_start = align_up(name_end, 4);
+        let data_end = data_start + filesize;
+        if data_end > buf.len() {
+            return None;
+        }
+
+        self.offset = align_up(data_end, 4);
+
+        if name == TRAILER {
+            return None;
+        }
+
+        Some(CpioEntry {
+            name,
+            data: &buf[data_start..data_end],
+            mode,
+            size: filesize,
+            uid,
+            gid,
+            mtime,
+            nlink,
+        })
     }
 }
 

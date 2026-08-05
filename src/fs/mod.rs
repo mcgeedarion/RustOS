@@ -45,6 +45,8 @@ pub mod shm;
 pub mod signalfd;
 pub mod splice;
 pub mod stat_syscalls;
+#[path = "proc/syscall_stats.rs"]
+pub mod syscall_stats;
 pub mod sysfs;
 pub mod timerfd;
 pub mod tmpfs;

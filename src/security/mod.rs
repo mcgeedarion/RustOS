@@ -14,6 +14,7 @@
 //! ```
 
 pub mod aslr;
+pub mod bpf;
 pub mod canary;
 pub mod capset;
 // GUESS: callers use crate::security::CapSet; canonical is capset::CapSet.
@@ -27,6 +28,7 @@ impl Cap {
     pub const SysNice: u8 = cap::SYS_NICE;
 }
 pub mod dac;
+pub mod landlock;
 pub mod lsm;
 pub mod ns;
 pub mod pti;

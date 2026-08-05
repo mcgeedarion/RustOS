@@ -3,7 +3,7 @@
 //! ## Modules
 //!
 //!   `acpi`     — ACPI table parsing and power management (x86_64 + AArch64).
-//!   `dt`       — Device Tree / FDT helpers (RISC-V, ARM).
+//!   `dt`       — Device Tree / FDT helpers (ARM).
 //!   `psci`     — ARM PSCI CPU_ON / SYSTEM_OFF / SYSTEM_RESET.
 //!   `topology` — CPU topology (MPIDR list from MADT or DTB).
 //!

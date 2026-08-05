@@ -4,8 +4,6 @@
 //!         mapping.  The `gs:0` slot holds the self-pointer so that
 //!         `current_cpu_id()` is a single `mov rax, gs:[0]` with no memory
 //!         barrier.
-//!
-//! RISC-V: The `tp` (thread pointer) register holds the pointer to the block.
 
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU32, Ordering};
@@ -124,11 +122,6 @@ pub unsafe fn init(cpu_id: u32) {
             options(nostack, preserves_flags)
         );
     }
-    #[cfg(target_arch = "riscv64")]
-    {
-        let addr = blk as *mut PercpuBlock as usize;
-        core::arch::asm!("mv tp, {}", in(reg) addr, options(nostack));
-    }
 }
 
 /// Returns the current CPU's logical id.
@@ -144,13 +137,7 @@ pub fn current_cpu_id() -> u32 {
         );
         id
     }
-    #[cfg(target_arch = "riscv64")]
-    unsafe {
-        let blk: *const PercpuBlock;
-        core::arch::asm!("mv {}, tp", out(reg) blk, options(nostack, readonly));
-        (*blk).cpu_id
-    }
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "riscv64")))]
+    #[cfg(not(target_arch = "x86_64"))]
     0
 }
 
@@ -167,13 +154,7 @@ pub fn current_block() -> *mut PercpuBlock {
         );
         ptr
     }
-    #[cfg(target_arch = "riscv64")]
-    unsafe {
-        let blk: *mut PercpuBlock;
-        core::arch::asm!("mv {}, tp", out(reg) blk, options(nostack, readonly));
-        blk
-    }
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "riscv64")))]
+    #[cfg(not(target_arch = "x86_64"))]
     core::ptr::null_mut()
 }
 
@@ -190,13 +171,7 @@ pub fn push_off() -> bool {
         was_on = (flags & (1 << 9)) != 0;
         core::arch::asm!("cli", options(nostack, preserves_flags));
     }
-    #[cfg(target_arch = "riscv64")]
-    unsafe {
-        let sstatus: usize;
-        core::arch::asm!("csrrci {}, sstatus, 2", out(reg) sstatus, options(nostack));
-        was_on = (sstatus & 2) != 0;
-    }
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "riscv64")))]
+    #[cfg(not(target_arch = "x86_64"))]
     {
         was_on = false;
     }
@@ -218,10 +193,6 @@ pub fn pop_off() {
         #[cfg(target_arch = "x86_64")]
         unsafe {
             core::arch::asm!("sti", options(nostack, preserves_flags));
-        }
-        #[cfg(target_arch = "riscv64")]
-        unsafe {
-            core::arch::asm!("csrsi sstatus, 2", options(nostack));
         }
     }
 }

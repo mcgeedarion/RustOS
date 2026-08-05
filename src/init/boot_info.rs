@@ -105,7 +105,7 @@ pub struct BootInfo {
     pub initramfs: BootRange,
     pub cmdline: BootRange,
     pub fdt: BootRange,
-    pub boot_hart_id: usize,
+    pub boot_cpu_id: usize,
 }
 
 impl BootInfo {
@@ -117,30 +117,26 @@ impl BootInfo {
             initramfs: BootRange::empty(),
             cmdline: BootRange::empty(),
             fdt: BootRange::empty(),
-            boot_hart_id: 0,
+            boot_cpu_id: 0,
         }
     }
 
     /// Returns the compile-time boot priority for the current architecture.
+    ///
+    /// Priority assignment:
+    ///   PRIMARY   — x86_64  (default `cargo build` target)
+    ///   SECONDARY — aarch64 (explicit `--target aarch64-unknown-uefi`)
     pub const fn priority() -> BootPriority {
-        #[cfg(target_arch = "aarch64")]
+        #[cfg(target_arch = "x86_64")]
         {
             BootPriority::Primary
         }
-        #[cfg(target_arch = "riscv64")]
+        #[cfg(target_arch = "aarch64")]
         {
             BootPriority::Secondary
         }
-        #[cfg(target_arch = "x86_64")]
-        {
-            BootPriority::Tertiary
-        }
         // Fallback for any future architecture not yet assigned a priority.
-        #[cfg(not(any(
-            target_arch = "aarch64",
-            target_arch = "riscv64",
-            target_arch = "x86_64",
-        )))]
+        #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64",)))]
         {
             BootPriority::Tertiary
         }

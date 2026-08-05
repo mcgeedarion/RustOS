@@ -14,7 +14,7 @@ pub fn sys_munmap(addr: usize, length: usize) -> isize {
     }
     let len = page_align_up(length);
     let pid = scheduler::current_pid();
-    let user_cr3 = scheduler::with_proc(pid, |p| p.user_satp).unwrap_or(0);
+    let user_cr3 = scheduler::with_proc(pid, |p| p.user_pagetable).unwrap_or(0);
     if user_cr3 == 0 {
         return -14;
     }
@@ -75,7 +75,7 @@ pub fn sys_brk(addr: usize) -> isize {
     }
 
     let new_brk = page_align_up(addr);
-    let user_cr3 = scheduler::with_proc(pid, |p| p.user_satp).unwrap_or(0);
+    let user_cr3 = scheduler::with_proc(pid, |p| p.user_pagetable).unwrap_or(0);
     if user_cr3 == 0 {
         return cur_brk as isize;
     }
