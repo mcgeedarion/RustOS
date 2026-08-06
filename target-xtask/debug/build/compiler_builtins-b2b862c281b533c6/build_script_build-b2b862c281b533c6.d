@@ -1,0 +1,6 @@
+C:\Users\DarionMcGee\Documents\GitHub\RustOS\target-xtask\debug\build\compiler_builtins-b2b862c281b533c6\build_script_build-b2b862c281b533c6.d: C:\Users\DarionMcGee\.rustup\toolchains\nightly-2026-06-07-x86_64-pc-windows-gnu\lib\rustlib\src\rust\library\compiler-builtins\compiler-builtins\build.rs C:\Users\DarionMcGee\.rustup\toolchains\nightly-2026-06-07-x86_64-pc-windows-gnu\lib\rustlib\src\rust\library\compiler-builtins\compiler-builtins\..\libm\configure.rs
+
+C:\Users\DarionMcGee\Documents\GitHub\RustOS\target-xtask\debug\build\compiler_builtins-b2b862c281b533c6\build_script_build-b2b862c281b533c6.exe: C:\Users\DarionMcGee\.rustup\toolchains\nightly-2026-06-07-x86_64-pc-windows-gnu\lib\rustlib\src\rust\library\compiler-builtins\compiler-builtins\build.rs C:\Users\DarionMcGee\.rustup\toolchains\nightly-2026-06-07-x86_64-pc-windows-gnu\lib\rustlib\src\rust\library\compiler-builtins\compiler-builtins\..\libm\configure.rs
+
+C:\Users\DarionMcGee\.rustup\toolchains\nightly-2026-06-07-x86_64-pc-windows-gnu\lib\rustlib\src\rust\library\compiler-builtins\compiler-builtins\build.rs:
+C:\Users\DarionMcGee\.rustup\toolchains\nightly-2026-06-07-x86_64-pc-windows-gnu\lib\rustlib\src\rust\library\compiler-builtins\compiler-builtins\..\libm\configure.rs:
