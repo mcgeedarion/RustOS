@@ -15,6 +15,8 @@
 
 use crate::init::boot_info::{BootInfo, BootRange, EfiMemoryMapInfo};
 use core::arch::asm;
+use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use spin::Once;
 
 #[allow(dead_code)]
 type EfiStatus = usize;
@@ -190,15 +192,19 @@ const ACPI2_GUID: [u64; 2] = [0x11d3_f1e4_71e8_6888, 0x8188_3cc7_8000_22bc];
 const INITRD_MEDIA_GUID: [u64; 2] = [0x4f3d_fc68_27e4_6855, 0x68cc_3152_55ca_74ac];
 
 /// Physical address of the RSDP (ACPI 2.0). 0 = not found.
-pub static mut RSDP_PHYS: u64 = 0;
+/// Written once before ExitBootServices; safe to read afterwards.
+pub static RSDP_PHYS: AtomicU64 = AtomicU64::new(0);
 
-/// Saved EFI memory map — used by pmm_add_efi_map() in memmap_init().
-/// Set before ExitBootServices; read-only thereafter.
-pub static mut EFI_MAP_PTR: usize = 0;
-pub static mut EFI_MAP_SIZE: usize = 0;
-pub static mut EFI_DESC_SIZE: usize = 0;
+/// Saved EFI memory map metadata — written once before ExitBootServices,
+/// read-only thereafter by pmm_add_efi_map() in memmap_init().
+pub static EFI_MAP_PTR: AtomicUsize = AtomicUsize::new(0);
+pub static EFI_MAP_SIZE: AtomicUsize = AtomicUsize::new(0);
+pub static EFI_DESC_SIZE: AtomicUsize = AtomicUsize::new(0);
 
-static mut BOOT_INFO: BootInfo = BootInfo::empty();
+/// Kernel BootInfo, written once during UEFI handoff before ExitBootServices
+/// and never modified again. Wrapped in `Once` so the write is safely
+/// observable without `static mut`.
+static BOOT_INFO: Once<BootInfo> = Once::new();
 
 /// Raw x86_64 UEFI entry point shared by linker-selected entry symbols.
 ///
@@ -270,7 +276,7 @@ unsafe extern "efiapi" fn uefi_start(
     let mut initramfs = BootRange::empty();
     for entry in cfg {
         if entry.guid == ACPI2_GUID {
-            RSDP_PHYS = entry.table as u64;
+            RSDP_PHYS.store(entry.table as u64, Ordering::Relaxed);
         }
         if entry.guid == INITRD_MEDIA_GUID {
             let data = entry.table as *const u64;
@@ -315,7 +321,10 @@ unsafe extern "efiapi" fn uefi_start(
         &mut desc_size,
         &mut desc_ver,
     );
-    map_size += 2048; // headroom for AllocatePool descriptor
+    // P1-2: headroom must be at least one extra descriptor slot (not just 2 KiB)
+    // so the retry GetMemoryMap never overwrites the buffer if AllocatePool
+    // itself adds a descriptor.
+    map_size += desc_size.max(1) * 2 + 2048;
 
     // Allocate buffer from EFI pool.
     let mut map_buf: *mut u8 = core::ptr::null_mut();
@@ -342,12 +351,17 @@ unsafe extern "efiapi" fn uefi_start(
     }
 
     // Save map metadata for pmm_add_efi_map() (called from memmap_init()).
-    EFI_MAP_PTR = map_buf as usize;
-    EFI_MAP_SIZE = map_size;
-    EFI_DESC_SIZE = desc_size;
-    BOOT_INFO = BootInfo {
-        rsdp_phys: RSDP_PHYS,
-        efi_memory_map: EfiMemoryMapInfo::new(EFI_MAP_PTR, EFI_MAP_SIZE, EFI_DESC_SIZE),
+    EFI_MAP_PTR.store(map_buf as usize, Ordering::Release);
+    EFI_MAP_SIZE.store(map_size, Ordering::Release);
+    EFI_DESC_SIZE.store(desc_size, Ordering::Release);
+    let rsdp = RSDP_PHYS.load(Ordering::Relaxed);
+    let boot_info = BootInfo {
+        rsdp_phys: rsdp,
+        efi_memory_map: EfiMemoryMapInfo::new(
+            map_buf as usize,
+            map_size,
+            desc_size,
+        ),
         initramfs,
         ..BootInfo::empty()
     };
@@ -356,8 +370,8 @@ unsafe extern "efiapi" fn uefi_start(
     let mut exit_status = (bs.exit_boot_services)(image_handle, map_key);
 
     if exit_status == EFI_INVALID_PARAMETER {
-        // Re-probe the map key.  Use the same buffer — size should be
-        // sufficient (we added 2 KiB headroom above).
+        // Re-probe the map key.  The allocated buffer already has headroom
+        // for the extra AllocatePool descriptor added above.
         let mut retry_map_size = map_size;
         let mut retry_map_key: usize = 0;
         let mut retry_desc_size: usize = desc_size;
@@ -372,11 +386,9 @@ unsafe extern "efiapi" fn uefi_start(
         );
 
         if remap_status == EFI_SUCCESS {
-            // Update saved metadata with potentially-updated descriptor.
-            EFI_MAP_SIZE = retry_map_size;
-            EFI_DESC_SIZE = retry_desc_size;
-            BOOT_INFO.efi_memory_map =
-                EfiMemoryMapInfo::new(EFI_MAP_PTR, EFI_MAP_SIZE, EFI_DESC_SIZE);
+            // Update the saved atomics with the refreshed map dimensions.
+            EFI_MAP_SIZE.store(retry_map_size, Ordering::Release);
+            EFI_DESC_SIZE.store(retry_desc_size, Ordering::Release);
             exit_status = (bs.exit_boot_services)(image_handle, retry_map_key);
         }
     }
@@ -387,6 +399,18 @@ unsafe extern "efiapi" fn uefi_start(
         halt();
     }
 
+    // Commit the BootInfo after ExitBootServices so the final EFI_MAP_SIZE /
+    // EFI_DESC_SIZE values (possibly updated by the retry path) are captured.
+    let final_boot_info = BootInfo {
+        efi_memory_map: EfiMemoryMapInfo::new(
+            EFI_MAP_PTR.load(Ordering::Acquire),
+            EFI_MAP_SIZE.load(Ordering::Acquire),
+            EFI_DESC_SIZE.load(Ordering::Acquire),
+        ),
+        ..boot_info
+    };
+    BOOT_INFO.call_once(|| final_boot_info);
+
     // 6. Bring up serial before common kernel_main emits boot markers.
     crate::arch::x86_64::serial::early_init();
 
@@ -394,14 +418,15 @@ unsafe extern "efiapi" fn uefi_start(
     extern "C" {
         fn kernel_main(boot_info: &'static BootInfo) -> !;
     }
+    let bi_ptr: *const BootInfo = BOOT_INFO.get().unwrap();
     asm!(
         "lea rsp, [rip + __boot_stack_top]",
         "xor rbp, rbp",
-        "lea rdi, [rip + {boot_info}]",
+        "mov rdi, {boot_info}",
         "call {km}",
         "2: hlt",
         "jmp 2b",
-        boot_info = sym BOOT_INFO,
+        boot_info = in(reg) bi_ptr,
         km = sym kernel_main,
         options(noreturn),
     );
