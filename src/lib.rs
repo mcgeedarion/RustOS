@@ -17,7 +17,9 @@
 
 #![cfg_attr(not(test), no_std)]
 #![cfg_attr(not(test), no_main)]
-#![allow(dead_code)]
+// P2-4: Removed crate-wide #![allow(dead_code)] so rustc can surface
+// genuinely unused items. Re-add narrowly-scoped #[allow(dead_code)] on
+// individual items where the suppression is intentional.
 #![allow(unused_imports)]
 #![cfg_attr(not(test), feature(alloc_error_handler))]
 
