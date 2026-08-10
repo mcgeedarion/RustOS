@@ -12,7 +12,7 @@ use crate::mm::boot_memory::{Region, RegionKind, Regions};
 pub const PAGE_SIZE: usize = 4096;
 pub const MAX_ORDER: usize = 11;
 pub const MAX_NODES: usize = 8;
-pub const MAX_PA: usize = 16 * 1024 * 1024 * 1024;
+pub const MAX_PA: usize = 64 * 1024 * 1024 * 1024; // P2-3: was 16 GiB, now 64 GiB
 const MAX_FRAMES: usize = MAX_PA / PAGE_SIZE;
 const POOL_PAGES: usize = 16_384;
 
@@ -322,6 +322,8 @@ unsafe fn buddy_pop(node: u8, order: usize) -> usize {
     }
 }
 
+/// P0-4: Grow scratch buffer from 256 to 512 entries so deeply-loaded
+/// free-lists do not silently abort the search and return `false`.
 unsafe fn buddy_remove(node: u8, pa: usize, order: usize) -> bool {
     let n = node as usize;
     let list = &BUDDY[n].free_lists[order];
@@ -329,7 +331,7 @@ unsafe fn buddy_remove(node: u8, pa: usize, order: usize) -> bool {
         Some(p) => p as *const PageInfo as *mut PageInfo,
         None => return false,
     };
-    let mut popped: [*mut PageInfo; 256] = [core::ptr::null_mut(); 256];
+    let mut popped: [*mut PageInfo; 512] = [core::ptr::null_mut(); 512];
     let mut count = 0usize;
     let mut found = false;
     loop {
@@ -382,17 +384,27 @@ extern "C" {
     static _end: u8;
 }
 
+/// P1-4: Return the physical start/end of the kernel image.
+/// On a direct-mapped kernel the linker symbols ARE physical addresses
+/// (identity or offset-mapped). We subtract PHYS_OFFSET when the kernel
+/// is loaded above the direct-map base so comparisons against raw PA work.
 #[inline]
-fn kernel_start_pa() -> usize {
-    unsafe { &_kernel_start as *const u8 as usize }
+fn kernel_phys_range() -> (usize, usize) {
+    use crate::mm::phys::PHYS_OFFSET;
+    let start_va = unsafe { &_kernel_start as *const u8 as usize };
+    let end_va   = unsafe { &_end as *const u8 as usize };
+    // If the linker symbols are virtual addresses in the direct map, convert;
+    // if they are already physical (e.g. identity-mapped), subtraction yields
+    // the same result because PHYS_OFFSET == 0 in that case.
+    let start_pa = if start_va >= PHYS_OFFSET { start_va - PHYS_OFFSET } else { start_va };
+    let end_pa   = if end_va   >= PHYS_OFFSET { end_va   - PHYS_OFFSET } else { end_va };
+    (start_pa, end_pa)
 }
-#[inline]
-fn kernel_end_pa() -> usize {
-    unsafe { &_end as *const u8 as usize }
-}
+
 #[inline]
 fn is_kernel_page(pa: usize) -> bool {
-    pa >= kernel_start_pa() && pa < kernel_end_pa()
+    let (start, end) = kernel_phys_range();
+    pa >= start && pa < end
 }
 
 unsafe fn buddy_alloc_node(node: u8) -> usize {
@@ -458,6 +470,14 @@ unsafe fn buddy_alloc_order_node(node: u8, order: usize) -> usize {
     0
 }
 
+/// P0-5: Fix TOCTOU merge race in buddy_free_page.
+///
+/// The old code read bpi.flags / bpi.order as separate loads, which meant
+/// a concurrent free on the same buddy could pass the flag check and the
+/// order check independently while the buddy was being removed from the
+/// free-list by another CPU.  Fix: call `buddy_remove` first (which
+/// atomically unlinks the buddy), then re-validate order and node on the
+/// now-exclusive page before committing the merge.
 unsafe fn buddy_free_page(pa: usize) {
     if pa == 0 || pa & (PAGE_SIZE - 1) != 0 {
         return;
@@ -477,25 +497,32 @@ unsafe fn buddy_free_page(pa: usize) {
         if bpa >= MAX_PA {
             break;
         }
+        // Attempt to atomically remove the buddy from the free-list first.
+        // If buddy_remove returns false the buddy is not free (or not in this
+        // order's list), so we stop merging.
+        if !buddy_remove(node, bpa, current_order) {
+            break;
+        }
+        // We now own the buddy exclusively; validate it is still a matching
+        // buddy block (re-check order and NUMA node now that we hold it).
         let bpi = match page_info(bpa) {
             Some(p) => p,
-            None => break,
+            None => {
+                // Should not happen, but push the buddy back rather than leaking.
+                buddy_push(node, bpa, current_order);
+                break;
+            }
         };
-        let bflags = bpi.flags.load(Ordering::Acquire);
-        if bflags & (FLAG_FREE | FLAG_BUDDY) != (FLAG_FREE | FLAG_BUDDY) {
-            break;
-        }
-        if bpi.order.load(Ordering::Relaxed) as usize != current_order {
-            break;
-        }
-        if bpi.numa_node.load(Ordering::Relaxed) != node {
+        if bpi.order.load(Ordering::Relaxed) as usize != current_order
+            || bpi.numa_node.load(Ordering::Relaxed) != node
+        {
+            // Stale metadata after race; restore the buddy and stop.
+            buddy_push(node, bpa, current_order);
             break;
         }
         let merged = current_pa.min(bpa);
         if !is_aligned(merged, current_order + 1) {
-            break;
-        }
-        if !buddy_remove(node, bpa, current_order) {
+            buddy_push(node, bpa, current_order);
             break;
         }
         current_pa = merged;
@@ -559,6 +586,10 @@ pub fn alloc_page_on_node(node: u8) -> Option<usize> {
     alloc_page()
 }
 
+/// P0-2: Fix pre-buddy path — it used to allocate N pages into an array but
+/// only return `pages[0]`, leaking pages[1..N-1]. When buddy is not live
+/// we can only hand out one physically contiguous page at a time (the bootstrap
+/// pool has no order concept), so return None for n > 1 pre-buddy.
 pub fn alloc_pages_contig(n: usize) -> Option<usize> {
     if n == 0 {
         return None;
@@ -567,12 +598,9 @@ pub fn alloc_pages_contig(n: usize) -> Option<usize> {
         return alloc_page();
     }
     if !BUDDY_LIVE.load(Ordering::Relaxed) {
-        let mut pages = [0usize; 1 << (MAX_ORDER - 1)];
-        let cap = pages.len().min(n);
-        for i in 0..cap {
-            pages[i] = alloc_page()?;
-        }
-        return Some(pages[0]);
+        // Pre-buddy bootstrap pool cannot satisfy contiguous multi-page
+        // requests; fail rather than leaking N-1 pages.
+        return None;
     }
     let mut order = 0usize;
     while (1 << order) < n {
@@ -590,6 +618,7 @@ pub fn alloc_pages_contig(n: usize) -> Option<usize> {
             continue;
         }
         let block_pages = 1usize << order;
+        // Free back the tail pages that exceed the requested n.
         for j in n..block_pages {
             let tail_pa = pa + j * PAGE_SIZE;
             unsafe {
@@ -793,44 +822,61 @@ unsafe fn zero_page(pa: usize) {
     core::ptr::write_bytes(pa as *mut u8, 0, PAGE_SIZE);
 }
 
-// ===== GUESS: caller-expected aliases for legacy/new naming convergence =====
+// ===== Caller-expected public API aliases =====
 
-/// GUESS: alias of `alloc_pages_contig` — callers use `pmm::alloc_pages(n)`.
+/// Alias of `alloc_pages_contig` — callers use `pmm::alloc_pages(n)`.
 #[inline]
 pub fn alloc_pages(n: usize) -> Option<usize> {
     alloc_pages_contig(n)
 }
 
-/// GUESS: align-aware allocator. Tries up to `align` page-aligned bases by
-/// over-allocating and scanning, since the buddy allocator only guarantees
-/// `n`-page natural alignment. Returns NonNull<u8> pointing at the physical
-/// address (callers `.as_ptr() as u64`).
+/// P0-3: Align-aware allocator with proper prefix/suffix free.
+///
+/// Over-allocates by `align / PAGE_SIZE` pages to guarantee an aligned base
+/// falls within the allocation, then frees the unused prefix and suffix pages.
 pub fn alloc_pages_aligned(n: usize, align: usize) -> Option<core::ptr::NonNull<u8>> {
-    let pa = alloc_pages_contig(n)?;
-    // Natural buddy alignment usually satisfies callers (DMA pages need <=64K).
-    if align == 0 || (pa & (align - 1)) == 0 {
+    if align == 0 || !align.is_power_of_two() {
+        // Treat as unaligned; just use the basic contig allocator.
+        let pa = alloc_pages_contig(n)?;
         return core::ptr::NonNull::new(pa as *mut u8);
     }
-    // Fall back: free and try a larger contig allocation that covers `align`.
+
+    let pa = alloc_pages_contig(n)?;
+    if pa & (align - 1) == 0 {
+        // Already aligned: fast path.
+        return core::ptr::NonNull::new(pa as *mut u8);
+    }
+    // Free and retry with extra pages for alignment slop.
     free_pages_contig(pa, n);
-    let extra = (align / PAGE_SIZE).max(1);
-    let pa2 = alloc_pages_contig(n + extra)?;
+
+    let align_pages = align / PAGE_SIZE;
+    let total = n + align_pages;
+    let pa2 = alloc_pages_contig(total)?;
+
+    // Compute the first address at or after pa2 that is `align`-aligned.
     let aligned = (pa2 + align - 1) & !(align - 1);
-    // Leak the prefix/suffix — acceptable for early boot DMA setup. GUESS.
-    let _ = (pa2, aligned);
+    let prefix_pages = (aligned - pa2) / PAGE_SIZE;
+    let suffix_pages = total - prefix_pages - n;
+
+    // P0-3: Free the prefix (before the aligned base).
+    for i in 0..prefix_pages {
+        free_page(pa2 + i * PAGE_SIZE);
+    }
+    // P0-3: Free the suffix (after the requested n pages).
+    for i in 0..suffix_pages {
+        free_page(aligned + n * PAGE_SIZE + i * PAGE_SIZE);
+    }
+
     core::ptr::NonNull::new(aligned as *mut u8)
 }
 
-/// GUESS: alias of `pmm_add_region` — callers use `pmm::add_region(base,
-/// size)`.
+/// Alias of `pmm_add_region` — callers use `pmm::add_region(base, size)`.
 #[inline]
 pub fn add_region(base: usize, size: usize) {
     pmm_add_region(base, size);
 }
 
-/// GUESS: free a page-table root page allocated for a page-table root. Frees the
-/// single page at `pa`. Caller is responsible for already having torn down
-/// any user mappings; page-table root is one 4 KiB page.
+/// Free a page-table root page.
 #[inline]
 pub fn free_page_table(pa: usize) {
     free_page(pa);
