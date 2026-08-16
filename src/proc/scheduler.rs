@@ -253,6 +253,10 @@ impl PartialOrd for CfsEntry {
         Some(self.cmp(other))
     }
 }
+// SAFETY: `CfsEntry` is only accessed within a single CPU's `RunQueue`, which
+// is protected by the per-CPU scheduler lock. The `task_ptr` raw pointer is
+// valid for the lifetime of the task and is never dereferenced concurrently
+// from multiple CPUs without proper locking.
 unsafe impl Send for CfsEntry {}
 
 #[derive(Eq, PartialEq)]
@@ -275,6 +279,8 @@ impl PartialOrd for RtEntry {
         Some(self.cmp(other))
     }
 }
+// SAFETY: `RtEntry` follows the same safety model as `CfsEntry` — it lives
+// exclusively in a per-CPU `RunQueue` protected by the scheduler lock.
 unsafe impl Send for RtEntry {}
 
 #[derive(Eq, PartialEq)]
@@ -293,6 +299,7 @@ impl PartialOrd for DlEntry {
         Some(self.cmp(other))
     }
 }
+// SAFETY: `DlEntry` follows the same safety model as `CfsEntry` and `RtEntry`.
 unsafe impl Send for DlEntry {}
 
 pub struct RunQueue {
@@ -310,6 +317,10 @@ pub struct RunQueue {
     pub rr_slice_start: u64,
 }
 
+// SAFETY: Each `RunQueue` is assigned to exactly one CPU and is only accessed
+// while holding that CPU's scheduler spinlock (`rq_lock`). Cross-CPU access
+// happens only through well-defined locking protocols (e.g., double-locking
+// both runqueues when moving tasks). No concurrent unsynchronized access occurs.
 unsafe impl Send for RunQueue {}
 
 impl RunQueue {
@@ -552,12 +563,16 @@ impl RunQueue {
             .iter()
             .position(|&tp| unsafe { (*tp).pid } == pid)
         {
-            let task = self.idle_queue.remove(pos).unwrap();
-            let t = unsafe { &mut *task };
-            t.sched.on_rq = false;
-            self.nr_running = self.nr_running.saturating_sub(1);
-            self.load_weight = self.load_weight.saturating_sub(t.sched.weight);
-            return true;
+            match self.idle_queue.remove(pos) {
+                Some(task) => {
+                    let t = unsafe { &mut *task };
+                    t.sched.on_rq = false;
+                    self.nr_running = self.nr_running.saturating_sub(1);
+                    self.load_weight = self.load_weight.saturating_sub(t.sched.weight);
+                    return true;
+                }
+                None => {} // Task was removed concurrently; fall through
+            }
         }
 
         false

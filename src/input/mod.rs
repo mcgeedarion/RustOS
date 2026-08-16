@@ -485,7 +485,10 @@ impl FileOps for EventNode {
         // Blocking loop: wait until at least one event is readable.
         loop {
             while dev.ring.is_readable() && buf.remaining() >= EV_SIZE {
-                let ev = dev.ring.pop().unwrap();
+                let ev = match dev.ring.pop() {
+                    Some(e) => e,
+                    None => break, // Ring became empty concurrently
+                };
                 let bytes =
                     unsafe { core::slice::from_raw_parts(&ev as *const _ as *const u8, EV_SIZE) };
                 buf.write_bytes(bytes)?;

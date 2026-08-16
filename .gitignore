@@ -1,1 +1,33 @@
-(docs/status.md, docs/boot-optimization-checklist.md, docs/ci.md, linker/README.md, README.md)
+```
+# Compiled and build artifacts
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+*.out
+
+# Dependencies
+target/
+
+# Logs and temp files
+*.log
+*.tmp
+*.swp
+
+# Editors
+.vscode/
+.idea/
+
+# Coverage reports
+coverage/
+htmlcov/
+.coverage
+
+# Environment
+.env
+.env.local
+.env.*
+```

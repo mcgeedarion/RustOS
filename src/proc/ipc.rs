@@ -173,7 +173,10 @@ pub fn sys_msgrcv(msqid: i32, msgp_va: usize, msgsz: usize, msgtyp: i64, _msgflg
     match pos {
         None => -11, // EAGAIN — would block
         Some(i) => {
-            let msg = q.msgs.remove(i).unwrap();
+            let msg = match q.msgs.remove(i) {
+                Some(m) => m,
+                None => return -14, // EBADF or corrupted state
+            };
             let copy_len = msg.data.len().min(msgsz);
             q.bytes = q.bytes.saturating_sub(msg.data.len());
             if copy_to_user(msgp_va, &msg.mtype.to_le_bytes()).is_err() {

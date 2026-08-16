@@ -116,6 +116,10 @@ struct Cache {
     capacity: usize,
 }
 
+// SAFETY: `Cache` is protected by the global `SLAB_LOCK` spinlock in all public APIs.
+// All access to the internal slab lists (`partial`, `full`, `empty`) must be done
+// while holding this lock, making concurrent access safe. The raw pointers are only
+// dereferenced within critical sections.
 unsafe impl Send for Cache {}
 
 impl Cache {

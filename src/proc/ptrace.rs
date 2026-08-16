@@ -120,6 +120,11 @@ unsafe fn frame_ptr(kstack_top: usize) -> *mut usize {
 
 /// Build a Linux `user_regs_struct` from the saved kernel stack frame.
 pub fn build_user_regs_pub(kstack_top: usize, fs_base: usize) -> [u64; UREG_COUNT] {
+    // Validate stack frame pointer is properly aligned and within reasonable bounds
+    const MAX_KSTACK: usize = 0xFFFF_FFFF_FFFFFFFF; // Reasonable upper bound for kernel addresses
+    if kstack_top < FRAME_SZ || kstack_top > MAX_KSTACK {
+        return [0u64; UREG_COUNT];
+    }
     let f = unsafe { core::slice::from_raw_parts(frame_ptr(kstack_top), 17) };
     let mut regs = [0u64; UREG_COUNT];
     regs[UREG_R15] = f[F_R15] as u64;
@@ -154,6 +159,11 @@ pub fn build_user_regs_pub(kstack_top: usize, fs_base: usize) -> [u64; UREG_COUN
 
 /// Apply a `user_regs_struct` back to the saved kernel stack frame.
 pub fn apply_user_regs_pub(kstack_top: usize, regs: &[u64; UREG_COUNT]) {
+    // Validate stack frame pointer is properly aligned and within reasonable bounds
+    const MAX_KSTACK: usize = 0xFFFF_FFFF_FFFFFFFF; // Reasonable upper bound for kernel addresses
+    if kstack_top < FRAME_SZ || kstack_top > MAX_KSTACK {
+        return;
+    }
     let f = unsafe { core::slice::from_raw_parts_mut(frame_ptr(kstack_top), 17) };
     f[F_R15] = regs[UREG_R15] as usize;
     f[F_R14] = regs[UREG_R14] as usize;

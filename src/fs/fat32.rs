@@ -45,13 +45,25 @@ const SECTOR_SIZE: usize = 512;
 // We keep the interface identical so swapping in the real driver is trivial.
 
 fn blk_read(dev: u32, lba: u64, buf: &mut [u8]) -> Result<(), isize> {
-    // SAFETY: placeholder — real impl calls into block layer
-    let _ = (dev, lba, buf);
+    // Validate buffer size is a multiple of sector size
+    if buf.len() % SECTOR_SIZE != 0 {
+        return Err(-22); // EINVAL
+    }
+    // TODO: Call real block layer: crate::drivers::block::read_sectors(dev, lba, buf)
+    // For now, zero-fill to simulate successful read during testing
+    for byte in buf.iter_mut() {
+        *byte = 0;
+    }
     Ok(())
 }
 
 fn blk_write(dev: u32, lba: u64, buf: &[u8]) -> Result<(), isize> {
-    let _ = (dev, lba, buf);
+    // Validate buffer size is a multiple of sector size
+    if buf.len() % SECTOR_SIZE != 0 {
+        return Err(-22); // EINVAL
+    }
+    // TODO: Call real block layer: crate::drivers::block::write_sectors(dev, lba, buf)
+    // For now, accept the write silently
     Ok(())
 }
 

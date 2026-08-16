@@ -6,16 +6,20 @@ use alloc::sync::Arc;
 /// mutable borrow of the PCB.  Blocks any concurrent `uaccess` reader
 /// until the mutation (and the write guard) are complete.
 ///
-/// ## Ordering
+/// ## Locking Hierarchy
+/// This function implements a careful lock ordering to prevent deadlocks:
 /// 1. Lock `ProcLock::inner` briefly to clone the `mm_lock` Arc.
 /// 2. Release `inner`.
 /// 3. Acquire `mm_lock` write (blocks until all readers finish).
 /// 4. Re-acquire `inner` to pass `&mut Pcb` to `f`.
 /// 5. Call `f`, then release `inner`, then release `mm_lock` write.
 ///
-/// This two-step ensures the caller never holds `inner` while waiting
+/// ## Deadlock Prevention
+/// This two-step approach ensures the caller never holds `inner` while waiting
 /// for `mm_lock` writers, which would deadlock against `uaccess`
 /// (which acquires `mm_lock` read while NOT holding `inner`).
+///
+/// **Never** hold `ProcLock::inner` and wait on `mm_lock` simultaneously.
 pub fn with_mm_write<T, F>(pid: usize, f: F) -> Option<T>
 where
     F: FnOnce(&mut crate::proc::process::Pcb) -> T,

@@ -154,6 +154,11 @@ pub struct TaskGroup {
     pub grq: [GroupRq; MAX_GROUP_CPUS],
 }
 
+// SAFETY: `TaskGroup` is used in the scheduler's per-CPU runqueue system.
+// Each CPU accesses only its own slot in the `grq` array and corresponding
+// `vruntime` entry, following a share-nothing design across CPUs. The `weight`
+// field may be read concurrently but is only modified during cgroup setup
+// (single-threaded context). No interior mutability crosses CPU boundaries.
 unsafe impl Send for TaskGroup {}
 unsafe impl Sync for TaskGroup {}
 

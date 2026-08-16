@@ -680,7 +680,10 @@ pub fn kswapd_tick(max_per_tick: usize) {
 ///
 /// Returns the new device index cast to `isize`, or a negative errno.
 pub fn sys_swapon(path: *const u8, path_len: usize) -> isize {
-    // Resolve path → block device.
+    // Bounds check: ensure path_len is reasonable before dereferencing
+    if path_len > 4096 {
+        return -36; // ENAMETOOLONG
+    }
     let name = unsafe { core::slice::from_raw_parts(path, path_len) };
     let (ops, num_slots) = match crate::fs::vfs::open_swap_device(name) {
         Ok(x) => x,
@@ -699,6 +702,10 @@ pub fn sys_swapon(path: *const u8, path_len: usize) -> isize {
 /// pointing at the removed device.  Returns `0` on success or a negative
 /// errno.
 pub fn sys_swapoff(path: *const u8, path_len: usize) -> isize {
+    // Bounds check: ensure path_len is reasonable before dereferencing
+    if path_len > 4096 {
+        return -36; // ENAMETOOLONG
+    }
     let name = unsafe { core::slice::from_raw_parts(path, path_len) };
     let dev_idx = match crate::fs::vfs::find_swap_device(name) {
         Ok(i) => i,

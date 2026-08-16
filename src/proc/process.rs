@@ -255,7 +255,12 @@ pub struct Pcb {
 /// type name for the canonical process-control block.
 pub type Process = Pcb;
 
-// SAFETY: Pcb is accessed only under ProcLock::inner (spin::Mutex).
+// SAFETY: `Pcb` is only accessed while holding the `ProcLock::inner` spinlock
+// (from `spin::Mutex`). All mutations to the process control block occur within
+// critical sections protected by this lock. The `Arc<Pcb>` wrapper ensures that
+// references are reference-counted and thread-safe. Raw pointers within `Pcb`
+// (e.g., `task`, `mm`) point to kernel-managed objects with lifetimes tied to
+// the process, which are properly synchronized via the process lock.
 unsafe impl Send for Pcb {}
 unsafe impl Sync for Pcb {}
 
