@@ -1,0 +1,20 @@
+[package]
+name = "vfs-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Virtual Filesystem core traits and abstractions for RustOS"
+
+[dependencies]
+scheme-api.workspace = true
+spin.workspace = true
+log.workspace = true
+bitflags.workspace = true
+thiserror.workspace = true
+cfg-if.workspace = true
+
+[features]
+default = []
+uring = []

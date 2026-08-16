@@ -1,0 +1,19 @@
+[package]
+name = "sync-primitives"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Advanced synchronization primitives for RustOS including queued spinlocks and RCU"
+
+[dependencies]
+scheme-api.workspace = true
+spin.workspace = true
+log.workspace = true
+cfg-if.workspace = true
+
+[features]
+default = []
+rcu = []
+queued-spinlock = []
