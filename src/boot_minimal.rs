@@ -6,6 +6,7 @@
 //! module provides the common post-handoff sequence.
 
 use crate::init::boot_info::BootInfo;
+use crate::mm::bump_allocator::BumpAllocator;
 
 /// Architecture hooks required by the minimal common boot path.
 pub trait MinimalBootArch {
@@ -65,42 +66,31 @@ pub fn enter<A: MinimalBootArch>(boot_info: &'static BootInfo) -> ! {
     }
 }
 
-use core::alloc::{GlobalAlloc, Layout};
-use core::sync::atomic::{AtomicUsize, Ordering};
+// ============================================================================
+// Early boot allocator - now uses consolidated BumpAllocator
+// ============================================================================
+
+/// Size of the boot-minimal heap: 64 KiB
+///
+/// Rationale:
+/// - Sufficient for early boot console output and basic data structures
+/// - Small enough to minimize BSS footprint in minimal builds
+/// - Matches the allocation patterns observed during boot_minimal execution
+const HEAP_SIZE: usize = 64 * 1024;
+
+static BOOT_ALLOCATOR: BumpAllocator<HEAP_SIZE> = BumpAllocator::new();
 
 struct BootMinimalAllocator;
-
-const HEAP_SIZE: usize = 64 * 1024;
-#[repr(align(16))]
-struct Heap([u8; HEAP_SIZE]);
-
-static mut HEAP: Heap = Heap([0; HEAP_SIZE]);
-static NEXT: AtomicUsize = AtomicUsize::new(0);
 
 #[cfg_attr(not(test), global_allocator)]
 static GLOBAL_ALLOCATOR: BootMinimalAllocator = BootMinimalAllocator;
 
 unsafe impl GlobalAlloc for BootMinimalAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let align = layout.align().max(1);
-        let size = layout.size();
-        if size == 0 {
-            return core::ptr::NonNull::<u8>::dangling().as_ptr();
-        }
-
-        let mut current = NEXT.load(Ordering::Relaxed);
-        loop {
-            let aligned = (current + align - 1) & !(align - 1);
-            let next = match aligned.checked_add(size) {
-                Some(next) if next <= HEAP_SIZE => next,
-                _ => return core::ptr::null_mut(),
-            };
-            match NEXT.compare_exchange(current, next, Ordering::SeqCst, Ordering::SeqCst) {
-                Ok(_) => return (core::ptr::addr_of_mut!(HEAP.0) as *mut u8).add(aligned),
-                Err(observed) => current = observed,
-            }
-        }
+    unsafe fn alloc(&self, layout: core::alloc::Layout) -> *mut u8 {
+        BOOT_ALLOCATOR.alloc(layout)
     }
 
-    unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {}
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: core::alloc::Layout) {
+        BOOT_ALLOCATOR.dealloc(ptr, layout)
+    }
 }
