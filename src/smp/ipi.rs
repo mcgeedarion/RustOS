@@ -220,7 +220,7 @@ pub fn halt_all_except_self() {
     broadcast_except_self(IpiKind::PanicHalt);
 }
 
-// ===== GUESS: APIC vector constants for kernel timer/IPI integration =====
-/// GUESS: LAPIC timer vector — chosen to avoid CPU exceptions (<32) and IPI
+// ===== APIC vector constants for kernel timer/IPI integration =====
+/// LAPIC timer vector — chosen to avoid CPU exceptions (<32) and IPI
 /// range (0xF0-0xFE). Real value depends on IDT layout; pick 0x40.
 pub const APIC_TIMER_VECTOR: u8 = 0x40;

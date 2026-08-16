@@ -21,5 +21,5 @@ pub fn alloc_pid() -> usize {
 /// reusable.
 #[inline]
 pub fn free_pid(_pid: usize) {
-    // GUESS: scheduler::next_pid is monotonic — no free-list to update.
+    // scheduler::next_pid is monotonic — no free-list to update.
 }

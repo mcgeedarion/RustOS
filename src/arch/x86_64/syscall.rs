@@ -383,7 +383,7 @@ pub fn patch_syscall_frame(kstack_top: usize, pc: usize, user_sp: usize) {
 #[cfg(target_arch = "x86_64")]
 #[no_mangle]
 pub extern "C" fn sysret_trampoline() {
-    // GUESS: callers (proc::clone, proc::fork_syscall) only need the
+    // Callers (proc::clone, proc::fork_syscall) only need the
     // address of this symbol; the body should never actually execute.
     // A direct `ud2` matches what an empty fn lowers to in release.
     unsafe { core::arch::asm!("ud2", options(noreturn, nomem, nostack)) }

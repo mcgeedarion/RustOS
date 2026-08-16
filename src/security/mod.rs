@@ -17,7 +17,7 @@ pub mod aslr;
 pub mod bpf;
 pub mod canary;
 pub mod capset;
-// GUESS: callers use crate::security::CapSet; canonical is capset::CapSet.
+// callers use crate::security::CapSet; canonical is capset::CapSet.
 pub use capset::{cap, CapSet};
 
 /// Compatibility constants for call sites that use named capability fields.

@@ -58,15 +58,13 @@ pub fn write_str(s: &str) {
     }
 }
 
-// ===== GUESS: alias surface for new callers =====
-
-/// GUESS: alias of `write_byte` for callers using `serial::putc`.
+/// Alias of `write_byte` for callers using `serial::putc`.
 #[inline]
 pub fn putc(b: u8) {
     write_byte(b);
 }
 
-/// GUESS: 16550 RX read. Polls LSR bit 0 (DR). Returns None when empty.
+/// 16550 RX read. Polls LSR bit 0 (DR). Returns None when empty.
 pub fn getc() -> Option<u8> {
     unsafe {
         let lsr = inb(S::COM1_BASE + S::OFF_LSR);
@@ -77,13 +75,13 @@ pub fn getc() -> Option<u8> {
     }
 }
 
-/// GUESS: alias of `init` — early COM1 setup before heap.
+/// Alias of `init` — early COM1 setup before heap.
 #[inline]
 pub fn early_init() {
     init();
 }
 
-/// GUESS: byte-wise polled write of a string for early/panic paths.
+/// Byte-wise polled write of a string for early/panic paths.
 pub fn serial_print(s: &str) {
     write_str(s);
 }

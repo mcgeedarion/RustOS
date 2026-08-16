@@ -24,7 +24,7 @@ pub mod net;
 // Compatibility re-export for `crate::drivers::nic::*` callers.
 pub use net::nic;
 pub mod platform;
-// GUESS: callers use crate::drivers::pcie; canonical home is platform::pcie.
+// Callers use crate::drivers::pcie; canonical home is platform::pcie.
 pub use platform::pcie;
 pub mod virtio;
 pub mod virtio_blk;

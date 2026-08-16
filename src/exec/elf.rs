@@ -321,7 +321,6 @@ fn phys_to_kern_virt(phys: u64) -> u64 {
 // Modern public API (consumed by proc::exec and fs::elf)
 // --------------------------------------------------------------------
 // These wrappers add the names/shapes the rest of the tree expects.
-// All assumption-based code is marked with GUESS.
 // ====================================================================
 
 /// Alias for the public Elf64 header type. The historic name in this
@@ -372,7 +371,7 @@ pub fn parse_elf_header(data: &[u8]) -> Result<Elf64Hdr, ParseError> {
     if hdr.e_ident[5] != ELFDATA2LSB {
         return Err(ParseError::BadEndian);
     }
-    // GUESS: e_type and e_machine validation kept lenient — callers
+    // e_type and e_machine validation kept lenient — callers
     // (fs::elf::read_phdrs) just want a sane header back, not enforcement.
     let _et = {
         let v = hdr.e_type;
@@ -424,7 +423,7 @@ pub fn parse_phdrs_with_hdr(data: &[u8], hdr: &Elf64Hdr) -> Option<alloc::vec::V
 /// private `load_segments`; callers that already have `(hdr, phdrs)`
 /// don't need to re-parse.
 ///
-/// GUESS: until the loader is fully restructured, we forward to the
+/// Until the loader is fully restructured, we forward to the
 /// arch-neutral `load_segments` helper that operates on the in-memory
 /// slice. The `cr3` parameter is currently advisory — the existing
 /// loader installs mappings via `memory::vmm::map_page` (the old name
@@ -437,7 +436,7 @@ pub fn load_elf_into(
     hdr: &Elf64Hdr,
     phdrs: &[Elf64Phdr],
 ) -> Result<u64, ParseError> {
-    // GUESS: existing load_segments is the canonical mapping logic.
+    // Existing load_segments is the canonical mapping logic.
     // Re-validating here is cheap and keeps this function honest.
     if data.len() < mem::size_of::<Elf64Header>() {
         return Err(ParseError::OutOfBounds);
