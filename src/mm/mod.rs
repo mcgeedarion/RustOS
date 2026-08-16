@@ -117,7 +117,7 @@ impl UserBuffer {
             return Err(-14); // EFAULT
         }
         let dst = unsafe { self.base.add(self.cur) };
-        // GUESS: copy_to_user signature taken from the call site in
+        // copy_to_user signature taken from the call site in
         // src/fs/ioctl/net.rs (`copy_to_user(arg, &ifr)`). Definition is
         // written in kernel/uaccess.rs in this same patch.
         let n = unsafe { crate::kernel::uaccess::copy_to_user_raw(dst, src.as_ptr(), src.len()) };

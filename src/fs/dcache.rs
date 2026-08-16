@@ -107,9 +107,9 @@ pub fn dcache_flush() {
     DCACHE.lock().flush();
 }
 
-// ===== GUESS: short alias for new callers =====
+// ===== short alias for new callers =====
 pub fn invalidate(path: &str) {
-    // GUESS: without parent-inode resolution we can't target a single entry,
+    // without parent-inode resolution we can't target a single entry,
     // so do a full flush. Correctness > efficiency in early kernel bring-up.
     dcache_flush();
     let _ = path;

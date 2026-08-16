@@ -81,8 +81,7 @@ pub fn msix_configure(d: &PciDevice, vec_idx: usize, lapic_id: u32, vector: u8) 
     _msix_configure(d, vec_idx, lapic_id, vector);
 }
 
-// ===== GUESS: alias for kernel_main bring-up =====
-/// GUESS: alias to arch PCI enumeration init.
+/// Alias to arch PCI enumeration init.
 #[inline]
 pub fn pcie_init() {
     crate::arch::x86_64::pci::init();

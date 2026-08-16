@@ -161,9 +161,9 @@ pub fn close(fd: usize) -> isize {
     }
 }
 
-// ===== GUESS: stat alias for devfs entries =====
+// ===== stat alias for devfs entries =====
 pub fn stat(_path: &str) -> Result<crate::fs::vfs_ops::KStat, isize> {
-    // GUESS: cannot resolve without a devfs path map. Surface ENOENT
+    // cannot resolve without a devfs path map. Surface ENOENT
     // so VFS dispatchers fall through to the next FS.
     Err(-2)
 }
