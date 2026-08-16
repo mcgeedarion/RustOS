@@ -162,7 +162,7 @@ pub trait VirtualMemoryManager: Send + Sync {
 }
 
 /// Memory policy for NUMA-aware allocation
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MemoryPolicy {
     /// Default policy - allocate on local node
     Local,
@@ -210,7 +210,7 @@ impl MemoryPolicyManager {
     
     /// Get the current default policy
     pub fn get_default_policy(&self) -> MemoryPolicy {
-        *self.default_policy.lock()
+        self.default_policy.lock().clone()
     }
     
     /// Register a NUMA node

@@ -64,8 +64,8 @@ impl Qspinlock {
         let prev_tail = self.tail.swap(node_ptr, Ordering::AcqRel);
         unsafe {
             if prev_tail != 0 {
-                let prev_node = &*(prev_tail as *const QspinlockNode);
-                prev_node.next.store(node_ptr as *mut _, Ordering::Release);
+                let prev_node = prev_tail as *mut QspinlockNode;
+                (*prev_node).next = node_ptr as *mut QspinlockNode;
             }
         }
         
@@ -229,12 +229,16 @@ unsafe impl<T: Send + Sync> Sync for PerCpuData<T> {}
 
 impl<T> PerCpuData<T> {
     pub const fn new() -> Self {
+        #[cfg(target_arch = "x86_64")]
         const INIT: UnsafeCell<Option<()>> = UnsafeCell::new(None);
+        #[cfg(not(target_arch = "x86_64"))]
+        const INIT: UnsafeCell<Option<()>> = UnsafeCell::new(None);
+        
         Self {
             #[cfg(target_arch = "x86_64")]
-            data: [INIT; 256],
+            data: unsafe { core::mem::zeroed() },
             #[cfg(not(target_arch = "x86_64"))]
-            data: [INIT; 64],
+            data: unsafe { core::mem::zeroed() },
         }
     }
     
