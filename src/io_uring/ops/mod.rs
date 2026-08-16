@@ -21,6 +21,7 @@ use crate::io_uring::{
 pub fn dispatch(sqe: &Sqe) -> i32 {
     match sqe.opcode {
         op::NOP => {
+            #[cfg(feature = "boot_debug")]
             log::trace!("[io_uring] NOP token={:#x}", sqe.user_data);
             0
         },
@@ -59,6 +60,7 @@ fn handle_close(sqe: &Sqe) -> i32 {
     }
 
     let res = crate::fs::io_syscalls::sys_close(fd as usize) as i32;
+    #[cfg(feature = "boot_debug")]
     log::debug!("[io_uring::close] fd={} res={}", fd, res);
 
     res

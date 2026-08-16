@@ -448,6 +448,7 @@ pub fn start_all_aps() {
             busy_wait_us(200);
         }
 
+        #[cfg(feature = "boot_debug")]
         log::debug!("apic: SIPI → apic_id={} cpu={}", info.hw_id, cpu_id);
     }
 }

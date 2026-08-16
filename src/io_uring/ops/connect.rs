@@ -22,6 +22,7 @@ pub fn handle(sqe: &Sqe) -> i32 {
         return errno::E_INVAL;
     }
 
+    #[cfg(feature = "boot_debug")]
     log::trace!(
         "[io_uring::connect] sock_fd={} addr={:#x} addrlen={} token={:#x}",
         sock_fd,

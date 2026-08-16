@@ -106,6 +106,8 @@ RustOS intentionally separates boot validation from the full kernel module graph
 | `kmtest` | Optional in-kernel test harness. |
 | `fault-inject` | Compile-time fault-injection hooks for selected PMM, VMM, and syscall paths. |
 | `debug`, `gdbstub`, `trace` | Debugging, GDB remote serial protocol, and trace-drain support. |
+| `boot_debug` | Gates verbose `log::debug!`/`log::trace!` output during boot; off by default for performance. |
+| `syscall-trace` | Per-syscall invocation counters and hardware-cycle timing via `/proc/syscall_stats`. |
 
 Examples:
 
@@ -113,6 +115,7 @@ Examples:
 cargo xtask build --arch x86_64 --profile release-boot
 cargo xtask check --arch x86_64 --features userspace_boot --initrd
 cargo xtask smoke --arch aarch64
+cargo xtask run --arch x86_64 --features boot_debug  # Enable verbose boot logging
 ```
 
 ## Userspace and initramfs
@@ -142,6 +145,18 @@ cargo xtask roadmap-check
 cargo xtask smoke --arch x86_64
 ```
 
+### Boot performance validation
+
+RustOS includes boot timing instrumentation that emits parseable markers on the serial console. See [`docs/boot-perf.md`](docs/boot-perf.md) for the marker format and [`docs/boot-optimization-checklist.md`](docs/boot-optimization-checklist.md) for optimization guidance.
+
+Run boot performance parsing on a QEMU serial log:
+
+```sh
+bash scripts/ci/parse-boot-marks.sh target/smoke-x86_64.log
+```
+
+The CI regression gate (`scripts/ci/boot-regression.sh`) compares current boot times against baselines and fails if any phase exceeds its baseline by more than 20%.
+
 Some checks require QEMU, UEFI firmware, musl tooling, or architecture-specific firmware to be installed. Prefer `xtask` commands over raw `cargo` invocations so target triples, feature selection, boot-image staging, and serial-marker checks remain consistent with the repository contract.
 
 ## Documentation and contribution notes
@@ -151,6 +166,8 @@ Some checks require QEMU, UEFI firmware, musl tooling, or architecture-specific 
 - Keep architecture-specific code under `src/arch/<arch>/` and share state through common boot abstractions where possible.
 - Boot success should be determined by serial sentinels such as `BOOT_MINIMAL_OK`, `FULL_OS_USERSPACE_OK`, or `entering cpu_idle`, not by fixed sleeps.
 - Avoid enabling fault injection, syscall tracing, GDB stubs, or test harnesses in lean release boot images unless intentionally validating those paths.
+- Gate verbose boot logging behind the `boot_debug` feature; keep it disabled for performance measurements and CI smoke runs.
+- When optimizing boot performance, work through the checklist in `docs/boot-optimization-checklist.md` and update baselines in `docs/boot-perf-baseline.txt` only via intentional `[perf-update]` commits.
 
 ## License
 
