@@ -1181,6 +1181,7 @@ pub fn write_file(path: &str, contents: &[u8]) -> Result<(), isize> {
         return Err(err);
     }
 
+    #[cfg(feature = "boot_debug")]
     log::debug!(
         "exfat: wrote {} bytes to '{}' starting at cluster {}",
         contents.len(),
@@ -1225,6 +1226,7 @@ pub fn create_dir(path: &str) -> Result<(), isize> {
         return Err(err);
     }
 
+    #[cfg(feature = "boot_debug")]
     log::debug!(
         "exfat: created directory '{}' at cluster {}",
         path,

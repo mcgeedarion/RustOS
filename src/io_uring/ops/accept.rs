@@ -20,6 +20,7 @@ pub fn handle(sqe: &Sqe) -> i32 {
         return errno::E_BADF;
     }
 
+    #[cfg(feature = "boot_debug")]
     log::trace!(
         "[io_uring::accept] listen_fd={} addr={:#x} addrlen={:#x} flags={:#x} token={:#x}",
         listen_fd,

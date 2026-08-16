@@ -166,6 +166,18 @@ fault-inject = []
 syscall-trace = []
 
 # ---------------------------------------------------------------------------
+# Boot-time verbose logging (OFF by default for performance)
+#
+# Gates all log::debug! and log::trace! calls in the boot path.
+# When absent, these calls compile to no-ops, eliminating serial output
+# overhead during early boot. Enable only for debugging boot issues.
+#
+# Per docs/boot-optimization-checklist.md §6: Gate all debug/trace logging
+# behind this feature flag to reduce boot latency.
+# ---------------------------------------------------------------------------
+boot_debug = []
+
+# ---------------------------------------------------------------------------
 # Meta-features for build profiles.
 #
 # `release-boot` is the lean CI / normal-boot image:
@@ -173,6 +185,7 @@ syscall-trace = []
 #   - No fault-inject framework
 #   - No syscall-trace profiling hooks
 #   - No GDB stub or trace ring buffer
+#   - No boot_debug verbose logging
 #
 # Debug and profiling images opt into these explicitly via `--features`.
 # ---------------------------------------------------------------------------

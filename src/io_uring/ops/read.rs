@@ -22,6 +22,7 @@ pub fn handle(sqe: &Sqe) -> i32 {
         return 0;
     }
 
+    #[cfg(feature = "boot_debug")]
     log::trace!(
         "[io_uring::read] fd={} buf={:#x} len={} off={} token={:#x}",
         fd,

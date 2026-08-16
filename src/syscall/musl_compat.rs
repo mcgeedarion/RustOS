@@ -212,6 +212,7 @@ pub fn sys_rustos_debug_print(msg_ptr: u64) -> isize {
     let mut buf = [0u8; 256];
     match copy_str_from_user(msg_ptr, &mut buf) {
         Ok(s) => {
+            #[cfg(feature = "boot_debug")]
             log::debug!("[userspace] {}", s);
             0
         },

@@ -391,6 +391,7 @@ pub unsafe fn init_ap(cpu_id: u32) {
 
     set_gsbase(pcpu);
 
+    #[cfg(feature = "boot_debug")]
     log::debug!(
         "gdt: AP {} online kstack={:#x} ist1={:#x}",
         cpu_id,
