@@ -3,17 +3,47 @@ members = [
     ".",
     "xtask",
     "crates/scheme-api",
+    "crates/vfs-core",
+    "crates/fs-ext4",
+    "crates/fs-fat32",
+    "crates/fs-tmpfs",
+    "crates/mm-core",
+    "crates/sync-primitives",
 ]
 resolver = "2"
 
-[package]
-name = "rustos-kernel"
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
 authors = ["Darion McGee"]
-description = "A Rust-based operating system"
 license = "MIT"
 repository = "https://github.com/mcgeedarion/RustOS"
+
+[workspace.dependencies]
+# Internal workspace crates
+scheme-api = { path = "crates/scheme-api" }
+vfs-core = { path = "crates/vfs-core" }
+fs-ext4 = { path = "crates/fs-ext4" }
+fs-fat32 = { path = "crates/fs-fat32" }
+fs-tmpfs = { path = "crates/fs-tmpfs" }
+mm-core = { path = "crates/mm-core" }
+sync-primitives = { path = "crates/sync-primitives" }
+
+# External dependencies
+spin = { version = "0.9", default-features = false, features = ["spin_mutex", "rwlock", "once", "lazy"] }
+cfg-if = "1"
+log = { version = "0.4", default-features = false }
+bitflags = "2"
+thiserror = { version = "1", default-features = false }
+
+[package]
+name = "rustos-kernel"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "A Rust-based operating system"
+license.workspace = true
+repository.workspace = true
 
 [lib]
 crate-type = ["staticlib", "rlib"]
@@ -23,19 +53,21 @@ name = "rustos"
 path = "src/main.rs"
 
 [dependencies]
-scheme-api = { path = "crates/scheme-api" }
+# Workspace crates
+scheme-api.workspace = true
+vfs-core.workspace = true
+fs-ext4.workspace = true
+fs-fat32.workspace = true
+fs-tmpfs.workspace = true
+mm-core.workspace = true
+sync-primitives.workspace = true
 
-# Synchronisation primitives. `crate::sync::mutex` re-exports `spin::Mutex`,
-# and many subsystems use `spin::Mutex` / `spin::Once` directly.
-spin = { version = "0.9", default-features = false, features = ["spin_mutex", "rwlock", "once", "lazy"] }
-
-# cfg_if! macro used by various arch-gated modules.
-cfg-if = "1"
-
-# log crate used by drivers/firmware/networking code paths.
-log = { version = "0.4", default-features = false }
-
-# Add your kernel dependencies here
+# External dependencies
+spin.workspace = true
+cfg-if.workspace = true
+log.workspace = true
+bitflags.workspace = true
+thiserror.workspace = true
 
 [build-dependencies]
 # Used by build.rs::compile_crt() to build the freestanding C runtime stubs

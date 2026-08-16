@@ -1,0 +1,18 @@
+[package]
+name = "fs-fat32"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "FAT32 filesystem implementation for RustOS"
+
+[dependencies]
+vfs-core.workspace = true
+scheme-api.workspace = true
+spin.workspace = true
+log.workspace = true
+bitflags.workspace = true
+
+[features]
+default = []

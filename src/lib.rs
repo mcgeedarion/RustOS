@@ -25,6 +25,14 @@
 
 extern crate alloc;
 
+// Export unified error handling
+pub mod error;
+
+// Re-export workspace crate types for backward compatibility
+pub use vfs_core as vfs_core_exports;
+pub use mm_core as mm_core_exports;
+pub use sync_primitives as sync_primitives_exports;
+
 // ---------------------------------------------------------------------------
 // Modules compiled under ALL build profiles
 // ---------------------------------------------------------------------------

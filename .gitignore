@@ -1,28 +1,21 @@
-# Cargo build output
-/target/
+```
+# Rust/Cargo specific
+target/
+Cargo.lock
+**/*.rs.bk
 
-# Cargo.lock is committed for binaries / kernels by convention.
-# Leave it tracked once it's committed; don't add it here.
+# Dependencies
+vendor/
 
-# rustup-pinned local overrides
-/rust-toolchain
+# Logs
+*.log
 
-# Legacy QEMU / EDK2 transient artifacts. Current scripts place VARS files under /target/.
-/edk2-aarch64-vars.fd
+# Environment
+.env
+.env.local
+.env.*
 
-# Legacy UEFI ESP staging directory. Current scripts use /target/esp/<arch>/.
-/esp/
-
-# Disk images produced by cargo xtask image
-/boot-aarch64.img
-/boot-x86_64.img
-/boot.img
-
-# Initramfs artifacts produced by cargo xtask build-init
-/initramfs.cpio
-/initramfs_root/
-/userspace/init/target/
-
-# Editor / OS clutter
-*.swp
-.DS_Store
+# Backup files
+*.bak
+*.bk
+```
