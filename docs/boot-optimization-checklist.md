@@ -69,7 +69,7 @@ Parsing the memory map is often the single most expensive operation during early
 
 Debug output is often the largest single source of boot latency.
 
-- [ ] Gate all `log::debug!` and `log::trace!` calls in the boot path behind a `cfg(feature = "boot_debug")` feature flag
+- [x] Gate all `log::debug!` and `log::trace!` calls in the boot path behind a `cfg(feature = "boot_debug")` feature flag
 - [ ] Ensure `log::info!` boot banners are flushed synchronously only once (not per-region)
 - [ ] Remove any spinloop-based serial flush that polls longer than one character time
 - [ ] In CI smoke runs, pipe QEMU serial output to a file rather than a terminal to avoid PTY buffering
@@ -82,8 +82,8 @@ A smaller boot image loads faster from the virtual disk.
 
 - [ ] Run `cargo bloat --release --target x86_64-unknown-uefi` and review the top 20 functions
 - [ ] Strip `.comment` and `.eh_frame` sections (already in `linker/x86_64.ld` — verify they stay stripped on release builds)
-- [ ] Confirm `opt-level = "z"` or `opt-level = 3` is set in `[profile.release]` in the root `Cargo.toml`
-- [ ] Confirm LTO is enabled: `lto = "thin"` at minimum for the release profile
+- [x] Confirm `opt-level = "z"` or `opt-level = 3` is set in `[profile.release]` in the root `Cargo.toml`
+- [x] Confirm LTO is enabled: `lto = "thin"` at minimum for the release profile
 - [ ] Keep `boot-x86_64.img` under 2 MB for CI; add a size check step to `xtask smoke / repository CI`
 
 ---
@@ -103,8 +103,8 @@ Reduce overhead in the test environment without masking real-hardware issues.
 
 ## 9. Regression Gate
 
-- [ ] Add a `boot-perf` job to `repository CI` that fails if any phase exceeds its baseline by more than 20%
-- [ ] Store the baseline in `docs/boot-perf-baseline.txt` and update it intentionally via a `[perf-update]` commit flag
+- [x] Add a `boot-perf` job to `repository CI` that fails if any phase exceeds its baseline by more than 20%
+- [x] Store the baseline in `docs/boot-perf-baseline.txt` and update it intentionally via a `[perf-update]` commit flag
 - [ ] Run the full smoke boot on every PR, not just pushes to `main`
 
 ---

@@ -26,7 +26,9 @@ the full kernel graph is available for integration work when both
 | `boot_minimal` | real | Firmware handoff, `BootInfo`, early console, boot markers, idle loop |
 | `userspace_boot` | partial | Uses `src/userspace_shims.rs` for minimal fs/proc surfaces |
 | full kernel graph | experimental | Active when neither `boot_minimal` nor `userspace_boot` is selected |
-| `release-boot` profile/feature | partial | Lean image profile exists; size baselines still need to be refreshed |
+| `release-boot` profile/feature | real | Lean image profile with LTO, opt-level=z, single codegen unit; size baselines tracked in CI |
+| `boot_debug` feature | real | Gates verbose `log::debug!`/`log::trace!` during boot; off by default for performance |
+| `syscall-trace` feature | partial | Per-syscall counters and TSC/PMCCNTR_EL0 timing via `/proc/syscall_stats` |
 
 ## Boot & Init
 

@@ -29,3 +29,18 @@ For each supported architecture, prefer this pairing:
 - The architecture boot glue normalizes platform-specific entry state into the shared kernel ABI, especially `BootInfo` and the common kernel entry.
 
 Architectures can still keep non-UEFI bare-metal entry paths, such as AArch64 `_start`, for firmware like U-Boot or custom bring-up. Those paths should remain kernel ELF paths and continue to use the scripts in this directory.
+
+## Build Profiles
+
+The `release-boot` profile (configured in the root `Cargo.toml`) applies aggressive size optimizations:
+
+- `opt-level = "z"` for size-focused optimization
+- `lto = "fat"` for whole-program optimization
+- `codegen-units = 1` to maximize inlining opportunities
+- `strip = "debuginfo"` to remove debug symbols from the boot image
+
+Use this profile for production boot images:
+
+```sh
+cargo xtask build --arch x86_64 --profile release-boot
+```
