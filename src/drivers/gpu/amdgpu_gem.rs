@@ -1,4 +1,4 @@
-//! AMD GPU GEM buffer manager stub.
+//! AMD GPU GEM buffer manager.
 //!
 //! Provides a GEM (Graphics Execution Manager) heap for AMD GFX hardware.
 //! Full command-ring and display-engine initialisation is architecture-
@@ -10,6 +10,10 @@
 //!   - GEM heap: slab over PMM pages, handles 1–N pages per BO
 //!   - GART (GPU address translation): identity-mapped for now
 //!   - Display Engine: not yet implemented (use virtio-gpu for display)
+//!
+//! ## Thread Safety
+//! All public functions are safe to call from multiple threads concurrently.
+//! The internal state is protected by a spinlock (`AMD`).
 
 extern crate alloc;
 use alloc::vec::Vec;
@@ -17,6 +21,7 @@ use spin::Mutex;
 
 use crate::drivers::gpu::framebuffer::{Framebuffer, PixelFormat};
 use crate::drivers::gpu::gpu::DisplayInfo;
+use crate::mm::pmm;
 
 const MMIO_SCRATCH_0: usize = 0x2040; // Scratch register (sanity check)
 const MMIO_HDP_FLUSH: usize = 0x2F00; // HDP cache flush
@@ -43,6 +48,8 @@ struct AmdGpu {
 
 static AMD: Mutex<Option<AmdGpu>> = Mutex::new(None);
 
+/// # Safety
+/// `mmio_base` must be a valid, mapped MMIO region for the AMD GPU device.
 pub fn init(mmio_base: u64) {
     unsafe {
         _init(mmio_base as usize);
@@ -62,13 +69,15 @@ pub fn display_info() -> Option<DisplayInfo> {
     })
 }
 
-/// Allocate a GEM BO of `size` bytes.  Returns handle, or None on OOM.
+/// Allocate a GEM BO of `size` bytes. Returns handle, or None on OOM.
+///
+/// Uses the PMM to allocate physically contiguous pages suitable for DMA.
 pub fn gem_alloc(size: usize) -> Option<u32> {
     let phys = alloc_dma(size, 4096)?;
     let mut amd = AMD.lock();
     let g = amd.as_mut()?;
     let h = g.next_handle;
-    g.next_handle += 1;
+    g.next_handle = g.next_handle.checked_add(1)?; // Prevent overflow
     g.bos.push(GemBo {
         handle: h,
         size,
@@ -78,7 +87,7 @@ pub fn gem_alloc(size: usize) -> Option<u32> {
     Some(h)
 }
 
-/// Free a GEM BO.
+/// Free a GEM BO by handle.
 pub fn gem_free(handle: u32) {
     if let Some(g) = AMD.lock().as_mut() {
         g.bos.retain(|b| b.handle != handle);
@@ -95,6 +104,8 @@ pub fn gem_phys(handle: u32) -> Option<u64> {
         .map(|b| b.phys)
 }
 
+/// # Safety
+/// `mmio` must point to a valid, mapped MMIO region.
 unsafe fn _init(mmio: usize) {
     use core::ptr::{read_volatile, write_volatile};
 
@@ -118,7 +129,8 @@ unsafe fn _init(mmio: usize) {
     // Default display: 1024x768.
     let w = 1024u32;
     let h = 768u32;
-    let fb_phys = alloc_dma((w * h * 4) as usize, 4096);
+    let fb_size = (w as usize).checked_mul(h as usize)?.checked_mul(4)?;
+    let fb_phys = alloc_dma(fb_size, 4096);
     let fb = fb_phys.map(|p| Framebuffer::new(p, w, h, PixelFormat::Xrgb8888));
 
     *AMD.lock() = Some(AmdGpu {
@@ -131,11 +143,13 @@ unsafe fn _init(mmio: usize) {
     });
 }
 
+/// Allocate DMA-capable memory using the PMM.
+/// Returns the physical address, or None on failure.
 fn alloc_dma(size: usize, align: usize) -> Option<u64> {
-    let pages = (size + 0xFFF) / 0x1000;
-    let phys = crate::mm::pmm::alloc_pages_aligned(pages, align)?.as_ptr() as u64;
+    let pages = size.checked_add(0xFFF)?.checked_div(0x1000)?;
+    let phys = pmm::alloc_pages_aligned(pages, align)?.as_ptr() as u64;
     unsafe {
-        core::ptr::write_bytes(phys as *mut u8, 0, pages * 0x1000);
+        core::ptr::write_bytes(phys as *mut u8, 0, pages.checked_mul(0x1000)?);
     }
     Some(phys)
 }

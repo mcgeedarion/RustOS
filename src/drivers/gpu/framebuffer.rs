@@ -78,9 +78,13 @@ impl Framebuffer {
         unsafe { core::slice::from_raw_parts_mut(self.phys as *mut u8, self.size()) }
     }
 
-    /// Write one ARGB pixel at `(x, y)`.  No bounds check.
+    /// Write one ARGB pixel at `(x, y)`.  Bounds-checked for safety.
     #[inline]
     pub fn put_pixel(&self, x: u32, y: u32, argb: u32) {
+        // Bounds check to prevent buffer overflow
+        if x >= self.width || y >= self.height {
+            return; // Silently ignore out-of-bounds writes
+        }
         let off = (y * self.pitch / 4 + x) as usize;
         unsafe {
             core::ptr::write_volatile((self.phys as *mut u32).add(off), argb);

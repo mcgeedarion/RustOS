@@ -193,7 +193,15 @@ pub fn create_cgroup(parent: CgroupId, name: &str) -> Result<CgroupId, isize> {
     let id = alloc_cgid();
     let node = CgroupNode::new(id, parent, name);
     tbl.nodes.insert(id, node);
-    tbl.nodes.get_mut(&parent).unwrap().children.push(id);
+    // Parent must exist since we validated it above; if somehow missing, return error
+    match tbl.nodes.get_mut(&parent) {
+        Some(p) => p.children.push(id),
+        None => {
+            // This should never happen as we checked parent exists earlier
+            tbl.nodes.remove(&id);
+            return Err(-2); // ENOENT
+        }
+    }
     Ok(id)
 }
 
@@ -250,8 +258,13 @@ pub fn move_pid(pid: usize, target: CgroupId) -> isize {
         return -11;
     } // EAGAIN (ESRCH)
 
-    tbl.nodes.get_mut(&target).unwrap().pids.push(pid);
-    tbl.nodes.get_mut(&target).unwrap().stat.nr_pids += 1;
+    match tbl.nodes.get_mut(&target) {
+        Some(node) => {
+            node.pids.push(pid);
+            node.stat.nr_pids += 1;
+        }
+        None => return -2, // ENOENT - target disappeared (shouldn't happen)
+    }
     0
 }
 

@@ -43,6 +43,14 @@
 //!   returns `None`.
 //! * `grow` uses a fixed-size stack array (max `MAX_GROW_PAGES` frames per call) to avoid calling
 //!   the global allocator re-entrantly, which would deadlock on `ALLOCATOR`.
+//!
+//! ## Locking Hierarchy
+//! The kernel heap allocator follows this lock ordering to prevent deadlocks:
+//! 1. `ALLOCATOR` (this module's spinlock) - acquired first
+//! 2. `PMM::FREE_LIST_LOCK` (physical memory manager) - acquired second if needed
+//!
+//! Never hold `ALLOCATOR` while calling into subsystems that may need to allocate
+//! from the global allocator. Use the bootstrapped allocator during early init.
 
 extern crate alloc;
 
