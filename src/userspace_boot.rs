@@ -38,55 +38,36 @@
 //! silent hang."*
 
 use crate::init::boot_info::BootInfo;
-use core::alloc::{GlobalAlloc, Layout};
-use core::sync::atomic::{AtomicUsize, Ordering};
+use crate::mm::bump_allocator::BumpAllocator;
 
-// ---------------------------------------------------------------------------
-// Early bump allocator
-// ---------------------------------------------------------------------------
-// A simple lock-free bump allocator that satisfies GlobalAlloc for the
-// userspace_boot feature path.  dealloc is a no-op; the entire heap lives
-// for the duration of the boot sequence.  Once the full PMM / slab allocator
-// is compiled in this crate section can be removed.
+// ============================================================================
+// Early bump allocator - now uses consolidated BumpAllocator
+// ============================================================================
+
+/// Size of the userspace boot heap: 1 MiB
+///
+/// Rationale:
+/// - Larger than boot_minimal to accommodate initramfs parsing and process spawning
+/// - Provides headroom for early userspace data structures
+/// - Still bounded to prevent excessive BSS usage during normal operation
+const HEAP_SIZE: usize = 1024 * 1024; // 1 MiB
+
+static USERSPACE_ALLOCATOR: BumpAllocator<HEAP_SIZE> = BumpAllocator::new();
 
 struct EarlyBumpAllocator;
 
-const HEAP_SIZE: usize = 1024 * 1024; // 1 MiB
-
-#[repr(align(16))]
-struct AlignedHeap([u8; HEAP_SIZE]);
-
-static mut HEAP: AlignedHeap = AlignedHeap([0; HEAP_SIZE]);
-static HEAP_NEXT: AtomicUsize = AtomicUsize::new(0);
-
-unsafe impl GlobalAlloc for EarlyBumpAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let align = layout.align().max(1);
-        let size = layout.size();
-        let mut current = HEAP_NEXT.load(Ordering::Relaxed);
-        loop {
-            let aligned = (current + align - 1) & !(align - 1);
-            let Some(next) = aligned.checked_add(size) else {
-                return core::ptr::null_mut();
-            };
-            if next > HEAP_SIZE {
-                return core::ptr::null_mut();
-            }
-            match HEAP_NEXT.compare_exchange(current, next, Ordering::SeqCst, Ordering::Relaxed) {
-                Ok(_) => {
-                    let base = core::ptr::addr_of_mut!(HEAP.0) as *mut u8;
-                    return base.add(aligned);
-                },
-                Err(observed) => current = observed,
-            }
-        }
-    }
-
-    unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {}
-}
-
 #[cfg_attr(not(test), global_allocator)]
 static GLOBAL_ALLOCATOR: EarlyBumpAllocator = EarlyBumpAllocator;
+
+unsafe impl GlobalAlloc for EarlyBumpAllocator {
+    unsafe fn alloc(&self, layout: core::alloc::Layout) -> *mut u8 {
+        USERSPACE_ALLOCATOR.alloc(layout)
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: core::alloc::Layout) {
+        USERSPACE_ALLOCATOR.dealloc(ptr, layout)
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Architecture abstraction

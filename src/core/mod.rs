@@ -5,14 +5,16 @@
 //!
 //! Sub-modules
 //! -----------
-//! * [`error`]       — [`KernelError`] enum and [`KResult`] alias
-//! * [`panic`]       — kernel panic handler
-//! * [`cpu_local`]   — per-CPU variable accessor
+//! * [`cfg_aliases`] — centralized cfg aliases for cleaner conditional compilation
 //! * [`collections`] — intrusive linked-list and ring-buffer
+//! * [`cpu_local`]   — per-CPU variable accessor
+//! * [`error`]       — [`KernelError`] enum and [`KResult`] alias
 //! * [`fast_hash`]   — fast maps for trusted kernel-internal keys
+//! * [`panic`]       — kernel panic handler
 
 #![allow(dead_code)]
 
+pub mod cfg_aliases;
 pub mod collections;
 pub mod cpu_local;
 pub mod error;

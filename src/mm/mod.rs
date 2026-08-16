@@ -2,28 +2,32 @@
 //!
 //! ## Modules
 //!
-//!   `allocator`  — Global heap allocator: linked-list + buddy system.
-//!                  The `#[global_allocator]` registration lives in
-//!                  `allocator/mod.rs`. Sub-modules: `buddy`,
-//! `fixed_size_block`,                  `stats`, `tests`.
+//!   `allocator`      — Global heap allocator: linked-list + buddy system.
+//!                      The `#[global_allocator]` registration lives in
+//!                      `allocator/mod.rs`. Sub-modules: `buddy`,
+//!                      `fixed_size_block`, `stats`, `tests`.
 //!
-//!   `core_dump`  — ELF core-dump generation on fatal signals.
-//!   `cow_fault`  — Copy-on-write page-fault handler.
-//!   `heap`       — Linked-list allocator bootstrap over PMM frames.
-//!   `kasan`      — KASAN-lite shadow-memory poisoning/checking for heap debug
-//! builds.   `kstack`     — Per-CPU kernel stack allocator and guard pages.
-//!   `memmap`     — Physical memory map parsing (E820 / UEFI memory map).
-//!   `mlock`      — `mlock`/`munlock` syscall implementation.
-//!   `mmap`       — `mmap`/`munmap`/`mprotect` syscall implementation.
-//!   `page_fault` — Architecture-independent page-fault dispatch.
-//!   `phys`       — `virt_to_phys` / `phys_to_virt` for the kernel direct map.
-//!   `pmm`        — Physical memory manager (free-list of 4 KiB frames).
-//!   `rss`        — Resident Set Size tracking per-process.
-//!   `slab`       — Slab allocator (8 size classes, 8 B – 1024 B).
-//!   `swap`       — Swap subsystem: anonymous page eviction and reclaim.
+//!   `bump_allocator` — Reusable, generic bump allocator for early-boot scenarios.
+//!                      Provides a lock-free, thread-safe allocator that never frees.
+//!
+//!   `core_dump`      — ELF core-dump generation on fatal signals.
+//!   `cow_fault`      — Copy-on-write page-fault handler.
+//!   `heap`           — Linked-list allocator bootstrap over PMM frames.
+//!   `kasan`          — KASAN-lite shadow-memory poisoning/checking for heap debug builds.
+//!   `kstack`         — Per-CPU kernel stack allocator and guard pages.
+//!   `memmap`         — Physical memory map parsing (E820 / UEFI memory map).
+//!   `mlock`          — `mlock`/`munlock` syscall implementation.
+//!   `mmap`           — `mmap`/`munmap`/`mprotect` syscall implementation.
+//!   `page_fault`     — Architecture-independent page-fault dispatch.
+//!   `phys`           — `virt_to_phys` / `phys_to_virt` for the kernel direct map.
+//!   `pmm`            — Physical memory manager (free-list of 4 KiB frames).
+//!   `rss`            — Resident Set Size tracking per-process.
+//!   `slab`           — Slab allocator (8 size classes, 8 B – 1024 B).
+//!   `swap`           — Swap subsystem: anonymous page eviction and reclaim.
 
 pub mod allocator;
 pub mod boot_memory;
+pub mod bump_allocator;
 pub mod core_dump;
 pub mod cow_fault;
 pub mod heap;
