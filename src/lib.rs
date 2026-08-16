@@ -192,6 +192,18 @@ pub mod kmtest;
 #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod mm;
 
+/// Minimal memory management surface exposed to slim boot configurations.
+///
+/// Both `boot_minimal` and `userspace_boot` builds skip the full `mm` module
+/// but still need the self-contained `bump_allocator` for their early-stage
+/// `#[global_allocator]`. Expose a shim `mm` module that re-exports just the
+/// bump allocator so downstream code can continue to write
+/// `use crate::mm::bump_allocator::BumpAllocator;` in every configuration.
+#[cfg(any(feature = "boot_minimal", feature = "userspace_boot"))]
+pub mod mm {
+    pub mod bump_allocator;
+}
+
 /// Networking — TCP/IP stack, socket layer, NIC drivers.
 #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod net;

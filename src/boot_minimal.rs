@@ -5,6 +5,8 @@
 //! [`BootInfo`](crate::init::boot_info::BootInfo) and enter `kernel_main`; this
 //! module provides the common post-handoff sequence.
 
+use core::alloc::{GlobalAlloc, Layout};
+
 use crate::init::boot_info::BootInfo;
 use crate::mm::bump_allocator::BumpAllocator;
 
@@ -86,11 +88,11 @@ struct BootMinimalAllocator;
 static GLOBAL_ALLOCATOR: BootMinimalAllocator = BootMinimalAllocator;
 
 unsafe impl GlobalAlloc for BootMinimalAllocator {
-    unsafe fn alloc(&self, layout: core::alloc::Layout) -> *mut u8 {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         BOOT_ALLOCATOR.alloc(layout)
     }
 
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: core::alloc::Layout) {
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         BOOT_ALLOCATOR.dealloc(ptr, layout)
     }
 }
