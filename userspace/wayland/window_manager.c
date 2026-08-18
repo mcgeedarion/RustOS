@@ -489,7 +489,7 @@ static void reorder_subsurfaces(Client *c) {
 }
 
 /* ── Layer shell keyboard interactivity ──────────────────────────────────── */
-static void layer_surface_set_keyboard_interactivity(LayerSurface *ls, 
+void layer_surface_set_keyboard_interactivity(LayerSurface *ls, 
                                                       uint32_t interactivity) {
     if (!ls) return;
     

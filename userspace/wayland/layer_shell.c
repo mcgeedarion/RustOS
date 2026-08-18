@@ -113,6 +113,9 @@ static int dispatch_layer_shell_message(Client *c, uint32_t obj, uint16_t op,
             break;
         case ZWL_LAYER_SURFACE_REQ_SET_KEYBOARD_INTERACTIVITY:
             if (!require_len(c, obj, op, dlen, 4)) return 1;
+            /* Call the keyboard interactivity function from window_manager.c */
+            extern void layer_surface_set_keyboard_interactivity(LayerSurface*, uint32_t);
+            layer_surface_set_keyboard_interactivity(ls, wl_read_u32(data, 0));
             break;
         case ZWL_LAYER_SURFACE_REQ_ACK_CONFIGURE:
             if (!require_len(c, obj, op, dlen, 4)) return 1;

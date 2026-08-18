@@ -894,8 +894,6 @@ int main(void) {
     if (epoll_add_fd(g.drm_fd) < 0) compositor_fatal("epoll add DRM fd");
 
     /* Add input device fds to epoll */
-    extern int n_input_devices;
-    extern InputDevice input_devices[8];
     for (int i = 0; i < n_input_devices && i < 8; i++) {
         if (input_devices[i].fd >= 0) {
             if (epoll_add_fd(input_devices[i].fd) < 0) {

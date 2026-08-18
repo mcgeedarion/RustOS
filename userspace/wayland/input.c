@@ -32,8 +32,8 @@ typedef struct {
     int has_keyboard;
 } InputDevice;
 
-extern InputDevice input_devices[8];
-extern int n_input_devices;
+InputDevice input_devices[8];
+int n_input_devices = 0;
 
 /* Pointer state - exported for window manager access */
 PointerState pointer_state_public = {
