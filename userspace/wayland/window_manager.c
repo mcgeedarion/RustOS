@@ -229,7 +229,7 @@ static void end_interaction(void) {
 }
 
 /* ── Window state management ─────────────────────────────────────────────── */
-static void set_toplevel_maximized(XdgToplevel *xt, int maximized) {
+void set_toplevel_maximized(XdgToplevel *xt, int maximized) {
     if (!xt) return;
     
     Client *c = NULL;
@@ -261,7 +261,7 @@ static void set_toplevel_maximized(XdgToplevel *xt, int maximized) {
     wl_send(c->fd, xt->id, XDG_TOPLEVEL_EVT_CONFIGURE, payload, 16);
 }
 
-static void set_toplevel_fullscreen(XdgToplevel *xt, int fullscreen) {
+void set_toplevel_fullscreen(XdgToplevel *xt, int fullscreen) {
     if (!xt) return;
     
     Client *c = NULL;

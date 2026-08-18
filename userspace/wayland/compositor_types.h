@@ -301,6 +301,20 @@ static void send_delete_id(Client *c, uint32_t id);
 static Surface *find_surface(Client *c, uint32_t id);
 static WlBuffer *find_buffer(Client *c, uint32_t id);
 static XdgToplevel *find_xdg_toplevel_for_surface(Client *c, Surface *s);
+void set_toplevel_maximized(XdgToplevel *xt, int maximized);
+void set_toplevel_fullscreen(XdgToplevel *xt, int fullscreen);
 
 extern Client clients_storage[MAX_CLIENTS];
 extern CompositorState g;
+
+/* Pointer state structure - defined in input.c */
+typedef struct {
+    int32_t x, y;
+    uint32_t buttons;
+    uint32_t serial;
+    Surface *focus_surface;
+    Client *focus_client;
+    int entered;
+} PointerState;
+
+extern PointerState pointer_state_public;
