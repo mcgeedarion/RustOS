@@ -116,7 +116,7 @@ static int keymap_create_memfd(void) {
 }
 
 /* ── Error / validation helpers ────────────────────────────────────────── */
-static void post_error(Client *c, uint32_t bad_obj, uint32_t code, const char *msg) {
+void post_error(Client *c, uint32_t bad_obj, uint32_t code, const char *msg) {
     if (!c || c->fd < 0) return;
     uint8_t payload[512];
     size_t sz = 0;
@@ -127,7 +127,7 @@ static void post_error(Client *c, uint32_t bad_obj, uint32_t code, const char *m
     c->alive = 0;
 }
 
-static int require_len(Client *c, uint32_t obj, uint16_t op,
+int require_len(Client *c, uint32_t obj, uint16_t op,
                        uint16_t dlen, uint16_t need) {
     if (dlen >= need) return 1;
     (void)op;
@@ -135,7 +135,7 @@ static int require_len(Client *c, uint32_t obj, uint16_t op,
     return 0;
 }
 
-static int valid_layer(uint32_t layer) {
+int valid_layer(uint32_t layer) {
     return layer <= ZWL_LAYER_OVERLAY;
 }
 
@@ -153,7 +153,7 @@ static int shm_fd_covers_size(int fd, int32_t size) {
     return st.st_size >= (off_t)size;
 }
 
-static int object_id_exists(Client *c, uint32_t id) {
+int object_id_exists(Client *c, uint32_t id) {
     if (!id) return 1;
     if (id == WL_DISPLAY_ID) return 1;
     if (id == c->registry_id || id == c->compositor_id ||
@@ -179,20 +179,20 @@ static int object_id_exists(Client *c, uint32_t id) {
     return 0;
 }
 
-static int valid_new_id(Client *c, uint32_t new_id) {
+int valid_new_id(Client *c, uint32_t new_id) {
     if (!new_id) return 0;
     if (new_id == WL_DISPLAY_ID) return 0;
     /* Check against all existing objects to prevent ID collision attacks */
     return !object_id_exists(c, new_id);
 }
 
-static int require_new_id(Client *c, uint32_t obj, uint32_t new_id) {
+int require_new_id(Client *c, uint32_t obj, uint32_t new_id) {
     if (valid_new_id(c, new_id)) return 1;
     post_error(c, obj, WL_DISPLAY_ERROR_BAD_VALUE, "new object id already exists or invalid");
     return 0;
 }
 
-static void send_delete_id(Client *c, uint32_t id) {
+void send_delete_id(Client *c, uint32_t id) {
     if (c && c->fd >= 0 && id)
         wl_send(c->fd, WL_DISPLAY_ID, WL_DISPLAY_EVT_DELETE_ID, &id, 4);
 }
@@ -217,7 +217,7 @@ static XdgSurface *find_xdg_surface_for_wl_surface(Client *c, uint32_t wl_surfac
     return NULL;
 }
 
-static XdgToplevel *find_xdg_toplevel_for_surface(Client *c, Surface *s) {
+XdgToplevel *find_xdg_toplevel_for_surface(Client *c, Surface *s) {
     XdgSurface *xs = find_xdg_surface_for_wl_surface(c, s ? s->id : 0);
     if (!xs) return NULL;
     for (int i = 0; i < MAX_XDG_TOPLEVELS; i++)

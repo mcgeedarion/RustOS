@@ -33,11 +33,11 @@ static int seccomp_install_filter(void) {
                  (uint32_t)offsetof(struct seccomp_data, arch)),
         /* Check architecture - adjust for your target */
 #ifdef __x86_64__
-        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, AUDIT_ARCH_X86_64, 0, 17),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, AUDIT_ARCH_X86_64, 0, 30),
 #elif defined(__aarch64__)
-        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, AUDIT_ARCH_AARCH64, 0, 17),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, AUDIT_ARCH_AARCH64, 0, 30),
 #else
-        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, AUDIT_ARCH_NATIVE, 0, 17),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, AUDIT_ARCH_NATIVE, 0, 30),
 #endif
         /* Load syscall number */
         BPF_STMT(BPF_LD | BPF_W | BPF_ABS,
@@ -45,45 +45,64 @@ static int seccomp_install_filter(void) {
         
         /* Allow list - add syscalls as needed */
         /* read, write, close */
-        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_read, 14, 0),
-        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_write, 13, 0),
-        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_close, 12, 0),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_read, 0, 1),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_write, 0, 1),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_close, 0, 1),
         
-        /* mmap, munmap, mprotect */
-        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_mmap, 11, 0),
-        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_munmap, 10, 0),
-        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_mprotect, 9, 0),
+        /* mmap, munmap, mprotect, brk */
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_mmap, 0, 1),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_munmap, 0, 1),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_mprotect, 0, 1),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_brk, 0, 1),
         
-        /* fcntl, ioctl */
-        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_fcntl, 8, 0),
-        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_ioctl, 7, 0),
+        /* fcntl, ioctl, statx, fstat, lseek */
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_fcntl, 0, 1),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_ioctl, 0, 1),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_statx, 0, 1),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_fstat, 0, 1),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_lseek, 0, 1),
         
-        /* epoll_create1, epoll_ctl, epoll_wait */
-        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_epoll_create1, 6, 0),
-        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_epoll_ctl, 5, 0),
-        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_epoll_wait, 4, 0),
-        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_epoll_pwait, 3, 0),
+        /* epoll_create1, epoll_ctl, epoll_wait, epoll_pwait */
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_epoll_create1, 0, 1),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_epoll_ctl, 0, 1),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_epoll_wait, 0, 1),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_epoll_pwait, 0, 1),
         
         /* socket operations: socket, bind, listen, accept4, sendmsg, recvmsg */
-        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_socket, 2, 0),
-        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_bind, 1, 0),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_socket, 0, 1),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_bind, 0, 1),
         BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_listen, 0, 1),
         BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_accept4, 0, 1),
         BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_sendmsg, 0, 1),
         BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_recvmsg, 0, 1),
         
-        /* memfd_create, fstat, lseek, unlink, chmod */
+        /* memfd_create, ftruncate, chmod, unlink, access */
         BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_memfd_create, 0, 1),
-        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_fstat, 0, 1),
-        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_lseek, 0, 1),
-        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_unlink, 0, 1),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_ftruncate, 0, 1),
         BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_chmod, 0, 1),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_unlink, 0, 1),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_access, 0, 1),
         
-        /* exit, exit_group */
+        /* getuid, getgid, geteuid, getegid */
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_getuid, 0, 1),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_getgid, 0, 1),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_geteuid, 0, 1),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_getegid, 0, 1),
+        
+        /* setuid, setgid, setgroups */
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_setuid, 0, 1),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_setgid, 0, 1),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_setgroups, 0, 1),
+        
+        /* prctl for seccomp setup */
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_prctl, 0, 1),
+        
+        /* clock_gettime for timestamps */
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_clock_gettime, 0, 1),
+        
+        /* exit, exit_group, rt_sigreturn for signal handling */
         BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_exit, 0, 1),
         BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_exit_group, 0, 1),
-        
-        /* rt_sigreturn for signal handling */
         BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_rt_sigreturn, 0, 1),
         
         /* All other syscalls - KILL */

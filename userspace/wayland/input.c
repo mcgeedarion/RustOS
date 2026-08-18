@@ -32,18 +32,11 @@ typedef struct {
     int has_keyboard;
 } InputDevice;
 
-InputDevice input_devices[8];
-static int n_input_devices = 0;
+extern InputDevice input_devices[8];
+extern int n_input_devices;
 
-/* Pointer state */
-static struct {
-    int32_t x, y;
-    uint32_t buttons;      /* Bitmask of pressed buttons */
-    uint32_t serial;
-    Surface *focus_surface;
-    Client *focus_client;
-    int entered;
-} pointer_state = {
+/* Pointer state - exported for window manager access */
+PointerState pointer_state_public = {
     .x = 0,
     .y = 0,
     .buttons = 0,
@@ -82,9 +75,9 @@ static struct {
 
 /* ── Helper functions ────────────────────────────────────────────────────── */
 static uint32_t next_pointer_serial(void) {
-    pointer_state.serial++;
-    if (pointer_state.serial == 0) pointer_state.serial = 1;
-    return pointer_state.serial;
+    pointer_state_public.serial++;
+    if (pointer_state_public.serial == 0) pointer_state_public.serial = 1;
+    return pointer_state_public.serial;
 }
 
 static uint32_t next_keyboard_serial(void) {
@@ -176,15 +169,15 @@ static void send_pointer_enter(Client *c, Surface *s) {
     memcpy(payload + sz, &s->id, 4); sz += 4;
     
     /* Send surface coordinates as fixed-point */
-    int32_t sx_fp = wl_fixed_from_int(pointer_state.x - s->x);
-    int32_t sy_fp = wl_fixed_from_int(pointer_state.y - s->y);
+    int32_t sx_fp = wl_fixed_from_int(pointer_state_public.x - s->x);
+    int32_t sy_fp = wl_fixed_from_int(pointer_state_public.y - s->y);
     memcpy(payload + sz, &sx_fp, 4); sz += 4;
     memcpy(payload + sz, &sy_fp, 4); sz += 4;
     
     wl_send(c->fd, c->pointer_id, WL_POINTER_EVT_ENTER, payload, (uint16_t)sz);
-    pointer_state.entered = 1;
-    pointer_state.focus_surface = s;
-    pointer_state.focus_client = c;
+    pointer_state_public.entered = 1;
+    pointer_state_public.focus_surface = s;
+    pointer_state_public.focus_client = c;
 }
 
 static void send_pointer_leave(Client *c, Surface *s) {
@@ -198,22 +191,22 @@ static void send_pointer_leave(Client *c, Surface *s) {
     memcpy(payload + sz, &s->id, 4); sz += 4;
     
     wl_send(c->fd, c->pointer_id, WL_POINTER_EVT_LEAVE, payload, (uint16_t)sz);
-    pointer_state.entered = 0;
-    pointer_state.focus_surface = NULL;
-    pointer_state.focus_client = NULL;
+    pointer_state_public.entered = 0;
+    pointer_state_public.focus_surface = NULL;
+    pointer_state_public.focus_client = NULL;
 }
 
 static void send_pointer_motion(uint32_t time_ms) {
-    Client *c = pointer_state.focus_client;
-    Surface *s = pointer_state.focus_surface;
+    Client *c = pointer_state_public.focus_client;
+    Surface *s = pointer_state_public.focus_surface;
     if (!c || !s || !c->pointer_id) return;
     
     uint8_t payload[20];
     size_t sz = 0;
     
     uint32_t timestamp = time_ms;
-    int32_t sx_fp = wl_fixed_from_int(pointer_state.x - s->x);
-    int32_t sy_fp = wl_fixed_from_int(pointer_state.y - s->y);
+    int32_t sx_fp = wl_fixed_from_int(pointer_state_public.x - s->x);
+    int32_t sy_fp = wl_fixed_from_int(pointer_state_public.y - s->y);
     
     memcpy(payload + sz, &timestamp, 4); sz += 4;
     memcpy(payload + sz, &sx_fp, 4); sz += 4;
@@ -223,7 +216,7 @@ static void send_pointer_motion(uint32_t time_ms) {
 }
 
 static void send_pointer_button(uint32_t time_ms, uint32_t button, uint32_t state) {
-    Client *c = pointer_state.focus_client;
+    Client *c = pointer_state_public.focus_client;
     if (!c || !c->pointer_id) return;
     
     uint32_t serial = next_pointer_serial();
@@ -240,14 +233,14 @@ static void send_pointer_button(uint32_t time_ms, uint32_t button, uint32_t stat
     
     /* Update button mask */
     if (state == 1) {
-        pointer_state.buttons |= (1u << button);
+        pointer_state_public.buttons |= (1u << button);
     } else {
-        pointer_state.buttons &= ~(1u << button);
+        pointer_state_public.buttons &= ~(1u << button);
     }
 }
 
 static void send_pointer_axis(uint32_t time_ms, uint32_t axis, int32_t value) {
-    Client *c = pointer_state.focus_client;
+    Client *c = pointer_state_public.focus_client;
     if (!c || !c->pointer_id) return;
     
     uint8_t payload[20];
@@ -425,15 +418,15 @@ static void send_touch_motion(uint32_t time_ms, int32_t id, int32_t x, int32_t y
 /* ── Focus management ────────────────────────────────────────────────────── */
 static void update_pointer_focus(void) {
     Client *new_client = NULL;
-    Surface *new_surface = find_surface_at(pointer_state.x, pointer_state.y, &new_client);
+    Surface *new_surface = find_surface_at(pointer_state_public.x, pointer_state_public.y, &new_client);
     
     /* Handle leave from old surface */
-    if (pointer_state.focus_surface && pointer_state.focus_surface != new_surface) {
-        send_pointer_leave(pointer_state.focus_client, pointer_state.focus_surface);
+    if (pointer_state_public.focus_surface && pointer_state_public.focus_surface != new_surface) {
+        send_pointer_leave(pointer_state_public.focus_client, pointer_state_public.focus_surface);
     }
     
     /* Handle enter to new surface */
-    if (new_surface && new_surface != pointer_state.focus_surface) {
+    if (new_surface && new_surface != pointer_state_public.focus_surface) {
         send_pointer_enter(new_client, new_surface);
     }
 }
@@ -554,17 +547,17 @@ static void process_evdev_event(struct input_event *ev) {
     switch (ev->type) {
     case EV_REL:
         if (ev->code == REL_X) {
-            pointer_state.x += ev->value;
-            if (pointer_state.x < 0) pointer_state.x = 0;
-            if (pointer_state.x >= (int32_t)g.screen_width) 
-                pointer_state.x = (int32_t)g.screen_width - 1;
+            pointer_state_public.x += ev->value;
+            if (pointer_state_public.x < 0) pointer_state_public.x = 0;
+            if (pointer_state_public.x >= (int32_t)g.screen_width) 
+                pointer_state_public.x = (int32_t)g.screen_width - 1;
             update_pointer_focus();
             send_pointer_motion(time_ms);
         } else if (ev->code == REL_Y) {
-            pointer_state.y += ev->value;
-            if (pointer_state.y < 0) pointer_state.y = 0;
-            if (pointer_state.y >= (int32_t)g.screen_height)
-                pointer_state.y = (int32_t)g.screen_height - 1;
+            pointer_state_public.y += ev->value;
+            if (pointer_state_public.y < 0) pointer_state_public.y = 0;
+            if (pointer_state_public.y >= (int32_t)g.screen_height)
+                pointer_state_public.y = (int32_t)g.screen_height - 1;
             update_pointer_focus();
             send_pointer_motion(time_ms);
         } else if (ev->code == REL_WHEEL) {
@@ -580,7 +573,7 @@ static void process_evdev_event(struct input_event *ev) {
                 touch_state.x = ev->value;
                 send_touch_motion(time_ms, touch_state.slot, touch_state.x, touch_state.y);
             } else {
-                pointer_state.x = ev->value;
+                pointer_state_public.x = ev->value;
                 update_pointer_focus();
                 send_pointer_motion(time_ms);
             }
@@ -589,7 +582,7 @@ static void process_evdev_event(struct input_event *ev) {
                 touch_state.y = ev->value;
                 send_touch_motion(time_ms, touch_state.slot, touch_state.x, touch_state.y);
             } else {
-                pointer_state.y = ev->value;
+                pointer_state_public.y = ev->value;
                 update_pointer_focus();
                 send_pointer_motion(time_ms);
             }

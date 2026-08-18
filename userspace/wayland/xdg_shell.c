@@ -149,16 +149,106 @@ static int dispatch_xdg_shell_message(Client *c, uint32_t obj, uint16_t op,
             xt->max_h = wl_read_i32(data, 4);
             break;
         case XDG_TOPLEVEL_REQ_SET_PARENT:
-        case XDG_TOPLEVEL_REQ_SHOW_WINDOW_MENU:
-        case XDG_TOPLEVEL_REQ_MOVE:
-        case XDG_TOPLEVEL_REQ_RESIZE:
-        case XDG_TOPLEVEL_REQ_SET_MAXIMIZED:
-        case XDG_TOPLEVEL_REQ_UNSET_MAXIMIZED:
-        case XDG_TOPLEVEL_REQ_SET_FULLSCREEN:
-        case XDG_TOPLEVEL_REQ_UNSET_FULLSCREEN:
-        case XDG_TOPLEVEL_REQ_SET_MINIMIZED:
-            /* Accepted as no-op MVP behavior; TODO: implement interactive move/resize/state. */
+            /* Parent setting for popup hierarchy - MVP accepts but doesn't implement */
             break;
+        case XDG_TOPLEVEL_REQ_SHOW_WINDOW_MENU:
+            /* Show window menu at given coordinates - MVP no-op */
+            break;
+        case XDG_TOPLEVEL_REQ_MOVE: {
+            if (!require_len(c, obj, op, dlen, 8)) return 1;
+            uint32_t serial = wl_read_u32(data, 0);
+            /* int32_t x = wl_read_i32(data, 4); - seat coordinates */
+            /* Find surface for this toplevel and start interactive move */
+            for (int si = 0; si < MAX_SURFACES; si++) {
+                Surface *s = &c->surfaces[si];
+                if (s->id && s->committed) {
+                    XdgToplevel *found = find_xdg_toplevel_for_surface(c, s);
+                    if (found == xt) {
+                        extern void window_manager_start_move(Client*, Surface*, uint32_t, int32_t, int32_t);
+                        
+                        window_manager_start_move(c, s, serial, pointer_state_public.x, pointer_state_public.y);
+                        break;
+                    }
+                }
+            }
+            break;
+        }
+        case XDG_TOPLEVEL_REQ_RESIZE: {
+            if (!require_len(c, obj, op, dlen, 8)) return 1;
+            uint32_t serial = wl_read_u32(data, 0);
+            uint32_t edges = wl_read_u32(data, 4);
+            /* Find surface for this toplevel and start interactive resize */
+            for (int si = 0; si < MAX_SURFACES; si++) {
+                Surface *s = &c->surfaces[si];
+                if (s->id && s->committed) {
+                    XdgToplevel *found = find_xdg_toplevel_for_surface(c, s);
+                    if (found == xt) {
+                        extern void window_manager_start_resize(Client*, Surface*, uint32_t, int32_t, int32_t, uint32_t);
+                        
+                        window_manager_start_resize(c, s, serial, pointer_state_public.x, pointer_state_public.y, edges);
+                        break;
+                    }
+                }
+            }
+            break;
+        }
+        case XDG_TOPLEVEL_REQ_SET_MAXIMIZED: {
+            /* Find surface and maximize */
+            for (int si = 0; si < MAX_SURFACES; si++) {
+                Surface *s = &c->surfaces[si];
+                if (s->id && s->committed) {
+                    XdgToplevel *found = find_xdg_toplevel_for_surface(c, s);
+                    if (found == xt) {
+                        extern void set_toplevel_maximized(XdgToplevel*, int);
+                        set_toplevel_maximized(xt, 1);
+                        break;
+                    }
+                }
+            }
+            break;
+        }
+        case XDG_TOPLEVEL_REQ_UNSET_MAXIMIZED: {
+            for (int si = 0; si < MAX_SURFACES; si++) {
+                Surface *s = &c->surfaces[si];
+                if (s->id && s->committed) {
+                    XdgToplevel *found = find_xdg_toplevel_for_surface(c, s);
+                    if (found == xt) {
+                        extern void set_toplevel_maximized(XdgToplevel*, int);
+                        set_toplevel_maximized(xt, 0);
+                        break;
+                    }
+                }
+            }
+            break;
+        }
+        case XDG_TOPLEVEL_REQ_SET_FULLSCREEN: {
+            for (int si = 0; si < MAX_SURFACES; si++) {
+                Surface *s = &c->surfaces[si];
+                if (s->id && s->committed) {
+                    XdgToplevel *found = find_xdg_toplevel_for_surface(c, s);
+                    if (found == xt) {
+                        extern void set_toplevel_fullscreen(XdgToplevel*, int);
+                        set_toplevel_fullscreen(xt, 1);
+                        break;
+                    }
+                }
+            }
+            break;
+        }
+        case XDG_TOPLEVEL_REQ_UNSET_FULLSCREEN: {
+            for (int si = 0; si < MAX_SURFACES; si++) {
+                Surface *s = &c->surfaces[si];
+                if (s->id && s->committed) {
+                    XdgToplevel *found = find_xdg_toplevel_for_surface(c, s);
+                    if (found == xt) {
+                        extern void set_toplevel_fullscreen(XdgToplevel*, int);
+                        set_toplevel_fullscreen(xt, 0);
+                        break;
+                    }
+                }
+            }
+            break;
+        }
         default:
             post_error(c, obj, WL_DISPLAY_ERROR_INVALID_METHOD, "unsupported xdg_toplevel request");
             break;

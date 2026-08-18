@@ -1,20 +1,36 @@
 ```
-# Build artifacts
-target/
+# Compiled and build artifacts
+*.o
+*.obj
+*.out
 
 # Dependencies
-Cargo.lock
+node_modules/
+venv/
+.venv/
+__pycache__/
+.mypy_cache/
+.pytest_cache/
+dist/
+build/
+target/
+.gradle/
 
 # Logs and temp files
 *.log
 *.tmp
+*.swp
+
+# Environment
+.env
+.env.local
+*.env.*
 
 # Editors
 .vscode/
 .idea/
 
-# Environment
-.env
-.env.local
-.env.*
+# System files
+.DS_Store
+Thumbs.db
 ```
