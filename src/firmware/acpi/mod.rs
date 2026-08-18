@@ -21,11 +21,16 @@
 
 pub mod battery;
 pub mod cpufreq;
+pub mod dmar;
 pub mod error;
+pub mod hpet;
 pub mod hotplug;
 pub mod numa;
 pub mod power;
 pub mod sleep;
+
+#[cfg(test)]
+mod tests;
 
 use core::mem::size_of;
 use core::slice;
@@ -470,14 +475,18 @@ pub unsafe fn get_dsdt_aml() -> Option<&'static [u8]> {
 /// 1. `init(rsdp_phys)`       — root table discovery
 /// 2. `power::init()`         — FADT/DSDT, SCI IRQ
 /// 3. `sleep::init()`         — FACS, S3 wakeup vector
-/// 4. `cpufreq::init()`       — _PSS / _PPC P-state table
-/// 5. `battery::init()`       — _BIF / _BST battery info
-/// 6. `hotplug::init()`       — GPE hot-plug handler
-/// 7. `numa::init()`          — SRAT + SLIT topology
+/// 4. `hpet::init()`          — HPET timer base address
+/// 5. `dmar::init()`          — DMA remapping (IOMMU) info
+/// 6. `cpufreq::init()`       — _PSS / _PPC P-state table
+/// 7. `battery::init()`       — _BIF / _BST battery info
+/// 8. `hotplug::init()`       — GPE hot-plug handler
+/// 9. `numa::init()`          — SRAT + SLIT topology
 pub unsafe fn init_all(rsdp_phys: usize) {
     init(rsdp_phys);
     power::init();
     sleep::init();
+    hpet::init();
+    dmar::init();
     cpufreq::init();
     battery::init();
     hotplug::init();

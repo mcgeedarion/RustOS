@@ -135,13 +135,67 @@ mod tests {
             format!("{}", AcpiError::InvalidPhysicalAddress(0x1234)),
             "invalid physical address 0x1234"
         );
+        assert_eq!(
+            format!("{}", AcpiError::RsdpInvalid),
+            "RSDP signature invalid"
+        );
+        assert_eq!(
+            format!("{}", AcpiError::ChecksumFailed("DSDT")),
+            "DSDT checksum failed"
+        );
+        assert_eq!(
+            format!("{}", AcpiError::InvalidSleepState(7)),
+            "invalid S-state 7"
+        );
+        assert_eq!(
+            format!("{}", AcpiError::NotImplemented),
+            "operation not implemented"
+        );
+    }
+
+    #[test]
+    fn test_error_equality() {
+        assert_eq!(AcpiError::RsdpInvalid, AcpiError::RsdpInvalid);
+        assert_eq!(
+            AcpiError::TableNotFound("APIC"),
+            AcpiError::TableNotFound("APIC")
+        );
+        assert_ne!(
+            AcpiError::TableNotFound("FACP"),
+            AcpiError::TableNotFound("APIC")
+        );
     }
 
     #[test]
     fn test_valid_physical_address() {
+        // Valid addresses within range
         assert!(is_valid_physical_address(0x1000, 100));
-        assert!(is_valid_physical_address(0x1_0000_0000, 4096));
+        assert!(is_valid_physical_address(0x1_0000_0000, 4096)); // 4 GiB
+        assert!(is_valid_physical_address(0x80_0000_0000 - 100, 100)); // Just under 512 GiB
+        
+        // Null address
         assert!(!is_valid_physical_address(0, 100));
-        assert!(!is_valid_physical_address(0x100_0000_0000, 100)); // Above 512 GiB
+        assert!(!is_valid_physical_address(0, 4096));
+        
+        // Above 512 GiB limit
+        assert!(!is_valid_physical_address(0x100_0000_0000, 100)); // 1 TiB
+        assert!(!is_valid_physical_address(0x80_0000_0000, 100)); // Exactly 512 GiB
+        
+        // Overflow cases
+        assert!(!is_valid_physical_address(usize::MAX, 100));
+        assert!(!is_valid_physical_address(usize::MAX - 50, 100));
+        
+        // Edge case: exactly at boundary
+        assert!(is_valid_physical_address(0x7FFF_FFFF, 100));
+    }
+
+    #[test]
+    fn test_result_type_alias() {
+        let ok_result: AcpiResult<()> = Ok(());
+        let err_result: AcpiResult<()> = Err(AcpiError::RsdpNotFound);
+        
+        assert!(ok_result.is_ok());
+        assert!(err_result.is_err());
+        assert_eq!(err_result.unwrap_err(), AcpiError::RsdpNotFound);
     }
 }
