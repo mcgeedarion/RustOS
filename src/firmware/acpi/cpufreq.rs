@@ -15,7 +15,13 @@
 //!
 //! For actual register writes we use the Intel SpeedStep MSR (0x199)
 //! unconditionally; CPUID checks should be added before shipping.
+//!
+//! ## Thread Safety
+//!
+//! All initialization must complete before SMP is enabled. After initialization,
+//! read-only access to P-state data is safe from multiple threads.
 
+use super::error::{AcpiError, AcpiResult};
 use super::SdtHeader;
 use crate::println;
 use core::sync::atomic::{AtomicU32, AtomicU8, Ordering};
@@ -36,17 +42,31 @@ pub struct Pstate {
     pub status: u32,
 }
 
-static mut PSTATE_TABLE: [Pstate; MAX_PSTATES] = [Pstate {
-    freq_mhz: 0,
-    power_mw: 0,
-    latency_us: 0,
-    control: 0,
-    status: 0,
-}; MAX_PSTATES];
+use spin::Once;
 
+/// P-state table storage with proper synchronization.
+/// Initialized once during boot, then read-only.
+static PSTATE_TABLE: Once<[Pstate; MAX_PSTATES]> = Once::new();
 static PSTATE_COUNT: AtomicU8 = AtomicU8::new(0);
 static CURRENT_PSTATE: AtomicU8 = AtomicU8::new(0);
 static MAX_ALLOWED: AtomicU8 = AtomicU8::new(0); // from _PPC
+
+/// Get mutable reference to PSTATE_TABLE during initialization.
+/// 
+/// # Safety
+/// - Must only be called during single-threaded boot before SMP
+/// - PSTATE_TABLE must not have been initialized yet
+unsafe fn get_pstate_table_mut() -> &'static mut [Pstate; MAX_PSTATES] {
+    PSTATE_TABLE.get_or_try_init(|| {
+        Ok::<[Pstate; MAX_PSTATES], ()>([Pstate {
+            freq_mhz: 0,
+            power_mw: 0,
+            latency_us: 0,
+            control: 0,
+            status: 0,
+        }; MAX_PSTATES])
+    }).unwrap()
+}
 
 const IA32_PERF_CTL: u32 = 0x199;
 const IA32_PERF_STS: u32 = 0x198;
@@ -176,7 +196,8 @@ unsafe fn scan_pss(aml: &[u8]) {
                 continue;
             }
             if e < MAX_PSTATES {
-                PSTATE_TABLE[e] = Pstate {
+                let table = get_pstate_table_mut();
+                table[e] = Pstate {
                     freq_mhz: vals[0],
                     power_mw: vals[1],
                     latency_us: vals[2],
@@ -192,10 +213,11 @@ unsafe fn scan_pss(aml: &[u8]) {
     PSTATE_COUNT.store(found as u8, Ordering::Relaxed);
     if found > 0 {
         println!("acpi/cpufreq: {} P-states discovered", found);
+        let table = PSTATE_TABLE.get().unwrap();
         for k in 0..found {
             println!(
                 "  P{}  {} MHz  {} mW  ctrl={:#x}",
-                k, PSTATE_TABLE[k].freq_mhz, PSTATE_TABLE[k].power_mw, PSTATE_TABLE[k].control
+                k, table[k].freq_mhz, table[k].power_mw, table[k].control
             );
         }
     }

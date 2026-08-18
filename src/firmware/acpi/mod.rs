@@ -12,9 +12,16 @@
 //! Battery information (`_BIF`/`_BST`) is in `battery`.
 //! PCIe ACPI-mediated hot-plug (GPE + Notify) is in `hotplug`.
 //! NUMA topology (SRAT + SLIT) is in `numa`.
+//!
+//! ## Thread Safety
+//!
+//! All ACPI initialization functions must be called during early boot before
+//! SMP is enabled. After initialization, read-only access to ACPI data is safe
+//! from multiple threads.
 
 pub mod battery;
 pub mod cpufreq;
+pub mod error;
 pub mod hotplug;
 pub mod numa;
 pub mod power;
@@ -22,8 +29,11 @@ pub mod sleep;
 
 use core::mem::size_of;
 use core::slice;
+use core::sync::atomic::{AtomicPtr, Ordering};
 
 use crate::println;
+
+pub use error::{AcpiError, AcpiResult, is_valid_physical_address};
 
 #[repr(C, packed)]
 pub struct RsdpV1 {
@@ -69,12 +79,25 @@ pub struct MadtEntryHdr {
     pub len: u8,
 }
 
-pub enum AcpiRoot {
-    Rsdt(*const SdtHeader),
-    Xsdt(*const SdtHeader),
+/// Root table pointer type with proper synchronization.
+/// 
+/// Uses AtomicPtr for thread-safe access after initialization.
+pub struct AcpiRoot {
+    /// Pointer to the root table (RSDT or XSDT)
+    table_ptr: *const SdtHeader,
+    /// True if this is an XSDT (64-bit entries), false for RSDT (32-bit)
+    is_xsdt: bool,
 }
 
-static mut ACPI_ROOT: Option<AcpiRoot> = None;
+// SAFETY: AcpiRoot is only written during init() before SMP, then read-only
+unsafe impl Send for AcpiRoot {}
+unsafe impl Sync for AcpiRoot {}
+
+/// Global ACPI root table pointer.
+/// 
+/// Initialized once during boot via `init()`, then accessed read-only.
+/// Uses AtomicPtr with appropriate memory ordering for safe concurrent reads.
+static ACPI_ROOT: AtomicPtr<AcpiRoot> = AtomicPtr::new(core::ptr::null_mut());
 
 fn checksum_ok(bytes: &[u8]) -> bool {
     bytes.iter().fold(0u8, |acc, b| acc.wrapping_add(*b)) == 0
@@ -84,15 +107,34 @@ unsafe fn sig_eq<const N: usize>(ptr: *const u8, sig: &[u8; N]) -> bool {
     slice::from_raw_parts(ptr, N) == sig
 }
 
+/// Initialize ACPI subsystem from the RSDP physical address.
+///
+/// # Safety
+/// - Must be called exactly once during early boot, before SMP initialization
+/// - `rsdp_phys` must point to a valid, mapped RSDP structure
+/// - Caller must ensure the RSDP memory remains valid for the lifetime of the system
+///
+/// # Errors
+/// Returns silently with a log message if:
+/// - RSDP address is null
+/// - RSDP signature is invalid
+/// - RSDP checksum fails
+/// - No valid root table (RSDT/XSDT) is found
 pub unsafe fn init(rsdp_phys: usize) {
+    // Validate RSDP physical address before dereferencing
     if rsdp_phys == 0 {
-        println!("acpi: no rsdp");
+        println!("acpi: no rsdp (null address)");
+        return;
+    }
+    
+    if !is_valid_physical_address(rsdp_phys, size_of::<RsdpV1>()) {
+        println!("acpi: rsdp physical address {:#x} is invalid", rsdp_phys);
         return;
     }
 
     let v1 = &*(rsdp_phys as *const RsdpV1);
     if !sig_eq(v1.sig.as_ptr(), b"RSD PTR ") {
-        println!("acpi: bad rsdp sig");
+        println!("acpi: bad rsdp signature");
         return;
     }
     if !checksum_ok(slice::from_raw_parts(
@@ -104,11 +146,38 @@ pub unsafe fn init(rsdp_phys: usize) {
     }
 
     if v1.rev >= 2 {
+        // Validate RSDP v2 extended area
+        let v2_size = size_of::<RsdpV2>();
+        if !is_valid_physical_address(rsdp_phys, v2_size) {
+            println!("acpi: rsdp v2 extended area at {:#x} is invalid", rsdp_phys);
+            return;
+        }
+        
         let v2 = &*(rsdp_phys as *const RsdpV2);
         let len = core::ptr::addr_of!(v2.len).read_unaligned() as usize;
         let xsdt_phys = core::ptr::addr_of!(v2.xsdt_phys).read_unaligned();
+        
+        if len < size_of::<RsdpV2>() {
+            println!("acpi: rsdp v2 length {} too small", len);
+            return;
+        }
+        
         if checksum_ok(slice::from_raw_parts(rsdp_phys as *const u8, len)) && xsdt_phys != 0 {
-            ACPI_ROOT = Some(AcpiRoot::Xsdt(xsdt_phys as usize as *const SdtHeader));
+            // Validate XSDT physical address
+            if !is_valid_physical_address(xsdt_phys as usize, size_of::<SdtHeader>()) {
+                println!("acpi: xsdt physical address {:#x} is invalid", xsdt_phys);
+                return;
+            }
+            
+            let root = AcpiRoot {
+                table_ptr: xsdt_phys as usize as *const SdtHeader,
+                is_xsdt: true,
+            };
+            let root_box = Box::new(root);
+            let root_ptr = Box::into_raw(root_box);
+            
+            // Use Release ordering to ensure all prior writes are visible
+            ACPI_ROOT.store(root_ptr, Ordering::Release);
             println!("acpi: xsdt @ {:#x}", xsdt_phys);
             return;
         }
@@ -116,43 +185,128 @@ pub unsafe fn init(rsdp_phys: usize) {
 
     let rsdt_phys = core::ptr::addr_of!(v1.rsdt_phys).read_unaligned();
     if rsdt_phys != 0 {
-        ACPI_ROOT = Some(AcpiRoot::Rsdt(rsdt_phys as usize as *const SdtHeader));
+        // Validate RSDT physical address
+        if !is_valid_physical_address(rsdt_phys as usize, size_of::<SdtHeader>()) {
+            println!("acpi: rsdt physical address {:#x} is invalid", rsdt_phys);
+            return;
+        }
+        
+        let root = AcpiRoot {
+            table_ptr: rsdt_phys as usize as *const SdtHeader,
+            is_xsdt: false,
+        };
+        let root_box = Box::new(root);
+        let root_ptr = Box::into_raw(root_box);
+        
+        ACPI_ROOT.store(root_ptr, Ordering::Release);
         println!("acpi: rsdt @ {:#x}", rsdt_phys);
     }
 }
 
+/// Find an ACPI table by its 4-character signature.
+///
+/// # Safety
+/// - Must be called after `init()` has successfully initialized ACPI
+/// - The returned pointer is valid for the lifetime of the system
+/// - Caller must not dereference the pointer without proper validation
+///
+/// # Arguments
+/// * `sig` - 4-byte table signature (e.g., b"APIC", b"FACP", b"MCFG")
+///
+/// # Returns
+/// `Some(pointer)` if table is found, `None` otherwise
 pub unsafe fn find_table(sig: &[u8; 4]) -> Option<*const SdtHeader> {
-    let root = ACPI_ROOT.as_ref()?;
-    match *root {
-        AcpiRoot::Rsdt(hdr) => {
-            let hdr_ref = &*hdr;
-            let total = hdr_ref.len as usize;
-            let entries_bytes = total - size_of::<SdtHeader>();
-            let n = entries_bytes / 4;
-            let base = (hdr as usize + size_of::<SdtHeader>()) as *const u32;
-            for i in 0..n {
-                let phys = *base.add(i) as usize;
-                let th = &*(phys as *const SdtHeader);
-                if &th.sig == sig {
-                    return Some(phys as *const SdtHeader);
-                }
-            }
-        },
-        AcpiRoot::Xsdt(hdr) => {
-            let hdr_ref = &*hdr;
-            let total = hdr_ref.len as usize;
-            let entries_bytes = total - size_of::<SdtHeader>();
-            let n = entries_bytes / 8;
-            let base = (hdr as usize + size_of::<SdtHeader>()) as *const u64;
-            for i in 0..n {
-                let phys = *base.add(i) as usize;
-                let th = &*(phys as *const SdtHeader);
-                if &th.sig == sig {
-                    return Some(phys as *const SdtHeader);
-                }
-            }
-        },
+    // Use Acquire ordering to ensure we see all writes from init()
+    let root_ptr = ACPI_ROOT.load(Ordering::Acquire);
+    if root_ptr.is_null() {
+        return None;
     }
+    
+    let root = &*root_ptr;
+    let hdr = root.table_ptr;
+    
+    // Validate the root table header before accessing
+    if !is_valid_physical_address(hdr as usize, size_of::<SdtHeader>()) {
+        println!("acpi: root table at invalid address {:#x}", hdr as usize);
+        return None;
+    }
+    
+    let hdr_ref = &*hdr;
+    if hdr_ref.len < size_of::<SdtHeader>() as u32 {
+        println!("acpi: root table length {} is too small", hdr_ref.len);
+        return None;
+    }
+    
+    if root.is_xsdt {
+        // XSDT: 64-bit entries
+        let total = hdr_ref.len as usize;
+        let entries_bytes = total.saturating_sub(size_of::<SdtHeader>());
+        let n = entries_bytes / 8;
+        
+        if n == 0 {
+            return None;
+        }
+        
+        let base = (hdr as usize + size_of::<SdtHeader>()) as *const u64;
+        
+        for i in 0..n {
+            // Bounds check: ensure we don't read past the table
+            let entry_addr = base.add(i) as usize;
+            let table_end = hdr as usize + total;
+            if entry_addr + 8 > table_end {
+                println!("acpi: xsdt entry {} out of bounds", i);
+                break;
+            }
+            
+            let phys = *base.add(i) as usize;
+            
+            // Validate physical address before returning
+            if phys == 0 || !is_valid_physical_address(phys, size_of::<SdtHeader>()) {
+                println!("acpi: xsdt entry {} has invalid address {:#x}", i, phys);
+                continue;
+            }
+            
+            let th = &*(phys as *const SdtHeader);
+            if &th.sig == sig {
+                return Some(phys as *const SdtHeader);
+            }
+        }
+    } else {
+        // RSDT: 32-bit entries
+        let total = hdr_ref.len as usize;
+        let entries_bytes = total.saturating_sub(size_of::<SdtHeader>());
+        let n = entries_bytes / 4;
+        
+        if n == 0 {
+            return None;
+        }
+        
+        let base = (hdr as usize + size_of::<SdtHeader>()) as *const u32;
+        
+        for i in 0..n {
+            // Bounds check: ensure we don't read past the table
+            let entry_addr = base.add(i) as usize;
+            let table_end = hdr as usize + total;
+            if entry_addr + 4 > table_end {
+                println!("acpi: rsdt entry {} out of bounds", i);
+                break;
+            }
+            
+            let phys = *base.add(i) as usize;
+            
+            // Validate physical address before returning
+            if phys == 0 || !is_valid_physical_address(phys, size_of::<SdtHeader>()) {
+                println!("acpi: rsdt entry {} has invalid address {:#x}", i, phys);
+                continue;
+            }
+            
+            let th = &*(phys as *const SdtHeader);
+            if &th.sig == sig {
+                return Some(phys as *const SdtHeader);
+            }
+        }
+    }
+    
     None
 }
 
