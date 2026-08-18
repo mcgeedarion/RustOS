@@ -100,19 +100,22 @@ unsafe fn wrmsr(msr: u32, val: u64) {
 
 /// Extract a DWORD from AML stream at `i` after an 0x0C (DWordPrefix).
 /// Returns the value and advances `i` by 5.
+///
+/// # Safety
+/// Caller must ensure `i` is within bounds of `aml`.
 unsafe fn read_aml_dword(aml: &[u8], i: usize) -> Option<u32> {
-    if aml.get(i)? != &0x0Cu8 {
+    // Use .get() for bounds-safe access
+    if *aml.get(i)? != 0x0C {
         return None;
     }
-    if i + 5 > aml.len() {
+    
+    // Check bounds for the 4-byte payload
+    let payload = aml.get(i + 1..i + 5)?;
+    if payload.len() != 4 {
         return None;
     }
-    Some(u32::from_le_bytes([
-        aml[i + 1],
-        aml[i + 2],
-        aml[i + 3],
-        aml[i + 4],
-    ]))
+    
+    Some(u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]))
 }
 
 /// Scan the DSDT AML for `_PSS` package entries.
@@ -210,7 +213,7 @@ unsafe fn scan_pss(aml: &[u8]) {
         break; // only parse the first _PSS
     }
 
-    PSTATE_COUNT.store(found as u8, Ordering::Relaxed);
+    PSTATE_COUNT.store(found as u8, Ordering::Release);
     if found > 0 {
         println!("acpi/cpufreq: {} P-states discovered", found);
         let table = PSTATE_TABLE.get().unwrap();
@@ -228,10 +231,10 @@ unsafe fn scan_ppc(aml: &[u8]) {
     let marker = *b"_PPC";
     let mut i = 0usize;
     while i + 7 < aml.len() {
-        if aml[i..i + 4] == marker {
+        if aml.get(i..i + 4) == Some(&marker[..]) {
             // _PPC typically returns a byte integer: 0x0A <value>.
-            if aml[i + 4] == 0x0A {
-                MAX_ALLOWED.store(aml[i + 5], Ordering::Relaxed);
+            if i + 5 < aml.len() && aml[i + 4] == 0x0A {
+                MAX_ALLOWED.store(aml[i + 5], Ordering::Release);
                 println!("acpi/cpufreq: _PPC = {}", aml[i + 5]);
             }
             return;
@@ -242,55 +245,57 @@ unsafe fn scan_ppc(aml: &[u8]) {
 
 /// Parse the DSDT for P-state tables.
 ///
-/// Must be called after `super::init()` and `super::power::parse_dsdt()`.
+/// # Safety
+/// - Must be called after `super::init()` and `super::power::parse_dsdt()`
+/// - Must complete before SMP initialization (writes to static P-state table)
+///
+/// # Errors
+/// Returns silently if DSDT is not found or malformed.
 pub unsafe fn init() {
-    let fadt = match super::find_table(b"FACP") {
-        Some(p) => p,
+    // Use the shared helper to get DSDT AML with proper validation
+    let aml = match super::get_dsdt_aml() {
+        Some(a) => a,
         None => {
-            println!("acpi/cpufreq: FADT not found");
+            println!("acpi/cpufreq: DSDT not found or invalid");
             return;
         },
     };
-
-    // FADT offset 40 = 32-bit DSDT phys address.
-    let base = fadt as *const u8;
-    let dsdt_phys = (base.add(40) as *const u32).read_unaligned() as usize;
-    if dsdt_phys == 0 {
-        return;
-    }
-    let dsdt = &*(dsdt_phys as *const SdtHeader);
-    if &dsdt.sig != b"DSDT" {
-        return;
-    }
-
-    let aml_off = core::mem::size_of::<SdtHeader>();
-    let aml_len = (dsdt.len as usize).saturating_sub(aml_off);
-    let aml = core::slice::from_raw_parts((dsdt_phys + aml_off) as *const u8, aml_len);
 
     scan_pss(aml);
     scan_ppc(aml);
 
     // Default to the highest-performance state.
-    if PSTATE_COUNT.load(Ordering::Relaxed) > 0 {
+    if PSTATE_COUNT.load(Ordering::Acquire) > 0 {
         let _ = set_pstate(0);
     }
 }
 
 /// Return a copy of all discovered P-states.
+///
+/// # Panics
+/// Panics if called before `init()` has initialized the P-state table.
 pub fn pstates() -> &'static [Pstate] {
-    let n = PSTATE_COUNT.load(Ordering::Relaxed) as usize;
+    let n = PSTATE_COUNT.load(Ordering::Acquire) as usize;
     // SAFETY: PSTATE_TABLE is only written during `init()` before any CPU
-    // goes multi-threaded; reads afterwards are safe.
+    // goes multi-threaded; reads afterwards are safe with Acquire ordering.
     unsafe { &PSTATE_TABLE[..n] }
 }
 
 /// Request P-state `index` (0 = highest performance).
 ///
-/// Returns `Err` if the index is out of range or beyond `_PPC` limit.
+/// # Safety
+/// - Must be called after `init()` has initialized the P-state table
+/// - On x86_64, requires CPU support for MSR writes
+///
+/// # Errors
+/// Returns `Err` if:
+/// - No P-states are available
+/// - Index is out of range
+/// - Index exceeds `_PPC` platform limit
 #[cfg(target_arch = "x86_64")]
 pub fn set_pstate(index: usize) -> Result<(), &'static str> {
-    let count = PSTATE_COUNT.load(Ordering::Relaxed) as usize;
-    let ppc = MAX_ALLOWED.load(Ordering::Relaxed) as usize;
+    let count = PSTATE_COUNT.load(Ordering::Acquire) as usize;
+    let ppc = MAX_ALLOWED.load(Ordering::Acquire) as usize;
 
     if count == 0 {
         return Err("no P-states available");
@@ -302,13 +307,13 @@ pub fn set_pstate(index: usize) -> Result<(), &'static str> {
         return Err("P-state exceeds _PPC limit");
     }
 
-    let ctrl = unsafe { PSTATE_TABLE[index].control } as u64;
+    let ctrl = unsafe { PSTATE_TABLE.get(index).ok_or("P-state index out of bounds")?.control } as u64;
     unsafe {
         wrmsr(IA32_PERF_CTL, ctrl);
     }
-    CURRENT_PSTATE.store(index as u8, Ordering::Relaxed);
+    CURRENT_PSTATE.store(index as u8, Ordering::Release);
     println!("acpi/cpufreq: → P{}  {} MHz", index, unsafe {
-        PSTATE_TABLE[index].freq_mhz
+        PSTATE_TABLE.get(index).unwrap().freq_mhz
     });
     Ok(())
 }
@@ -320,7 +325,7 @@ pub fn set_pstate(_index: usize) -> Result<(), &'static str> {
 
 /// Return the current P-state index.
 pub fn current_pstate() -> usize {
-    CURRENT_PSTATE.load(Ordering::Relaxed) as usize
+    CURRENT_PSTATE.load(Ordering::Acquire) as usize
 }
 
 /// Read back the current performance status from the hardware.

@@ -108,20 +108,21 @@ pub unsafe fn parse_fadt() -> Result<(), &'static str> {
     }
 
     let half = (evt_len / 2) as u16;
-    PM1A_STS.store(pm1a_evt as u16, Ordering::Relaxed);
-    PM1A_EN.store((pm1a_evt as u16).wrapping_add(half), Ordering::Relaxed);
-    PM1A_CNT.store(pm1a_cnt as u16, Ordering::Relaxed);
+    // Use Release ordering to ensure prior writes are visible before ports are used
+    PM1A_STS.store(pm1a_evt as u16, Ordering::Release);
+    PM1A_EN.store((pm1a_evt as u16).wrapping_add(half), Ordering::Release);
+    PM1A_CNT.store(pm1a_cnt as u16, Ordering::Release);
 
     if pm1b_evt != 0 {
-        PM1B_STS.store(pm1b_evt as u16, Ordering::Relaxed);
-        PM1B_EN.store((pm1b_evt as u16).wrapping_add(half), Ordering::Relaxed);
+        PM1B_STS.store(pm1b_evt as u16, Ordering::Release);
+        PM1B_EN.store((pm1b_evt as u16).wrapping_add(half), Ordering::Release);
     }
     if pm1b_cnt != 0 {
-        PM1B_CNT.store(pm1b_cnt as u16, Ordering::Relaxed);
+        PM1B_CNT.store(pm1b_cnt as u16, Ordering::Release);
     }
 
     let vector = (sci_irq as u8).wrapping_add(32);
-    SCI_VECTOR.store(vector, Ordering::Relaxed);
+    SCI_VECTOR.store(vector, Ordering::Release);
 
     let cnt = inw(PM1A_CNT.load(Ordering::Relaxed));
     if cnt & PM1_CNT_SCI_EN == 0 && smi_cmd != 0 && acpi_enable != 0 {
@@ -139,15 +140,27 @@ pub unsafe fn parse_fadt() -> Result<(), &'static str> {
     Ok(())
 }
 
+/// Scan AML for `_S5_` sleep state object and extract SLP_TYP values.
+///
+/// # Safety
+/// - `aml` must be a valid DSDT AML bytecode stream
+/// - Caller must ensure bounds are checked before array access
 unsafe fn scan_s5(aml: &[u8]) {
     let name = *b"_S5_";
     let mut i = 0;
+    
+    // Use .get() for bounds-safe iteration
     while i + 10 < aml.len() {
-        if aml[i..i + 4] == name {
+        // Bounds-safe slice comparison
+        if aml.get(i..i + 4) == Some(&name[..]) {
             let op = aml[i + 4];
+            // Check we have enough bytes remaining
+            if i + 10 >= aml.len() {
+                break;
+            }
             if (op == 0x12 || op == 0x10) && aml[i + 7] == 0x0A && aml[i + 9] == 0x0A {
-                SLP_TYP_A[5].store(aml[i + 8], Ordering::Relaxed);
-                SLP_TYP_B[5].store(aml[i + 10], Ordering::Relaxed);
+                SLP_TYP_A[5].store(aml[i + 8], Ordering::Release);
+                SLP_TYP_B[5].store(aml[i + 10], Ordering::Release);
                 break;
             }
         }
@@ -156,27 +169,13 @@ unsafe fn scan_s5(aml: &[u8]) {
 }
 
 pub unsafe fn parse_dsdt() -> Result<(), &'static str> {
-    let fadt = super::find_table(b"FACP").ok_or("FADT absent")?;
-    if (*fadt).len < 44 {
-        return Err("FADT too short for DSDT pointer");
-    }
-
-    let base = fadt as *const u8;
-    let dsdt_phys = fadt_u32(base, FADT_OFF_DSDT) as usize;
-    if dsdt_phys == 0 {
-        return Err("null DSDT");
-    }
-
-    let dsdt = &*(dsdt_phys as *const SdtHeader);
-    if &dsdt.sig != b"DSDT" {
-        return Err("bad DSDT signature");
-    }
-
-    let aml_start = dsdt_phys + core::mem::size_of::<SdtHeader>();
-    let aml_len = (dsdt.len as usize).saturating_sub(core::mem::size_of::<SdtHeader>());
-    let aml = core::slice::from_raw_parts(aml_start as *const u8, aml_len);
+    // Use the shared helper to get DSDT AML
+    let aml = match super::get_dsdt_aml() {
+        Some(a) => a,
+        None => return Err("DSDT not found or invalid"),
+    };
+    
     scan_s5(aml);
-
     Ok(())
 }
 

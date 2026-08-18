@@ -112,19 +112,12 @@ pub unsafe fn init() {
 
 /// Scan the DSDT for a PCIe root bridge and the associated GPE method to
 /// identify the correct hot-plug GPE bit index.
+///
+/// # Safety
+/// - Must be called after `super::init()` has initialized ACPI
 unsafe fn discover_hotplug_gpe_bit() -> Option<u8> {
-    let fadt = super::find_table(b"FACP")? as *const u8;
-    let dsdt_phys = (fadt.add(40) as *const u32).read_unaligned() as usize;
-    if dsdt_phys == 0 {
-        return None;
-    }
-    let dsdt = &*(dsdt_phys as *const super::SdtHeader);
-    if &dsdt.sig != b"DSDT" {
-        return None;
-    }
-    let off = core::mem::size_of::<super::SdtHeader>();
-    let len = (dsdt.len as usize).saturating_sub(off);
-    let aml = core::slice::from_raw_parts((dsdt_phys + off) as *const u8, len);
+    // Use the shared helper to get DSDT AML with proper validation
+    let aml = super::get_dsdt_aml()?;
 
     // Look for `_L01` or `_E01` (level/edge GPE method, bit 1) near a PCI HID.
     for marker in [b"_L01", b"_E01", b"_L03", b"_E03"] {
