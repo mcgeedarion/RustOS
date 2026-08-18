@@ -3,7 +3,7 @@
 *.o
 *.obj
 *.a
-*.lib
+*.so
 *.dll
 *.so
 *.dylib
@@ -17,18 +17,20 @@ target/
 # Logs and temp files
 *.log
 *.tmp
-*.swp
 
 # Editors
 .vscode/
 .idea/
+*.swp
+*.swo
 
 # Coverage
 coverage/
 htmlcov/
 .coverage
 
-# Rust-specific
-Cargo.lock
-**/*.rs.bk
+# Environment
+.env
+.env.local
+.env.*
 ```
