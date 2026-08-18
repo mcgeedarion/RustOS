@@ -23,7 +23,9 @@
 #include <linux/filter.h>
 #include <linux/audit.h>
 #if defined(__has_include)
-#  if __has_include(<linux/drm.h>)
+#  if __has_include(<libdrm/drm.h>)
+#    include <libdrm/drm.h>
+#  elif __has_include(<linux/drm.h>)
 #    include <linux/drm.h>
 #  elif __has_include(<drm/drm.h>)
 #    include <drm/drm.h>
@@ -31,7 +33,11 @@
 #    error "DRM headers are required"
 #  endif
 #else
-#  include <linux/drm.h>
+#  if defined(__linux__)
+#    include <libdrm/drm.h>
+#  else
+#    include <linux/drm.h>
+#  endif
 #endif
 
 #include "protocol.h"
@@ -282,6 +288,19 @@ struct Client_s {
     XdgSurface    xdg_surfaces[MAX_XDG_SURFACES];
     XdgToplevel   xdg_toplevels[MAX_XDG_TOPLEVELS];
 };
+
+/* Forward declarations for functions defined in compositor.c */
+static uint32_t next_serial(void);
+static void post_error(Client *c, uint32_t bad_obj, uint32_t code, const char *msg);
+static int require_len(Client *c, uint32_t obj, uint16_t op, uint16_t dlen, uint16_t need);
+static int valid_layer(uint32_t layer);
+static int object_id_exists(Client *c, uint32_t id);
+static int valid_new_id(Client *c, uint32_t new_id);
+static int require_new_id(Client *c, uint32_t obj, uint32_t new_id);
+static void send_delete_id(Client *c, uint32_t id);
+static Surface *find_surface(Client *c, uint32_t id);
+static WlBuffer *find_buffer(Client *c, uint32_t id);
+static XdgToplevel *find_xdg_toplevel_for_surface(Client *c, Surface *s);
 
 extern Client clients_storage[MAX_CLIENTS];
 extern CompositorState g;

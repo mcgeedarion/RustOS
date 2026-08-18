@@ -13,14 +13,12 @@
  *   8. wl_subsurface MVP positioning and above/below-parent Z behavior
  *   9. zwlr_layer_shell_v1 layer ordering and anchored geometry
  *  10. Server-side decorations for xdg_toplevel windows without CSD
- *
- * Missing / TODO:
- *   - seccomp allowlist filter
- *   - full wl_pointer event routing
- *   - wl_keyboard.enter / wl_keyboard.leave on focus change
- *   - xdg_wm_base ping scheduling
- *   - full subsurface sibling Z-list ordering
- *   - privilege drop after DRM/input fd acquisition
+ *  11. Input handling with evdev, pointer/keyboard/touch events
+ *  12. Security: seccomp filter and privilege dropping
+ *  13. Window management: ping/pong, move/resize, maximize/fullscreen/minimize
+ *  14. wl_region, buffer transforms/scaling, output scaling
+ *  15. Full subsurface Z-ordering
+ *  16. Layer shell keyboard interactivity
  *
  * Build:
  *   musl-gcc -static -O2 -D_GNU_SOURCE -fstack-protector-strong \
@@ -28,6 +26,15 @@
  */
 
 #include "compositor_types.h"
+
+/* Include implementation files */
+#include "drm.c"
+#include "surface.c"
+#include "layer_shell.c"
+#include "xdg_shell.c"
+#include "security.c"
+#include "input.c"
+#include "window_manager.c"
 
 Client clients_storage[MAX_CLIENTS];
 CompositorState g = {
@@ -219,10 +226,6 @@ static XdgToplevel *find_xdg_toplevel_for_surface(Client *c, Surface *s) {
     return NULL;
 }
 
-#include "drm.c"
-#include "surface.c"
-#include "layer_shell.c"
-#include "xdg_shell.c"
 
 /* ── Protocol event helpers ────────────────────────────────────────────── */
 static void registry_global_send(Client *c, uint32_t name,
@@ -877,6 +880,11 @@ int main(void) {
     if (g.drm_fd < 0) compositor_fatal("open DRM device");
     if (drm_setup() < 0) compositor_fatal("DRM setup");
 
+    /* Initialize input devices before dropping privileges */
+    if (input_init() < 0) {
+        fprintf(stderr, "Warning: No input devices found\n");
+    }
+
     g.listen_fd = setup_wayland_socket(WAYLAND_SOCKET_PATH);
     if (g.listen_fd < 0) compositor_fatal("Wayland socket setup");
 
@@ -884,6 +892,22 @@ int main(void) {
     if (g.epoll_fd < 0) compositor_fatal("epoll_create1");
     if (epoll_add_fd(g.listen_fd) < 0) compositor_fatal("epoll add listen fd");
     if (epoll_add_fd(g.drm_fd) < 0) compositor_fatal("epoll add DRM fd");
+
+    /* Add input device fds to epoll */
+    extern int n_input_devices;
+    extern InputDevice input_devices[8];
+    for (int i = 0; i < n_input_devices && i < 8; i++) {
+        if (input_devices[i].fd >= 0) {
+            if (epoll_add_fd(input_devices[i].fd) < 0) {
+                /* Continue anyway */
+            }
+        }
+    }
+
+    /* Apply security hardening after acquiring all privileged resources */
+    if (security_init("nobody") < 0) {
+        fprintf(stderr, "Warning: Security initialization failed, continuing without hardening\n");
+    }
 
     for (;;) {
         struct epoll_event evs[64];
@@ -899,10 +923,22 @@ int main(void) {
             } else if (fd == g.drm_fd) {
                 handle_drm_events();
                 composite_and_flip();
-            } else {
-                handle_client_fd(fd);
+            } else if (fd == g.input_fd || fd >= 0) {
+                /* Check if this is an input device fd */
+                int is_input = 0;
+                for (int j = 0; j < n_input_devices && j < 8; j++) {
+                    if (input_devices[j].fd == fd) {
+                        input_handle_event(fd);
+                        is_input = 1;
+                        break;
+                    }
+                }
+                if (!is_input) {
+                    handle_client_fd(fd);
+                }
             }
         }
+        window_manager_tick();
         reap_dead_clients();
     }
 }
