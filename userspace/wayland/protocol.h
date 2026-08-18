@@ -118,6 +118,17 @@
 #define WL_POINTER_EVT_MOTION           2u
 #define WL_POINTER_EVT_BUTTON           3u
 #define WL_POINTER_EVT_AXIS             4u
+#define WL_POINTER_AXIS_VERTICAL_SCROLL 0u
+#define WL_POINTER_AXIS_HORIZONTAL_SCROLL 1u
+
+/* ── wl_touch ────────────────────────────────────────────────────────────── */
+#define WL_TOUCH_VERSION                5u
+#define WL_TOUCH_REQ_DESTROY            0u
+#define WL_TOUCH_EVT_DOWN               0u
+#define WL_TOUCH_EVT_UP                 1u
+#define WL_TOUCH_EVT_MOTION             2u
+#define WL_TOUCH_EVT_FRAME              3u
+#define WL_TOUCH_EVT_CANCEL             4u
 
 /* ── wl_output ───────────────────────────────────────────────────────────── */
 #define WL_OUTPUT_VERSION               3u
