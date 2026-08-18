@@ -62,17 +62,24 @@ static BIF_TECH: AtomicU32 = AtomicU32::new(0);
 
 static BATTERY_PRESENT: AtomicBool = AtomicBool::new(false);
 
+/// Extract a DWORD from AML stream at `i` after an 0x0C (DWordPrefix).
+///
+/// # Safety
+/// Caller must ensure `i` is within bounds of `aml`.
 unsafe fn read_dword(aml: &[u8], i: usize) -> Option<u32> {
     // AML DWordPrefix = 0x0C followed by LE u32.
-    if *aml.get(i)? != 0x0Cu8 || i + 5 > aml.len() {
+    // Use .get() for bounds-safe access
+    if *aml.get(i)? != 0x0C {
         return None;
     }
-    Some(u32::from_le_bytes([
-        aml[i + 1],
-        aml[i + 2],
-        aml[i + 3],
-        aml[i + 4],
-    ]))
+    
+    // Check bounds for the 4-byte payload
+    let payload = aml.get(i + 1..i + 5)?;
+    if payload.len() != 4 {
+        return None;
+    }
+    
+    Some(u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]))
 }
 
 /// Scan AML for `_BIF` and populate the BIF atomics.
@@ -113,12 +120,13 @@ unsafe fn scan_bif(aml: &[u8]) {
             i += 1;
             continue;
         }
-        BIF_UNIT.store(vals[0], Ordering::Relaxed);
-        BIF_DESIGN.store(vals[1], Ordering::Relaxed);
-        BIF_LAST.store(vals[2], Ordering::Relaxed);
-        BIF_TECH.store(vals[3], Ordering::Relaxed);
-        BIF_VOLTAGE.store(vals[4], Ordering::Relaxed);
-        BATTERY_PRESENT.store(true, Ordering::Relaxed);
+        // Use Release ordering to ensure prior writes are visible
+        BIF_UNIT.store(vals[0], Ordering::Release);
+        BIF_DESIGN.store(vals[1], Ordering::Release);
+        BIF_LAST.store(vals[2], Ordering::Release);
+        BIF_TECH.store(vals[3], Ordering::Release);
+        BIF_VOLTAGE.store(vals[4], Ordering::Release);
+        BATTERY_PRESENT.store(true, Ordering::Release);
         println!(
             "acpi/battery: design={}  last_full={}  voltage={}mV  unit={}",
             vals[1],
@@ -166,10 +174,11 @@ unsafe fn scan_bst(aml: &[u8]) {
             i += 1;
             continue;
         }
-        BST_STATE.store(vals[0], Ordering::Relaxed);
-        BST_RATE.store(vals[1], Ordering::Relaxed);
-        BST_REMAIN.store(vals[2], Ordering::Relaxed);
-        BST_VOLTAGE.store(vals[3], Ordering::Relaxed);
+        // Use Release ordering to ensure prior writes are visible
+        BST_STATE.store(vals[0], Ordering::Release);
+        BST_RATE.store(vals[1], Ordering::Release);
+        BST_REMAIN.store(vals[2], Ordering::Release);
+        BST_VOLTAGE.store(vals[3], Ordering::Release);
         let pct = if BIF_LAST.load(Ordering::Relaxed) > 0 {
             vals[2] * 100 / BIF_LAST.load(Ordering::Relaxed)
         } else {
@@ -184,72 +193,59 @@ unsafe fn scan_bst(aml: &[u8]) {
 }
 
 /// Discover battery and parse initial `_BIF`/`_BST`.
+///
+/// # Safety
+/// - Must be called after `super::init()` during single-threaded boot
+/// - Must complete before SMP initialization
 pub unsafe fn init() {
-    let fadt = match super::find_table(b"FACP") {
-        Some(p) => p,
+    // Use the shared helper to get DSDT AML with proper validation
+    let aml = match super::get_dsdt_aml() {
+        Some(a) => a,
         None => return,
     };
-    let base = fadt as *const u8;
-    let dsdt_phys = (base.add(40) as *const u32).read_unaligned() as usize;
-    if dsdt_phys == 0 {
-        return;
-    }
-    let dsdt = &*(dsdt_phys as *const SdtHeader);
-    if &dsdt.sig != b"DSDT" {
-        return;
-    }
-    let aml_off = core::mem::size_of::<SdtHeader>();
-    let aml_len = (dsdt.len as usize).saturating_sub(aml_off);
-    let aml = core::slice::from_raw_parts((dsdt_phys + aml_off) as *const u8, aml_len);
+    
     scan_bif(aml);
     scan_bst(aml);
 }
 
 /// Called from the ACPI Notify handler when the battery device emits 0x80.
 /// Re-scans `_BST` to refresh the dynamic state.
+///
+/// # Safety
+/// - Must be called after `init()` has initialized the battery subsystem
 pub unsafe fn update() {
-    let fadt = match super::find_table(b"FACP") {
-        Some(p) => p,
+    // Use the shared helper to get DSDT AML with proper validation
+    let aml = match super::get_dsdt_aml() {
+        Some(a) => a,
         None => return,
     };
-    let base = fadt as *const u8;
-    let dsdt_phys = (base.add(40) as *const u32).read_unaligned() as usize;
-    if dsdt_phys == 0 {
-        return;
-    }
-    let dsdt = &*(dsdt_phys as *const SdtHeader);
-    if &dsdt.sig != b"DSDT" {
-        return;
-    }
-    let aml_off = core::mem::size_of::<SdtHeader>();
-    let aml_len = (dsdt.len as usize).saturating_sub(aml_off);
-    let aml = core::slice::from_raw_parts((dsdt_phys + aml_off) as *const u8, aml_len);
+    
     scan_bst(aml);
 }
 
 /// Returns `true` if a battery was found in the DSDT.
 pub fn is_present() -> bool {
-    BATTERY_PRESENT.load(Ordering::Relaxed)
+    BATTERY_PRESENT.load(Ordering::Acquire)
 }
 
 /// Snapshot of the last-known battery status.
 pub fn status() -> BatteryStatus {
     BatteryStatus {
-        state: BST_STATE.load(Ordering::Relaxed),
-        present_rate: BST_RATE.load(Ordering::Relaxed),
-        remaining_capacity: BST_REMAIN.load(Ordering::Relaxed),
-        present_voltage: BST_VOLTAGE.load(Ordering::Relaxed),
+        state: BST_STATE.load(Ordering::Acquire),
+        present_rate: BST_RATE.load(Ordering::Acquire),
+        remaining_capacity: BST_REMAIN.load(Ordering::Acquire),
+        present_voltage: BST_VOLTAGE.load(Ordering::Acquire),
     }
 }
 
 /// Snapshot of the static battery information.
 pub fn info() -> BatteryInfo {
     BatteryInfo {
-        power_unit: BIF_UNIT.load(Ordering::Relaxed),
-        design_capacity: BIF_DESIGN.load(Ordering::Relaxed),
-        last_full_capacity: BIF_LAST.load(Ordering::Relaxed),
-        battery_technology: BIF_TECH.load(Ordering::Relaxed),
-        design_voltage_mv: BIF_VOLTAGE.load(Ordering::Relaxed),
+        power_unit: BIF_UNIT.load(Ordering::Acquire),
+        design_capacity: BIF_DESIGN.load(Ordering::Acquire),
+        last_full_capacity: BIF_LAST.load(Ordering::Acquire),
+        battery_technology: BIF_TECH.load(Ordering::Acquire),
+        design_voltage_mv: BIF_VOLTAGE.load(Ordering::Acquire),
         warning_capacity: 0,
         low_capacity: 0,
         capacity_granularity1: 0,
@@ -259,8 +255,8 @@ pub fn info() -> BatteryInfo {
 
 /// Charge percentage, 0–100.  Returns `None` if capacity is unknown.
 pub fn charge_percent() -> Option<u32> {
-    let last = BIF_LAST.load(Ordering::Relaxed);
-    let rem = BST_REMAIN.load(Ordering::Relaxed);
+    let last = BIF_LAST.load(Ordering::Acquire);
+    let rem = BST_REMAIN.load(Ordering::Acquire);
     if last == 0 || last == 0xFFFF_FFFF || rem == 0xFFFF_FFFF {
         return None;
     }

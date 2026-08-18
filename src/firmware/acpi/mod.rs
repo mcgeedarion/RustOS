@@ -381,6 +381,89 @@ pub fn pcie_ecam_base() -> Option<u64> {
     mcfg_base().map(|b| b as u64)
 }
 
+/// Get the DSDT table from the FADT.
+///
+/// This is a helper function to avoid code duplication across multiple modules
+/// (power, cpufreq, battery, hotplug).
+///
+/// # Safety
+/// - Must be called after `init()` has successfully initialized ACPI
+/// - The returned pointer is valid for the lifetime of the system
+///
+/// # Returns
+/// `Some(&SdtHeader)` if DSDT is found and valid, `None` otherwise
+pub unsafe fn get_dsdt() -> Option<&'static SdtHeader> {
+    let fadt = find_table(b"FACP")?;
+    
+    // Validate FADT length before accessing DSDT pointer
+    if (*fadt).len < 44 {
+        println!("acpi: FADT too short for DSDT pointer");
+        return None;
+    }
+    
+    let base = fadt as *const u8;
+    let dsdt_phys = (base.add(40) as *const u32).read_unaligned() as usize;
+    
+    if dsdt_phys == 0 {
+        return None;
+    }
+    
+    // Validate DSDT physical address
+    if !is_valid_physical_address(dsdt_phys, size_of::<SdtHeader>()) {
+        println!("acpi: DSDT at invalid physical address {:#x}", dsdt_phys);
+        return None;
+    }
+    
+    let dsdt = &*(dsdt_phys as *const SdtHeader);
+    if &dsdt.sig != b"DSDT" {
+        return None;
+    }
+    
+    Some(dsdt)
+}
+
+/// Get the AML bytecode stream from a DSDT table.
+///
+/// # Safety
+/// - Must be called after `init()` has successfully initialized ACPI
+/// - The returned slice is valid for the lifetime of the system
+///
+/// # Arguments
+/// * `dsdt` - Pointer to the DSDT header
+///
+/// # Returns
+/// A slice containing the AML bytecode, or `None` if the table is invalid
+pub unsafe fn get_aml_from_dsdt(dsdt: &'static SdtHeader) -> Option<&'static [u8]> {
+    if dsdt.len < size_of::<SdtHeader>() as u32 {
+        return None;
+    }
+    
+    let aml_off = size_of::<SdtHeader>();
+    let aml_len = (dsdt.len as usize).saturating_sub(aml_off);
+    
+    if aml_len == 0 {
+        return None;
+    }
+    
+    let aml_start = (dsdt as *const SdtHeader as usize) + aml_off;
+    
+    // Validate the AML region
+    if !is_valid_physical_address(aml_start, aml_len) {
+        return None;
+    }
+    
+    Some(core::slice::from_raw_parts(aml_start as *const u8, aml_len))
+}
+
+/// Convenience wrapper to get DSDT AML bytecode.
+///
+/// # Safety
+/// - Must be called after `init()` has successfully initialized ACPI
+pub unsafe fn get_dsdt_aml() -> Option<&'static [u8]> {
+    let dsdt = get_dsdt()?;
+    get_aml_from_dsdt(dsdt)
+}
+
 /// Convenience: initialise all ACPI sub-systems after the RSDP has been found.
 ///
 /// Call order:
