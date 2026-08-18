@@ -57,14 +57,18 @@ static int drm_alloc_buf(DrmBuf *b, uint32_t w, uint32_t h, uint32_t expected_st
 
 static int drm_setup(void) {
     struct drm_mode_card_res res = {0};
-    if (ioctl(g.drm_fd, DRM_IOCTL_MODE_GETRESOURCES, &res) < 0) return -1;
+    int ret;
+    
+    ret = ioctl(g.drm_fd, DRM_IOCTL_MODE_GETRESOURCES, &res);
+    if (ret < 0) return -1;
 
     uint32_t conn_ids[8] = {0}, crtc_ids[8] = {0};
     res.connector_id_ptr = (uintptr_t)conn_ids;
     res.crtc_id_ptr      = (uintptr_t)crtc_ids;
     res.count_connectors = res.count_connectors < 8 ? res.count_connectors : 8;
     res.count_crtcs      = res.count_crtcs      < 8 ? res.count_crtcs      : 8;
-    if (ioctl(g.drm_fd, DRM_IOCTL_MODE_GETRESOURCES, &res) < 0) return -1;
+    ret = ioctl(g.drm_fd, DRM_IOCTL_MODE_GETRESOURCES, &res);
+    if (ret < 0) return -1;
     if (res.count_connectors == 0 || res.count_crtcs == 0) return -1;
 
     struct drm_mode_get_connector conn = {0};
@@ -72,7 +76,8 @@ static int drm_setup(void) {
     for (uint32_t i = 0; i < res.count_connectors; i++) {
         memset(&conn, 0, sizeof(conn));
         conn.connector_id = conn_ids[i];
-        if (ioctl(g.drm_fd, DRM_IOCTL_MODE_GETCONNECTOR, &conn) < 0) continue;
+        ret = ioctl(g.drm_fd, DRM_IOCTL_MODE_GETCONNECTOR, &conn);
+        if (ret < 0) continue;
         if (conn.connection == DRM_MODE_CONNECTED && conn.count_modes > 0) {
             connector_id = conn_ids[i];
             break;
@@ -85,7 +90,8 @@ static int drm_setup(void) {
     conn.connector_id = connector_id;
     conn.modes_ptr   = (uintptr_t)modes;
     conn.count_modes = 4;
-    if (ioctl(g.drm_fd, DRM_IOCTL_MODE_GETCONNECTOR, &conn) < 0) return -1;
+    ret = ioctl(g.drm_fd, DRM_IOCTL_MODE_GETCONNECTOR, &conn);
+    if (ret < 0) return -1;
     if (conn.count_modes == 0) return -1;
 
     g.screen_width    = modes[0].hdisplay;
@@ -106,7 +112,8 @@ static int drm_setup(void) {
         .mode               = modes[0],
         .mode_valid         = 1,
     };
-    if (ioctl(g.drm_fd, DRM_IOCTL_MODE_SETCRTC, &crtc) < 0) {
+    ret = ioctl(g.drm_fd, DRM_IOCTL_MODE_SETCRTC, &crtc);
+    if (ret < 0) {
         drm_destroy_buf(&g.fb[1]);
         drm_destroy_buf(&g.fb[0]);
         return -1;

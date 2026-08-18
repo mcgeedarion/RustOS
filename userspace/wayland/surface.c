@@ -5,6 +5,7 @@ static inline void damage_add(int32_t x, int32_t y, int32_t w, int32_t h) {
     if (g.full_damage) return;
     if (x < 0) { w += x; x = 0; }
     if (y < 0) { h += y; y = 0; }
+    if (w <= 0 || h <= 0) return;
     if (x + w > (int32_t)g.screen_width)  w = (int32_t)g.screen_width  - x;
     if (y + h > (int32_t)g.screen_height) h = (int32_t)g.screen_height - y;
     if (w <= 0 || h <= 0) return;
@@ -34,6 +35,10 @@ static void mark_surface_damage(Surface *s, int32_t x, int32_t y, int32_t w, int
             .w = s->blit_w > 0 ? s->blit_w : (int32_t)g.screen_width,
             .h = s->blit_h > 0 ? s->blit_h : (int32_t)g.screen_height,
         };
+        return;
+    }
+    /* Validate dimensions to prevent integer overflow */
+    if (x < 0 || y < 0 || w > (int32_t)g.screen_width || h > (int32_t)g.screen_height) {
         return;
     }
     s->damage[s->n_damage++] = (Rect){x, y, w, h};

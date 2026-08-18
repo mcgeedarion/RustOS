@@ -120,7 +120,8 @@ static int find_exe(const char *cmd, char *out, int out_len)
 static void builtin_pwd(void)
 {
     char cwd[CWD_MAX];
-    if (getcwd(cwd, sizeof(cwd))) wsnl(cwd);
+    char *result = getcwd(cwd, sizeof(cwd));
+    if (result) wsnl(cwd);
     else ws2nl("shell: pwd: getcwd failed");
 }
 
@@ -210,7 +211,9 @@ int main(void)
     for (;;) {
         /* prompt */
         char cwd[CWD_MAX];
-        ws(getcwd(cwd, sizeof(cwd)) ? cwd : "?");
+        char *cwd_result = getcwd(cwd, sizeof(cwd));
+        if (cwd_result) ws(cwd_result);
+        else ws("?");
         ws(" $ ");
 
         int n = readline(line, LINE_MAX);

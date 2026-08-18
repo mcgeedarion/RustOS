@@ -3,16 +3,20 @@
 *.o
 *.obj
 *.out
-build/
-target/
+*.a
+*.so
+*.dll
+*.exe
 
 # Dependencies
-**/node_modules/
-**/.venv/
-**/venv/
-**/.env
-**/.env.*
-**/dist/
+node_modules/
+venv/
+.venv/
+__pycache__/
+.mypy_cache/
+.pytest_cache/
+target/
+.gradle/
 
 # Logs and temp files
 *.log
@@ -23,16 +27,35 @@ target/
 .vscode/
 .idea/
 
-# Rust-specific
-Cargo.lock
-**/target/
-**/*.rs.bk
-**/*.rlib
-**/*.so
-**/*.dylib
-**/*.dll
-
-# OS-specific
+# System files
 .DS_Store
 Thumbs.db
+.env
+.env.local
+*.env.*
+
+# Coverage
+coverage/
+htmlcov/
+.coverage
+
+# Compressed files
+*.zip
+*.gz
+*.tar
+*.tgz
+*.bz2
+*.xz
+*.7z
+*.rar
+*.zst
+*.lz4
+*.lzh
+*.cab
+*.arj
+*.rpm
+*.deb
+*.Z
+*.lz
+*.lzo
 ```
