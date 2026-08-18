@@ -1,9 +1,8 @@
 ```
-# Compiled and binary files
+# Compiled and build artifacts
 *.o
 *.obj
 *.a
-*.lib
 *.so
 *.dll
 *.exe
@@ -11,19 +10,25 @@
 
 # Dependencies
 target/
-Cargo.lock
+**/target/
 
 # Logs and temp files
 *.log
 *.tmp
-*.swp
 
 # Editors
 .vscode/
 .idea/
+*.swp
+*.swo
+
+# Coverage
+coverage/
+htmlcov/
+.coverage
 
 # Environment
 .env
 .env.local
-*.env.*
+.env.*
 ```
