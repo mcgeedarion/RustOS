@@ -1,17 +1,18 @@
 ```
-# Compiled and binary files
+# Compiled and build artifacts
 *.o
 *.obj
 *.a
 *.lib
-*.so
 *.dll
+*.so
+*.dylib
 *.exe
 *.out
 
 # Dependencies
 target/
-Cargo.lock
+**/target/
 
 # Logs and temp files
 *.log
@@ -22,8 +23,12 @@ Cargo.lock
 .vscode/
 .idea/
 
-# Environment
-.env
-.env.local
-*.env.*
+# Coverage
+coverage/
+htmlcov/
+.coverage
+
+# Rust-specific
+Cargo.lock
+**/*.rs.bk
 ```

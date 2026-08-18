@@ -27,7 +27,7 @@ use crate::arch::{
     Arch,
 };
 use core::fmt::Write;
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 // ---------------------------------------------------------------------------
 // Global faulting-address slot
@@ -37,6 +37,9 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 // when no TrapFrame is available (bare Rust panics).
 
 static FAULT_ADDR: AtomicUsize = AtomicUsize::new(0);
+
+/// Guard to prevent panic re-entrancy (double panic)
+static PANIC_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
 /// Record the faulting address for the next panic emission.
 /// Call this from architecture trap handlers prior to `panic!()`.
@@ -81,6 +84,17 @@ fn halt_loop() -> ! {
 #[panic_handler]
 #[cold]
 fn panic(info: &core::panic::PanicInfo) -> ! {
+    // Prevent re-entrancy (double panic) - if already panicking, just halt
+    if PANIC_IN_PROGRESS.swap(true, Ordering::SeqCst) {
+        // Double panic detected - just halt immediately to avoid corruption
+        loop {
+            #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
+            Arch::halt();
+            #[cfg(any(feature = "boot_minimal", feature = "userspace_boot"))]
+            core::hint::spin_loop();
+        }
+    }
+
     // 1. Stop all other cores and disable local interrupts.
     #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
     {
@@ -211,14 +225,25 @@ impl Write for ArchSerialWriter {
     }
 }
 
+/// Writes bytes to serial port with batching for improved performance.
+/// For large outputs, writes in chunks to prevent UART overrun.
 #[inline]
 fn serial_write(bytes: &[u8]) {
-    for &b in bytes {
-        #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
-        Arch::serial_putc(b);
-        #[cfg(any(feature = "boot_minimal", feature = "userspace_boot"))]
-        unsafe {
-            crate::arch::console::early_putchar(b);
+    // Batch serial writes in 64-byte chunks to prevent UART buffer overrun
+    for chunk in bytes.chunks(64) {
+        for &b in chunk {
+            #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
+            Arch::serial_putc(b);
+            #[cfg(any(feature = "boot_minimal", feature = "userspace_boot"))]
+            unsafe {
+                crate::arch::console::early_putchar(b);
+            }
+        }
+        // Small delay between chunks to prevent UART overrun on slow consoles
+        if bytes.len() > 64 {
+            for _ in 0..100 {
+                core::hint::spin_loop();
+            }
         }
     }
 }
