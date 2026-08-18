@@ -121,9 +121,9 @@ where
 {
     #[cfg(target_arch = "aarch64")]
     {
-        // ARM64 user access is controlled by PAN. The initial ARM64 bring-up
-        // keeps this path explicit until exception-table fault fixups land.
-        Ok(f())
+        // ARM64 user access is controlled by PAN (Privileged Access Never).
+        // Enable user access by clearing PAN bit in SCTLR_EL1, then restore it.
+        run_with_pan_disabled(f)
     }
     #[cfg(target_arch = "x86_64")]
     {
@@ -134,6 +134,45 @@ where
         let _ = f;
         Err(UaccessError::Fault)
     }
+}
+
+/// AArch64-specific helper to enable/disable PAN around user access
+#[cfg(target_arch = "aarch64")]
+#[inline]
+unsafe fn run_with_pan_disabled<F, T>(f: F) -> UaccessResult<T>
+where
+    F: FnOnce() -> T,
+{
+    // Read current SCTLR_EL1 value
+    let mut sctlr: u64;
+    core::arch::asm!(
+        "mrs {sctlr}, sctlr_el1",
+        sctlr = out(reg) sctlr,
+        options(nostack, preserves_flags),
+    );
+    
+    // Clear PAN bit (bit 22 = 0x40000) to allow user access
+    let sctlr_no_pan = sctlr & !0x40000u64;
+    if sctlr_no_pan != sctlr {
+        core::arch::asm!(
+            "msr sctlr_el1, {sctlr}",
+            "isb",
+            sctlr = in(reg) sctlr_no_pan,
+            options(nostack, preserves_flags),
+        );
+    }
+    
+    let result = f();
+    
+    // Restore original SCTLR_EL1 (re-enable PAN if it was set)
+    core::arch::asm!(
+        "msr sctlr_el1, {sctlr}",
+        "isb",
+        sctlr = in(reg) sctlr,
+        options(nostack, preserves_flags),
+    );
+    
+    Ok(result)
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -220,7 +259,25 @@ pub fn copy_from_user(dst: *mut u8, src: usize, len: usize) -> UaccessResult {
     // `run_in_user_access` wrapper converts hardware faults to EFAULT.
     unsafe {
         run_in_user_access(|| {
-            ptr::copy_nonoverlapping(src as *const u8, dst, len);
+            // Optimize for large, aligned transfers using word-sized copies
+            if len >= 8 && src % 8 == 0 && dst as usize % 8 == 0 {
+                // Copy in 8-byte chunks for better performance
+                let mut i = 0;
+                while i + 8 <= len {
+                    ptr::copy_nonoverlapping(
+                        (src + i) as *const u64,
+                        (dst.add(i)) as *mut u64,
+                        1,
+                    );
+                    i += 8;
+                }
+                // Handle remainder bytes
+                for j in i..len {
+                    *dst.add(j) = *((src + j) as *const u8);
+                }
+            } else {
+                ptr::copy_nonoverlapping(src as *const u8, dst, len);
+            }
         })
     }
 }
@@ -242,7 +299,25 @@ pub fn copy_to_user(dst: usize, src: *const u8, len: usize) -> UaccessResult {
     // SAFETY: verified range; faults become EFAULT via the access window.
     unsafe {
         run_in_user_access(|| {
-            ptr::copy_nonoverlapping(src, dst as *mut u8, len);
+            // Optimize for large, aligned transfers using word-sized copies
+            if len >= 8 && dst % 8 == 0 && src as usize % 8 == 0 {
+                // Copy in 8-byte chunks for better performance
+                let mut i = 0;
+                while i + 8 <= len {
+                    ptr::copy_nonoverlapping(
+                        (src.add(i)) as *const u64,
+                        (dst + i) as *mut u64,
+                        1,
+                    );
+                    i += 8;
+                }
+                // Handle remainder bytes
+                for j in i..len {
+                    *((dst + j) as *mut u8) = *src.add(j);
+                }
+            } else {
+                ptr::copy_nonoverlapping(src, dst as *mut u8, len);
+            }
         })
     }
 }

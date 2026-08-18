@@ -5,6 +5,8 @@
 *.a
 *.so
 *.dll
+*.so
+*.dylib
 *.exe
 *.out
 

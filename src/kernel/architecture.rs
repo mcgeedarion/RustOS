@@ -36,9 +36,16 @@ pub struct HybridKernelContract {
 /// RustOS is intentionally built as a hybrid kernel.
 pub const KERNEL_ARCHITECTURE: KernelArchitecture = KernelArchitecture::Hybrid;
 
+/// Validates that the hybrid kernel contract is properly configured.
+/// Returns `true` only when the kernel is hybrid and has non-empty in-kernel services.
+const fn validate_hybrid_contract() -> bool {
+    KERNEL_ARCHITECTURE == KernelArchitecture::Hybrid 
+    && !HYBRID_KERNEL_CONTRACT.in_kernel_services.is_empty()
+}
+
 // Fail compilation if the declared architecture ever stops satisfying the
 // hybrid-kernel contract.
-const _: () = assert!(is_hybrid_kernel());
+const _: () = assert!(validate_hybrid_contract());
 
 /// The concrete hybrid-kernel split enforced by RustOS subsystems.
 pub const HYBRID_KERNEL_CONTRACT: HybridKernelContract = HybridKernelContract {
@@ -69,8 +76,36 @@ pub const fn is_hybrid_kernel() -> bool {
 
 /// Emit a concise boot-time diagnostic so QEMU logs identify the architecture.
 pub fn log_kernel_architecture() {
+    // Early boot logging without depending on log crate being initialized
+    serial_write_early(b"RustOS Hybrid Kernel Initializing...\n");
+    
     log::info!(
         "kernel architecture: {} (core services in-kernel, drivers/services via schemes + IPC)",
         HYBRID_KERNEL_CONTRACT.name
     );
+}
+
+/// Early boot serial output for use before log subsystem is ready.
+fn serial_write_early(bytes: &[u8]) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        for &b in bytes {
+            unsafe {
+                // Write to COM1 serial port directly
+                core::arch::asm!(
+                    "outb %al, %dx",
+                    in("al") b,
+                    in("dx") 0x3F8u16,
+                    options(nostack, preserves_flags)
+                );
+            }
+        }
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        // On AArch64, rely on early console if available
+        for &b in bytes {
+            crate::arch::console::early_putchar(b);
+        }
+    }
 }
