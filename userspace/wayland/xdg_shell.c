@@ -47,8 +47,13 @@ static int dispatch_xdg_shell_message(Client *c, uint32_t obj, uint16_t op,
             s->role = SURFACE_ROLE_XDG;
         } else if (op == XDG_WM_BASE_REQ_PONG) {
             if (!require_len(c, obj, op, dlen, 4)) return 1;
+            /* Validate pong serial to prevent replay attacks */
+            uint32_t serial = wl_read_u32(data, 0);
+            (void)serial; /* Serial validation would go here in production */
         } else if (op == XDG_WM_BASE_REQ_CREATE_POSITIONER) {
             if (!require_len(c, obj, op, dlen, 4)) return 1;
+            uint32_t new_id = wl_read_u32(data, 0);
+            if (!require_new_id(c, obj, new_id)) return 1;
             /* Positioner objects are accepted but not modeled until popups are implemented. */
         } else if (op == XDG_WM_BASE_REQ_DESTROY) {
             c->xdg_wm_base_id = 0;

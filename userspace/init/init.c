@@ -96,12 +96,24 @@ static void sleep_sec(int s)
 static void fmt_env(char *buf, size_t buf_len,
                     const char *key, int val)
 {
+    if (buf_len == 0) return;
     size_t k = 0;
+    size_t key_len = 0;
+    while (key[key_len]) key_len++;
+    
+    /* Copy key */
     while (key[k] && k < buf_len - 1) { buf[k] = key[k]; k++; }
-    if (k < buf_len - 1) buf[k++] = '=';
+    if (k >= buf_len - 1) { buf[buf_len - 1] = '\0'; return; }
+    
+    /* Add '=' */
+    buf[k++] = '=';
+    
+    /* Convert value to string */
     char digits[16]; int d = 0;
     if (val == 0) { digits[d++] = '0'; }
-    else { int v = val; while (v > 0) { digits[d++] = (char)('0' + v % 10); v /= 10; } }
+    else { int v = val; while (v > 0 && d < 15) { digits[d++] = (char)('0' + v % 10); v /= 10; } }
+    
+    /* Append digits in reverse order */
     for (int r = d - 1; r >= 0 && k < buf_len - 1; r--) buf[k++] = digits[r];
     buf[k] = '\0';
 }

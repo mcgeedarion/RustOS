@@ -172,9 +172,16 @@ static int object_id_exists(Client *c, uint32_t id) {
     return 0;
 }
 
+static int valid_new_id(Client *c, uint32_t new_id) {
+    if (!new_id) return 0;
+    if (new_id == WL_DISPLAY_ID) return 0;
+    /* Check against all existing objects to prevent ID collision attacks */
+    return !object_id_exists(c, new_id);
+}
+
 static int require_new_id(Client *c, uint32_t obj, uint32_t new_id) {
-    if (!object_id_exists(c, new_id)) return 1;
-    post_error(c, obj, WL_DISPLAY_ERROR_BAD_VALUE, "new object id already exists");
+    if (valid_new_id(c, new_id)) return 1;
+    post_error(c, obj, WL_DISPLAY_ERROR_BAD_VALUE, "new object id already exists or invalid");
     return 0;
 }
 
@@ -768,7 +775,16 @@ static void parse_client_messages(Client *c) {
 
 static void handle_client_fd(int fd) {
     Client *c = find_client_by_fd(fd);
-    if (!c) return;
+    if (!c) {
+        /* Unknown client - close any received fds to prevent leaks */
+        int fds[8];
+        int nfds = 0;
+        uint8_t drain[256];
+        while (recv_with_fd(fd, drain, sizeof(drain), fds, 8, &nfds) > 0) {
+            for (int i = 0; i < nfds; i++) close(fds[i]);
+        }
+        return;
+    }
     for (;;) {
         if (c->rx_len == sizeof(c->rx)) {
             post_error(c, WL_DISPLAY_ID, WL_DISPLAY_ERROR_BAD_LENGTH, "client receive buffer full");
