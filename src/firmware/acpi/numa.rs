@@ -13,9 +13,16 @@
 //! - `MAX_NODES` proximity domains, each with a list of associated memory ranges and a bitmask of
 //!   LAPIC IDs.
 //! - A flat distance matrix indexed `[from][to]` where 10 = local access.
+//!
+//! ## Thread Safety
+//!
+//! All initialization must complete before SMP is enabled. After initialization,
+//! read-only access is safe from multiple threads.
 
 use super::SdtHeader;
 use crate::println;
+use core::sync::atomic::{AtomicUsize, Ordering};
+use spin::Once;
 
 pub const MAX_NODES: usize = 8;
 const MAX_MEM_RANGES: usize = 16;
@@ -64,38 +71,61 @@ impl NumaNode {
     }
 }
 
-static mut NODES: [NumaNode; MAX_NODES] = [NumaNode::empty(); MAX_NODES];
-static mut NODE_COUNT: usize = 0;
+/// NUMA node storage with proper synchronization.
+/// Initialized once during boot, then read-only.
+static NODES: Once<[NumaNode; MAX_NODES]> = Once::new();
+static NODE_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 /// Distance matrix: `DISTANCES[i][j]` is the relative latency from node `i`
 /// to node `j`.  Initialised to 10 (local) on the diagonal, 20 everywhere
 /// else; overwritten by `parse_slit()` when the table is present.
-static mut DISTANCES: [[u8; MAX_NODES]; MAX_NODES] = {
-    let mut d = [[20u8; MAX_NODES]; MAX_NODES];
-    let mut i = 0;
-    while i < MAX_NODES {
-        d[i][i] = SRAT_DISTANCE_LOCAL;
-        i += 1;
-    }
-    d
-};
+static DISTANCES: Once<[[u8; MAX_NODES]; MAX_NODES]> = Once::new();
+
+/// Get mutable reference to NODES array during initialization.
+/// 
+/// # Safety
+/// - Must only be called during single-threaded boot before SMP
+/// - NODES must not have been initialized yet
+unsafe fn get_nodes_mut() -> &'static mut [NumaNode; MAX_NODES] {
+    NODES.get_or_try_init(|| {
+        let mut nodes = [NumaNode::empty(); MAX_NODES];
+        Ok::<[NumaNode; MAX_NODES], ()>(nodes)
+    }).unwrap()
+}
+
+/// Get mutable reference to DISTANCES array during initialization.
+/// 
+/// # Safety
+/// - Must only be called during single-threaded boot before SMP
+/// - DISTANCES must not have been initialized yet
+unsafe fn get_distances_mut() -> &'static mut [[u8; MAX_NODES]; MAX_NODES] {
+    DISTANCES.get_or_try_init(|| {
+        let mut d = [[20u8; MAX_NODES]; MAX_NODES];
+        for i in 0..MAX_NODES {
+            d[i][i] = SRAT_DISTANCE_LOCAL;
+        }
+        Ok::<[[u8; MAX_NODES]; MAX_NODES], ()>(d)
+    }).unwrap()
+}
 
 unsafe fn node_for_domain(domain: u32) -> Option<&'static mut NumaNode> {
+    let count = NODE_COUNT.load(Ordering::Relaxed);
+    let nodes = get_nodes_mut();
+    
     // Look for existing entry.
-    for n in NODES[..NODE_COUNT].iter_mut() {
+    for n in &mut nodes[..count] {
         if n.domain == domain {
             return Some(n);
         }
     }
     // Allocate a new slot.
-    if NODE_COUNT >= MAX_NODES {
+    if count >= MAX_NODES {
         return None;
     }
-    let idx = NODE_COUNT;
-    NODE_COUNT += 1;
-    NODES[idx].domain = domain;
-    NODES[idx].present = true;
-    Some(&mut NODES[idx])
+    nodes[count].domain = domain;
+    nodes[count].present = true;
+    NODE_COUNT.store(count + 1, Ordering::Relaxed);
+    Some(&mut nodes[count])
 }
 
 #[repr(C, packed)]
@@ -137,15 +167,21 @@ struct SratX2Apic {
     _rsvd2: u32,
 }
 
+/// Parse the SRAT table to discover NUMA topology.
+///
+/// # Safety
+/// - Must be called after `super::init()` during single-threaded boot
+/// - Must complete before SMP initialization
 pub unsafe fn parse_srat() {
     let hdr = match super::find_table(b"SRAT") {
         Some(p) => p,
         None => {
             println!("acpi/numa: no SRAT — assuming single node");
             // Populate a synthetic node 0 with no memory ranges.
-            NODE_COUNT = 1;
-            NODES[0].domain = 0;
-            NODES[0].present = true;
+            let nodes = get_nodes_mut();
+            nodes[0].domain = 0;
+            nodes[0].present = true;
+            NODE_COUNT.store(1, Ordering::Relaxed);
             return;
         },
     };
@@ -243,12 +279,18 @@ pub unsafe fn parse_srat() {
         p += len;
     }
 
+    let count = NODE_COUNT.load(Ordering::Relaxed);
     println!(
         "acpi/numa: {} NUMA node(s) discovered from SRAT",
-        NODE_COUNT
+        count
     );
-    for i in 0..NODE_COUNT {
-        let n = &NODES[i];
+    
+    // Ensure NODES is initialized before reading
+    let _ = get_nodes_mut();
+    
+    let nodes = NODES.get().unwrap();
+    for i in 0..count {
+        let n = &nodes[i];
         println!(
             "  Node {}  lapic_mask={:#018x}  {} mem range(s)",
             n.domain, n.lapic_mask, n.mem_range_cnt
@@ -295,9 +337,12 @@ pub unsafe fn parse_slit() {
 
     let matrix = (hdr as usize + matrix_off) as *const u8;
     let n = locality_count.min(MAX_NODES);
+    
+    // Get mutable reference to distances during init
+    let distances = get_distances_mut();
     for i in 0..n {
         for j in 0..n {
-            DISTANCES[i][j] = *matrix.add(i * locality_count + j);
+            distances[i][j] = *matrix.add(i * locality_count + j);
         }
     }
     println!("acpi/numa: SLIT {}×{} distance matrix loaded", n, n);
@@ -322,26 +367,38 @@ pub unsafe fn init() {
 
 /// Number of discovered NUMA nodes.
 pub fn node_count() -> usize {
-    unsafe { NODE_COUNT }
+    NODE_COUNT.load(Ordering::Acquire)
 }
 
 /// Immutable reference to all discovered nodes.
+/// 
+/// # Panics
+/// Panics if called before `init()` has initialized the NUMA subsystem.
 pub fn nodes() -> &'static [NumaNode] {
-    unsafe { &NODES[..NODE_COUNT] }
+    // Ensure initialization has completed
+    let _ = NODES.get().expect("NUMA nodes not initialized");
+    let count = NODE_COUNT.load(Ordering::Acquire);
+    unsafe { 
+        core::slice::from_raw_parts(NODES.get().unwrap().as_ptr(), count)
+    }
 }
 
 /// Relative access distance from `from` to `to`.
 /// Returns 10 for local, higher values for remote.
+/// 
+/// # Panics
+/// Panics if called before `init()` has initialized the NUMA subsystem.
 pub fn distance(from: usize, to: usize) -> u8 {
     if from >= MAX_NODES || to >= MAX_NODES {
         return u8::MAX;
     }
-    unsafe { DISTANCES[from][to] }
+    let distances = DISTANCES.get().expect("NUMA distances not initialized");
+    distances[from][to]
 }
 
 /// Return the NUMA node that owns the physical address `pa`, if known.
 pub fn node_for_phys(pa: u64) -> Option<usize> {
-    let nodes = unsafe { &NODES[..NODE_COUNT] };
+    let nodes = nodes();
     for (idx, node) in nodes.iter().enumerate() {
         for r in 0..node.mem_range_cnt {
             let mr = &node.mem_ranges[r];
@@ -359,7 +416,7 @@ pub fn node_for_lapic(lapic_id: u8) -> Option<usize> {
         return None;
     }
     let mask = 1u64 << lapic_id;
-    let nodes = unsafe { &NODES[..NODE_COUNT] };
+    let nodes = nodes();
     for (idx, node) in nodes.iter().enumerate() {
         if node.lapic_mask & mask != 0 {
             return Some(idx);
