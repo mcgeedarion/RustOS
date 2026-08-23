@@ -1,0 +1,4 @@
+cargo:rerun-if-env-changed=CARGO_CFG_TARGET_ARCH
+cargo:rerun-if-env-changed=CARGO_CFG_TARGET_OS
+cargo:rerun-if-env-changed=RUSTOS_INITRAMFS
+cargo:rerun-if-env-changed=RUSTOS_INITRAMFS_FINGERPRINT

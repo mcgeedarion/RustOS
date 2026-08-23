@@ -8,6 +8,8 @@ use crate::arch::api::{
     Tlb, TrapFrame,
 };
 
+use super::serial;
+
 /// Architecture implementation marker.
 pub struct ArchImpl;
 
@@ -17,7 +19,7 @@ impl ArchInit for ArchImpl {
         unsafe {
             asm!("csrc sstatus, {bit}", bit = const 1 << 1); // Clear SIE (Supervisor Interrupt Enable)
         }
-        serial_init();
+        serial::init();
     }
 
     fn late_init() {
