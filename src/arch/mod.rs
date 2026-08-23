@@ -66,19 +66,6 @@ pub use x86_64::hal;
 ))]
 use x86_64::hal::ArchImpl;
 
-#[cfg(target_arch = "aarch64")]
-pub mod aarch64;
-#[cfg(all(
-    target_arch = "aarch64",
-    not(any(feature = "boot_minimal", feature = "userspace_boot"))
-))]
-pub use aarch64::hal;
-#[cfg(all(
-    target_arch = "aarch64",
-    not(any(feature = "boot_minimal", feature = "userspace_boot"))
-))]
-use aarch64::hal::ArchImpl;
-
 #[cfg(target_arch = "riscv64")]
 pub mod riscv64;
 #[cfg(all(
