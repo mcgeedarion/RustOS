@@ -1,6 +1,5 @@
 //! Architecture module.
 
-#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod api;
 
 pub mod time {
@@ -44,44 +43,35 @@ pub mod console {
 pub mod aarch64;
 #[cfg(all(
     target_arch = "aarch64",
-    not(any(feature = "boot_minimal", feature = "userspace_boot"))
+    not(feature = "boot_minimal")
 ))]
 pub use aarch64::hal;
-#[cfg(all(
-    target_arch = "aarch64",
-    not(any(feature = "boot_minimal", feature = "userspace_boot"))
-))]
+#[cfg(target_arch = "aarch64")]
 use aarch64::hal::ArchImpl;
 
 #[cfg(target_arch = "x86_64")]
 pub mod x86_64;
 #[cfg(all(
     target_arch = "x86_64",
-    not(any(feature = "boot_minimal", feature = "userspace_boot"))
+    not(feature = "boot_minimal")
 ))]
 pub use x86_64::hal;
-#[cfg(all(
-    target_arch = "x86_64",
-    not(any(feature = "boot_minimal", feature = "userspace_boot"))
-))]
+#[cfg(target_arch = "x86_64")]
 use x86_64::hal::ArchImpl;
 
 #[cfg(target_arch = "riscv64")]
 pub mod riscv64;
 #[cfg(all(
     target_arch = "riscv64",
-    not(any(feature = "boot_minimal", feature = "userspace_boot"))
+    not(feature = "boot_minimal")
 ))]
 pub use riscv64::hal;
-#[cfg(all(
-    target_arch = "riscv64",
-    not(any(feature = "boot_minimal", feature = "userspace_boot"))
-))]
+#[cfg(target_arch = "riscv64")]
 use riscv64::hal::ArchImpl;
 
 /// The concrete architecture implementation.
 /// Generic code uses this type alias to access all HAL traits.
-#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
+#[cfg(not(feature = "boot_minimal"))]
 pub type Arch = ArchImpl;
 
 /// Run architecture-specific boot initialisation and hand off to the scheduler

@@ -37,6 +37,8 @@
 //! 2 acceptance criterion: *"Missing /init produces a descriptive panic, not a
 //! silent hang."*
 
+use core::alloc::{GlobalAlloc, Layout};
+
 use crate::init::boot_info::BootInfo;
 use crate::mm::bump_allocator::BumpAllocator;
 

@@ -75,6 +75,12 @@ thiserror.workspace = true
 cc = "1"
 
 [features]
+# Full kernel: complete OS with all subsystems (MM, FS, Proc, Scheduler, Syscalls)
+# This is the production-ready kernel configuration that includes the full
+# memory manager, virtual filesystem, process scheduler, and syscall interface.
+# Requires UEFI boot and userspace boot infrastructure.
+full_kernel = ["uefi_boot", "userspace_boot"]
+
 # ---------------------------------------------------------------------------
 # Default: only the UEFI firmware handoff path is active for plain
 # `cargo check` / `cargo xtask build --arch x86_64` runs.

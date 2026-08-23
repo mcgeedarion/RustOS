@@ -1,1 +1,34 @@
-Nothing should be ignored based on the provided file changes, as they only include source code files (.rs files) without any build artifacts, dependencies, or temporary files.
+```
+# Rust build artifacts
+target/
+
+# Cargo registry cache
+Cargo.lock
+
+# Temporary files
+*.tmp
+*.swp
+*.swo
+
+# Logs
+*.log
+
+# Environment files
+.env
+.env.local
+*.env.*
+
+# Editor/IDE files
+.vscode/
+.idea/
+
+# Coverage reports
+coverage/
+htmlcov/
+.coverage
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+```
