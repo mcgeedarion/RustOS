@@ -1,358 +1,318 @@
-//! RISC-V 64 Sv39 page table management.
+//! RISC-V 64-bit Sv39 page table management.
 //!
-//! Sv39 uses a 3-level page table hierarchy:
-//!   PGD (L0) → PMD (L1) → PTE (L2) → page frame
+//! Layout: L2 (VPN[2]) → L1 (VPN[1]) → L0 (VPN[0]) → page frame.
+//! All tables are 4096 bytes, containing 512 8-byte entries.
 //!
-//! VA bit decomposition (39-bit virtual address):
-//!   [38:30] PGD index   (9 bits)
-//!   [29:21] PMD index   (9 bits)
-//!   [20:12] PTE index   (9 bits)
-//!   [11:0]  page offset (12 bits)
+//! VA bit decomposition (Sv39 – 39-bit virtual address):
+//!   [38:30] VPN[2]  (9 bits) — top-level page directory
+//!   [29:21] VPN[1]  (9 bits) — mid-level page directory
+//!   [20:12] VPN[0]  (9 bits) — leaf page table
+//!   [11:0]  page offset       (12 bits)
 //!
-//! PTE flag bits (RISC-V Sv39):
-//!   bit 0  V (Valid)
-//!   bit 1  R (Readable)
-//!   bit 2  W (Writable)
-//!   bit 3  X (Executable)
-//!   bit 4  U (User)
-//!   bit 5  G (Global)
-//!   bit 6  A (Accessed)
-//!   bit 7  D (Dirty)
-//!   bit 8  RSW (Reserved for software)
-//!   [63:10] PPN (Physical Page Number)
+//! PTE flag bits (RISC-V privileged spec §4.4):
+//!   bit  0  V  — Valid
+//!   bit  1  R  — Read
+//!   bit  2  W  — Write
+//!   bit  3  X  — Execute
+//!   bit  4  U  — User-accessible
+//!   bit  5  G  — Global
+//!   bit  6  A  — Accessed  (managed by hardware or software)
+//!   bit  7  D  — Dirty     (managed by hardware or software)
+//!   bit  8  SOFTWARE: Copy-on-Write marker (never set by hardware)
 //!
-//! satp register format (Sv39):
-//!   [63:60] mode (8 for Sv39)
-//!   [59:44] ASID (optional)
-//!   [43:0]  PPN of root page table (PGD)
+//! Physical Page Number (PPN) lives in PTE bits [53:10].
+//! PPN is stored *shifted right by PAGE_SHIFT*, then placed at bit 10.
+//!
+//! satp register layout (MODE = Sv39 → value 8):
+//!   [63:60] MODE (4 bits)
+//!   [59:44] ASID (16 bits)
+//!   [43:0]  PPN of root page table (44 bits)
+//!
+//! All physical addresses are identity-mapped (PA == VA) in the kernel.
+//! satp holds (MODE_SV39 | (root_ppn)) for the current address space.
 
-use core::arch::asm;
+// ── Constants ────────────────────────────────────────────────────────────────
 
-// Sv39 PTE flags
-pub const PTE_V: u64 = 1 << 0; // Valid
-pub const PTE_R: u64 = 1 << 1; // Readable
-pub const PTE_W: u64 = 1 << 2; // Writable
-pub const PTE_X: u64 = 1 << 3; // Executable
-pub const PTE_U: u64 = 1 << 4; // User
-pub const PTE_G: u64 = 1 << 5; // Global
-pub const PTE_A: u64 = 1 << 6; // Accessed
-pub const PTE_D: u64 = 1 << 7; // Dirty
-pub const PTE_COW: u64 = 1 << 8; // Software-defined CoW marker
-
-// PTE address mask (bits [53:10] for PPN, shifted to byte address)
-pub const PTE_ADDR_MASK: u64 = 0x3FFFF_FFC00; // Mask for PPN bits [53:10], aligned to 8 bytes
-
-// Page constants
 pub const PAGE_SHIFT: usize = 12;
-pub const PAGE_SIZE: usize = 4096;
-pub const PAGE_MASK: usize = 0xFFF;
+pub const PAGE_SIZE: usize = 1 << PAGE_SHIFT; // 4096
+pub const TABLE_ENTRIES: usize = 512;
 
-// Sv39 constants
-pub const SV39_MODE: usize = 8;
-pub const PGD_ENTRIES: usize = 512;
-pub const PMD_ENTRIES: usize = 512;
-pub const PTE_ENTRIES: usize = 512;
+/// Sv39 satp MODE field — enables three-level paging.
+pub const SATP_MODE_SV39: usize = 8 << 60;
 
-// Index calculation macros/functions
+/// PPN mask inside a PTE: bits [53:10] (44 bits).
+const PTE_PPN_MASK: u64 = 0x003F_FFFF_FFFF_FC00;
+
+// Public PTE flag constants (mirrors the x86_64 API surface).
+pub const PTE_VALID: u64 = 1 << 0;    // V
+pub const PTE_READ: u64 = 1 << 1;     // R
+pub const PTE_WRITE: u64 = 1 << 2;    // W
+pub const PTE_EXEC: u64 = 1 << 3;     // X
+pub const PTE_USER: u64 = 1 << 4;     // U
+pub const PTE_GLOBAL: u64 = 1 << 5;   // G
+pub const PTE_ACCESSED: u64 = 1 << 6; // A
+pub const PTE_DIRTY: u64 = 1 << 7;    // D
+pub const PTE_COW: u64 = 1 << 8;      // software-defined CoW marker
+
+// Internal shorthands.
+const VALID: u64 = PTE_VALID;
+const COW_BIT: u64 = PTE_COW;
+
+// ── satp / TLB helpers ────────────────────────────────────────────────────────
+
+/// Read the current `satp` CSR.
 #[inline]
-fn pgd_index(va: usize) -> usize {
-    (va >> 30) & 0x1FF
+pub fn current_satp() -> usize {
+    let satp: usize;
+    unsafe {
+        core::arch::asm!("csrr {}, satp", out(reg) satp, options(nostack, nomem));
+    }
+    satp
 }
 
+/// Extract the root page-table physical address from a `satp` value.
 #[inline]
-fn pmd_index(va: usize) -> usize {
-    (va >> 21) & 0x1FF
+pub fn satp_to_root_pa(satp: usize) -> usize {
+    // PPN field is bits [43:0]; PA = PPN << PAGE_SHIFT.
+    (satp & 0x0000_0FFF_FFFF_FFFF) << PAGE_SHIFT
 }
 
-#[inline]
-fn pte_index(va: usize) -> usize {
-    (va >> 12) & 0x1FF
-}
-
-/// Kernel CR3 (satp value) — captured on first call.
-pub fn kernel_cr3() -> usize {
-    static KERNEL_SATP: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+/// Kernel satp — lazily captured from the live CSR on the first call.
+pub fn kernel_satp() -> usize {
+    static KERNEL_SATP: core::sync::atomic::AtomicUsize =
+        core::sync::atomic::AtomicUsize::new(0);
     let cached = KERNEL_SATP.load(core::sync::atomic::Ordering::Relaxed);
     if cached != 0 {
         return cached;
     }
-    let satp: usize;
-    unsafe {
-        asm!("csrr {satp}, satp", satp = out(reg) satp, options(nostack, nomem));
-    }
+    let satp = current_satp();
     KERNEL_SATP.store(satp, core::sync::atomic::Ordering::Relaxed);
     satp
 }
 
-/// Allocate a zeroed page-table page from the PMM. Returns PA.
+/// Build a `satp` value for the given root page-table physical address.
+#[inline]
+pub fn make_satp(root_pa: usize) -> usize {
+    let ppn = root_pa >> PAGE_SHIFT;
+    SATP_MODE_SV39 | ppn
+}
+
+/// Load a new root page table by writing `satp` and flushing the TLB.
+#[inline]
+pub fn load_satp(root_pa: usize) {
+    let satp = make_satp(root_pa);
+    unsafe {
+        core::arch::asm!(
+            "csrw satp, {satp}",
+            "sfence.vma zero, zero",
+            satp = in(reg) satp,
+            options(nostack),
+        );
+    }
+}
+
+/// Flush the TLB entry for a single virtual address (current ASID).
+#[inline]
+pub fn sfence_vma(va: usize) {
+    unsafe {
+        core::arch::asm!(
+            "sfence.vma {va}, zero",
+            va = in(reg) va,
+            options(nostack),
+        );
+    }
+}
+
+// ── PTE encoding / decoding ───────────────────────────────────────────────────
+
+/// Encode a physical address into PTE PPN bits [53:10].
+#[inline]
+const fn pa_to_ppn_bits(pa: usize) -> u64 {
+    ((pa as u64) >> PAGE_SHIFT) << 10
+}
+
+/// Extract the physical address from a leaf PTE.
+#[inline]
+pub fn pte_to_pa(pte: u64) -> usize {
+    ((pte & PTE_PPN_MASK) >> 10) as usize * PAGE_SIZE
+}
+
+/// Return `true` if `pte` is a *pointer* (non-leaf) entry:
+/// Valid is set, but R/W/X are all clear.
+#[inline]
+fn is_pointer_pte(pte: u64) -> bool {
+    pte & VALID != 0 && pte & (PTE_READ | PTE_WRITE | PTE_EXEC) == 0
+}
+
+// ── Physical memory helpers ───────────────────────────────────────────────────
+
+/// Allocate and zero one 4 KiB page from the PMM.  Returns PA.
 fn alloc_table() -> usize {
-    let pa = crate::mm::pmm::alloc_page().expect("pmm: out of pages for page table");
+    let pa = crate::mm::pmm::alloc_page().expect("pmm: out of pages for Sv39 table");
     unsafe {
         core::ptr::write_bytes(pa as *mut u8, 0, PAGE_SIZE);
     }
     pa
 }
 
-/// Get pointer to PTE entry
+/// Mutable pointer to the `idx`-th 8-byte PTE inside the table at `table_pa`.
 #[inline]
 unsafe fn pte_ptr(table_pa: usize, idx: usize) -> *mut u64 {
     (table_pa + idx * 8) as *mut u64
 }
 
-/// Map a single 4 KiB page into the Sv39 translation table root.
-/// `root_satp` is the satp value (mode | ppn).
-pub fn map_page(root_satp: usize, va: usize, pa: usize, pte_flags: u64) -> bool {
-    // Extract PPN from satp (bits [43:10] of satp, shifted left 10)
-    let root_ppn = root_satp & 0x000F_FFFF_FFFF;
-    let root_pa = root_ppn << 10;
+// ── VA index extraction ───────────────────────────────────────────────────────
 
-    let idx0 = pgd_index(va);
-    let idx1 = pmd_index(va);
-    let idx2 = pte_index(va);
+#[inline]
+fn vpn2(va: usize) -> usize { (va >> 30) & 0x1FF }
+#[inline]
+fn vpn1(va: usize) -> usize { (va >> 21) & 0x1FF }
+#[inline]
+fn vpn0(va: usize) -> usize { (va >> PAGE_SHIFT) & 0x1FF }
 
-    unsafe {
-        // Level 0: PGD
-        let pgd = root_pa as *mut u64;
-        let pgd_entry = pgd.add(idx0).read_volatile();
-        let pmd_pa = if pgd_entry & PTE_V == 0 {
-            // Allocate new PMD
-            let new_pmd = alloc_table();
-            pgd.add(idx0).write_volatile(((new_pmd >> 10) & 0x000F_FFFF_FFFF) | PTE_V);
-            new_pmd
-        } else {
-            ((pgd_entry & 0x000F_FFFF_FFFF) << 10) as usize
-        };
+// ── Table walk (mutable) ──────────────────────────────────────────────────────
 
-        // Level 1: PMD
-        let pmd = pmd_pa as *mut u64;
-        let pmd_entry = pmd.add(idx1).read_volatile();
-        let pte_pa = if pmd_entry & PTE_V == 0 {
-            // Allocate new PTE table
-            let new_pte = alloc_table();
-            pmd.add(idx1).write_volatile(((new_pte >> 10) & 0x000F_FFFF_FFFF) | PTE_V);
-            new_pte
-        } else {
-            ((pmd_entry & 0x000F_FFFF_FFFF) << 10) as usize
-        };
-
-        // Level 2: PTE (leaf)
-        let pte = pte_pa as *mut u64;
-        let ppn = (pa >> 10) & 0x000F_FFFF_FFFF;
-        pte.add(idx2).write_volatile(ppn | pte_flags);
-
-        // Flush TLB for this VA
-        asm!("sfence.vma {va}", va = in(reg) va, options(nostack));
+/// Walk the Sv39 three-level page table for `va` under `root_pa`,
+/// creating missing intermediate tables as needed.
+/// Returns a mutable pointer to the leaf PTE.
+unsafe fn walk_mut(root_pa: usize, va: usize) -> *mut u64 {
+    // L2 (root)
+    let l2e = pte_ptr(root_pa, vpn2(va));
+    if !is_pointer_pte(*l2e) {
+        let t = alloc_table();
+        *l2e = pa_to_ppn_bits(t) | VALID;
     }
+    let l1_pa = pte_to_pa(*l2e);
 
-    true
+    // L1
+    let l1e = pte_ptr(l1_pa, vpn1(va));
+    if !is_pointer_pte(*l1e) {
+        let t = alloc_table();
+        *l1e = pa_to_ppn_bits(t) | VALID;
+    }
+    let l0_pa = pte_to_pa(*l1e);
+
+    // L0 – leaf
+    pte_ptr(l0_pa, vpn0(va))
 }
 
-/// Unmap a page and return its physical address if it was mapped.
-pub fn unmap_page(root_satp: usize, va: usize) -> Option<usize> {
-    let root_ppn = root_satp & 0x000F_FFFF_FFFF;
-    let root_pa = root_ppn << 10;
+// ── Table walk (read-only) ────────────────────────────────────────────────────
 
-    let idx0 = pgd_index(va);
-    let idx1 = pmd_index(va);
-    let idx2 = pte_index(va);
+/// Walk read-only; returns `None` if any level is absent or not a pointer PTE.
+unsafe fn walk_ro(root_pa: usize, va: usize) -> Option<*mut u64> {
+    let l2e = pte_ptr(root_pa, vpn2(va));
+    if !is_pointer_pte(*l2e) {
+        return None;
+    }
+    let l1_pa = pte_to_pa(*l2e);
 
+    let l1e = pte_ptr(l1_pa, vpn1(va));
+    if !is_pointer_pte(*l1e) {
+        return None;
+    }
+    let l0_pa = pte_to_pa(*l1e);
+
+    Some(pte_ptr(l0_pa, vpn0(va)))
+}
+
+// ── Public mapping API ────────────────────────────────────────────────────────
+
+/// Map `va` → `pa` in the page table rooted at `root_pa` with the given
+/// PTE `flags`.  `PTE_VALID` is always OR-ed in automatically.
+/// Creates any missing intermediate tables.
+pub fn map_page(root_pa: usize, va: usize, pa: usize, flags: u64) {
     unsafe {
-        // Level 0: PGD
-        let pgd = root_pa as *const u64;
-        let pgd_entry = pgd.add(idx0).read_volatile();
-        if pgd_entry & PTE_V == 0 {
+        let pte = walk_mut(root_pa, va);
+        *pte = pa_to_ppn_bits(pa) | (flags | VALID);
+    }
+}
+
+/// Remove the mapping for `va` in the **current** address space.
+/// Returns the physical address that was mapped, or `None`.
+pub fn unmap_page(va: usize) -> Option<usize> {
+    let root_pa = satp_to_root_pa(current_satp());
+    unsafe {
+        let pte = walk_ro(root_pa, va)?;
+        if *pte & VALID == 0 {
             return None;
         }
-        let pmd_pa = ((pgd_entry & 0x000F_FFFF_FFFF) << 10) as usize;
-
-        // Level 1: PMD
-        let pmd = pmd_pa as *const u64;
-        let pmd_entry = pmd.add(idx1).read_volatile();
-        if pmd_entry & PTE_V == 0 {
-            return None;
-        }
-        let pte_pa = ((pmd_entry & 0x000F_FFFF_FFFF) << 10) as usize;
-
-        // Level 2: PTE (leaf)
-        let pte = pte_pa as *mut u64;
-        let pte_entry = pte.add(idx2).read_volatile();
-        if pte_entry & PTE_V == 0 {
-            return None;
-        }
-
-        let pa = ((pte_entry & 0x000F_FFFF_FFFF) << 10) as usize;
-        pte.add(idx2).write_volatile(0);
-
-        // Flush TLB
-        asm!("sfence.vma {va}", va = in(reg) va, options(nostack));
-
+        let pa = pte_to_pa(*pte);
+        *pte = 0;
+        sfence_vma(va);
         Some(pa)
     }
 }
 
-/// Translate virtual address to physical address.
-pub fn virt_to_phys(root_satp: usize, va: usize) -> Option<usize> {
-    let root_ppn = root_satp & 0x000F_FFFF_FFFF;
-    let root_pa = root_ppn << 10;
-
-    let idx0 = pgd_index(va);
-    let idx1 = pmd_index(va);
-    let idx2 = pte_index(va);
-
+/// Return the physical address mapped at `va` in the address space rooted at
+/// `root_pa`, or `None` if no valid leaf PTE exists.
+pub fn virt_to_phys(root_pa: usize, va: usize) -> Option<usize> {
     unsafe {
-        // Level 0: PGD
-        let pgd = root_pa as *const u64;
-        let pgd_entry = pgd.add(idx0).read_volatile();
-        if pgd_entry & PTE_V == 0 {
+        let pte = walk_ro(root_pa, va)?;
+        if *pte & VALID == 0 {
             return None;
         }
-        let pmd_pa = ((pgd_entry & 0x000F_FFFF_FFFF) << 10) as usize;
-
-        // Level 1: PMD
-        let pmd = pmd_pa as *const u64;
-        let pmd_entry = pmd.add(idx1).read_volatile();
-        if pmd_entry & PTE_V == 0 {
-            return None;
-        }
-        let pte_pa = ((pmd_entry & 0x000F_FFFF_FFFF) << 10) as usize;
-
-        // Level 2: PTE (leaf)
-        let pte = pte_pa as *const u64;
-        let pte_entry = pte.add(idx2).read_volatile();
-        if pte_entry & PTE_V == 0 {
-            return None;
-        }
-
-        let pa = ((pte_entry & 0x000F_FFFF_FFFF) << 10) | (va & PAGE_MASK);
-        Some(pa)
+        Some(pte_to_pa(*pte))
     }
 }
 
-/// Clone a page table using Copy-on-Write semantics.
-/// Returns the new satp value or None on failure.
-pub fn clone_pgtable_cow(src_satp: usize) -> Option<usize> {
-    let src_root_ppn = src_satp & 0x000F_FFFF_FFFF;
-    let src_root_pa = src_root_ppn << 10;
+// ── CoW fork ─────────────────────────────────────────────────────────────────
 
-    // Allocate new root PGD
-    let new_pgd = alloc_table();
+/// Clone the parent's Sv39 root for a copy-on-write fork.
+///
+/// For every **leaf** PTE in the parent that is Valid:
+///   - If Writable: clear `PTE_WRITE`, set `PTE_COW` in both parent and child.
+///   - Copy the (now read-only) PTE into the child's page tables.
+///
+/// The child gets its own L2/L1/L0 tables (new pages per level),
+/// but the physical *leaf* pages are shared until a write fault occurs.
+///
+/// Returns the physical address of the new child root (for `make_satp`).
+pub fn clone_root_cow(parent_root: usize) -> usize {
+    let child_root = alloc_table();
+
     unsafe {
-        core::ptr::write_bytes(new_pgd as *mut u8, 0, PAGE_SIZE);
-    }
-
-    // Walk source page tables and clone with COW markers
-    let src_pgd = src_root_pa as *const u64;
-    let dst_pgd = new_pgd as *mut u64;
-
-    for i in 0..PGD_ENTRIES {
-        let src_entry = src_pgd.add(i).read_volatile();
-        if src_entry & PTE_V == 0 {
-            continue;
-        }
-
-        let src_pmd_pa = ((src_entry & 0x000F_FFFF_FFFF) << 10) as usize;
-        let new_pmd = alloc_table();
-        unsafe {
-            core::ptr::write_bytes(new_pmd as *mut u8, 0, PAGE_SIZE);
-        }
-
-        let src_pmd = src_pmd_pa as *const u64;
-        let dst_pmd = new_pmd as *mut u64;
-
-        for j in 0..PMD_ENTRIES {
-            let src_pmd_entry = src_pmd.add(j).read_volatile();
-            if src_pmd_entry & PTE_V == 0 {
+        for l2i in 0..TABLE_ENTRIES {
+            let parent_l2e = pte_ptr(parent_root, l2i);
+            if !is_pointer_pte(*parent_l2e) {
                 continue;
             }
 
-            let src_pte_pa = ((src_pmd_entry & 0x000F_FFFF_FFFF) << 10) as usize;
-            let new_pte = alloc_table();
-            unsafe {
-                core::ptr::write_bytes(new_pte as *mut u8, 0, PAGE_SIZE);
-            }
+            let child_l1 = alloc_table();
+            let child_l2e = pte_ptr(child_root, l2i);
+            *child_l2e = pa_to_ppn_bits(child_l1) | VALID;
 
-            let src_pte = src_pte_pa as *const u64;
-            let dst_pte = new_pte as *mut u64;
-
-            for k in 0..PTE_ENTRIES {
-                let src_pte_entry = src_pte.add(k).read_volatile();
-                if src_pte_entry & PTE_V == 0 {
+            let parent_l1_pa = pte_to_pa(*parent_l2e);
+            for l1i in 0..TABLE_ENTRIES {
+                let parent_l1e = pte_ptr(parent_l1_pa, l1i);
+                if !is_pointer_pte(*parent_l1e) {
                     continue;
                 }
 
-                // Check if this is a writable user page - mark for COW
-                if (src_pte_entry & PTE_U) != 0 && (src_pte_entry & PTE_W) != 0 {
-                    // Mark as COW: clear W, set COW bit
-                    let cow_entry = (src_pte_entry & !PTE_W) | PTE_COW;
-                    dst_pte.add(k).write_volatile(cow_entry);
-                    // Also update source to be COW
-                    src_pte.add(k).write_volatile(cow_entry);
-                } else {
-                    // Just copy the entry
-                    dst_pte.add(k).write_volatile(src_pte_entry);
+                let child_l0 = alloc_table();
+                let child_l1e = pte_ptr(child_l1, l1i);
+                *child_l1e = pa_to_ppn_bits(child_l0) | VALID;
+
+                let parent_l0_pa = pte_to_pa(*parent_l1e);
+                for l0i in 0..TABLE_ENTRIES {
+                    let parent_pte = pte_ptr(parent_l0_pa, l0i);
+                    if *parent_pte & VALID == 0 {
+                        continue;
+                    }
+
+                    let mut entry = *parent_pte;
+                    if entry & PTE_WRITE != 0 {
+                        entry = (entry & !PTE_WRITE) | COW_BIT;
+                        *parent_pte = entry;
+                        // Flush parent's TLB entry for this VA.
+                        let va = (l2i << 30) | (l1i << 21) | (l0i << PAGE_SHIFT);
+                        sfence_vma(va);
+                    }
+                    let child_pte = pte_ptr(child_l0, l0i);
+                    *child_pte = entry;
                 }
             }
-
-            // Link PMD to new PTE table
-            let pte_ppn = (new_pte >> 10) & 0x000F_FFFF_FFFF;
-            dst_pmd.add(j).write_volatile(pte_ppn | PTE_V);
         }
-
-        // Link PGD to new PMD table
-        let pmd_ppn = (new_pmd >> 10) & 0x000F_FFFF_FFFF;
-        dst_pgd.add(i).write_volatile(pmd_ppn | PTE_V);
     }
 
-    // Build new satp value
-    let new_satp = (SV39_MODE << 60) | (new_pgd >> 10);
-    Some(new_satp)
-}
-
-/// Create a new user address space with kernel mappings copied.
-pub fn new_user_address_space() -> Option<usize> {
-    let pgd = alloc_table();
-    unsafe {
-        core::ptr::write_bytes(pgd as *mut u8, 0, PAGE_SIZE);
-    }
-
-    // Copy kernel mappings (upper half of address space)
-    // In Sv39, kernel space starts at 0xFFFFFF8000000000 (bit 38 set)
-    let ksatp = kernel_cr3();
-    let k_root_ppn = ksatp & 0x000F_FFFF_FFFF;
-    let k_root_pa = k_root_ppn << 10;
-
-    unsafe {
-        let src_pgd = (k_root_pa + 256 * 8) as *const u64; // Upper half starts at index 256
-        let dst_pgd = (pgd + 256 * 8) as *mut u64;
-        core::ptr::copy_nonoverlapping(src_pgd, dst_pgd, 256);
-    }
-
-    let satp = (SV39_MODE << 60) | (pgd >> 10);
-    Some(satp)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_pgd_index() {
-        assert_eq!(pgd_index(0x0000_0000_0000_0000), 0);
-        assert_eq!(pgd_index(0x0000_0000_4000_0000), 1);
-        assert_eq!(pgd_index(0x0000_0000_8000_0000), 2);
-    }
-
-    #[test]
-    fn test_pmd_index() {
-        assert_eq!(pmd_index(0x0000_0000_0000_0000), 0);
-        assert_eq!(pmd_index(0x0000_0000_0020_0000), 1);
-        assert_eq!(pmd_index(0x0000_0000_0040_0000), 2);
-    }
-
-    #[test]
-    fn test_pte_index() {
-        assert_eq!(pte_index(0x0000_0000_0000_0000), 0);
-        assert_eq!(pte_index(0x0000_0000_0000_1000), 1);
-        assert_eq!(pte_index(0x0000_0000_0000_2000), 2);
-    }
+    child_root
 }
