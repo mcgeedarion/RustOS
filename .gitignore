@@ -2,17 +2,13 @@
 # Compiled and build artifacts
 *.o
 *.obj
-*.a
-*.so
-*.dll
-*.so
-*.dylib
-*.exe
 *.out
+build/
+dist/
 
 # Dependencies
 target/
-**/target/
+.cargo/
 
 # Logs and temp files
 *.log
@@ -21,16 +17,9 @@ target/
 # Editors
 .vscode/
 .idea/
-*.swp
-*.swo
-
-# Coverage
-coverage/
-htmlcov/
-.coverage
 
 # Environment
 .env
 .env.local
-.env.*
+*.env.*
 ```

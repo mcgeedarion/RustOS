@@ -72,6 +72,7 @@ const OVMF_SYSTEM_CANDIDATES: &[&str] = &[
 enum Arch {
     AArch64,
     X86_64,
+    RiscV64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,6 +121,7 @@ fn arch_str(arch: Arch) -> &'static str {
     match arch {
         Arch::AArch64 => "aarch64",
         Arch::X86_64 => "x86_64",
+        Arch::RiscV64 => "riscv64",
     }
 }
 
@@ -142,6 +144,7 @@ fn validate_contract(arch: Arch, boot: Boot) -> Result<()> {
     match (arch, boot) {
         (Arch::AArch64, Boot::Uefi | Boot::Baremetal) => Ok(()),
         (Arch::X86_64, Boot::Uefi) => Ok(()),
+        (Arch::RiscV64, Boot::Uefi) => Ok(()),
         _ => bail!(
             "unsupported build contract: {} --boot {}",
             arch_str(arch),
@@ -155,6 +158,7 @@ fn target_json(root: &Path, arch: Arch, boot: Boot) -> PathBuf {
         (Arch::AArch64, Boot::Uefi) => PathBuf::from("aarch64-unknown-uefi"),
         (Arch::AArch64, Boot::Baremetal) => root.join("targets/aarch64-kernel.json"),
         (Arch::X86_64, Boot::Uefi) => PathBuf::from("x86_64-unknown-uefi"),
+        (Arch::RiscV64, Boot::Uefi) => root.join("targets/riscv64-uefi-loader.json"),
         _ => unreachable!("validate_contract must run before target_json"),
     }
 }
@@ -164,6 +168,7 @@ fn target_dir_name(arch: Arch, boot: Boot) -> &'static str {
         (Arch::AArch64, Boot::Uefi) => "aarch64-unknown-uefi",
         (Arch::AArch64, Boot::Baremetal) => "aarch64-kernel",
         (Arch::X86_64, Boot::Uefi) => "x86_64-unknown-uefi",
+        (Arch::RiscV64, Boot::Uefi) => "riscv64-uefi-loader",
         _ => unreachable!("validate_contract must run before target_dir_name"),
     }
 }
