@@ -20,6 +20,7 @@ const UART_LSR: usize = 0x05; // Line Status Register
 
 /// Line Status Register bits
 const LSR_THRE: u8 = 1 << 5; // Transmit Holding Register Empty
+const LSR_DR: u8 = 1 << 0;   // Data Ready (receive)
 
 /// Initialize the serial console for RISC-V.
 /// Configures the UART for 115200 8N1 operation.
@@ -58,4 +59,25 @@ pub fn write_byte(byte: u8) {
         // Write the byte
         ptr::write_volatile((UART_BASE + UART_THR) as *mut u8, byte);
     }
+}
+
+/// Read a byte from the serial console, if available.
+pub fn read_byte() -> Option<u8> {
+    unsafe {
+        if (ptr::read_volatile((UART_BASE + UART_LSR) as *const u8) & LSR_DR) != 0 {
+            Some(ptr::read_volatile((UART_BASE + UART_RBR) as *const u8))
+        } else {
+            None
+        }
+    }
+}
+
+/// Put a character to the serial console.
+pub fn putc(byte: u8) {
+    write_byte(byte);
+}
+
+/// Get a character from the serial console, if available.
+pub fn getc() -> Option<u8> {
+    read_byte()
 }
