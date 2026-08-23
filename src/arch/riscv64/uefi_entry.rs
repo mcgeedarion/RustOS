@@ -468,7 +468,7 @@ unsafe fn load_embedded_initramfs(bs: &EfiBootServices) -> Option<BootRange> {
 }
 
 unsafe fn efi_print(con_out: *mut EfiSimpleTextOutput, msg: &str) {
-    let wide: [u16; 128] = [0; 128];
+    let mut wide: [u16; 128] = [0; 128];
     let len = msg.len().min(127);
     for (i, byte) in msg.bytes().take(len).enumerate() {
         wide[i] = byte as u16;

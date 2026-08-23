@@ -1,80 +1,42 @@
 ```
-# Build artifacts
-target/
+# Compiled and build artifacts
+*.o
+*.obj
+*.a
+*.so
+*.dll
+*.exe
+*.pyc
+__pycache__/
+*.class
 
 # Dependencies
-Cargo.lock
-
-# Logs and temp files
-*.log
-*.tmp
-
-# Environment
+node_modules/
+venv/
+.venv/
 .env
 .env.local
-*.env.*
+.env.*
 
-# Editors
+# Build directories (common for Rust/Cargo projects)
+target/
+
+# Editors/IDEs
 .vscode/
 .idea/
+*.swp
+*.swo
+*.tmp
+
+# Logs
+*.log
 
 # Coverage
 coverage/
 htmlcov/
 .coverage
 
-# MyPy
-.mypy_cache/
-
-# Pytest
-.pytest_cache/
-
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-
-# Compiled files
-*.o
-*.obj
-*.out
-*.exe
-*.dll
-*.so
-*.a
-
-# Distribution / packaging
-.dist/
-build/
-*.egg-info/
-.eggs/
-
-# Compression
-*.zip
-*.gz
-*.tar
-*.tgz
-*.bz2
-*.xz
-*.7z
-*.rar
-*.zst
-*.lz4
-*.lzh
-*.cab
-*.arj
-*.rpm
-*.deb
-*.Z
-*.lz
-*.lzo
-*.tar.gz
-*.tar.bz2
-*.tar.xz
-*.tar.zst
-
-# OS generated files
+# OS
 .DS_Store
 Thumbs.db
 ```
