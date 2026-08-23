@@ -1,21 +1,70 @@
 ```
-# Rust/Cargo build artifacts
+# Build artifacts
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+*.out
+
+# Build directories
+build/
+dist/
 target/
-**/*.rs.bk
 
 # Dependencies
-Cargo.lock
+node_modules/
+.venv/
+venv/
+__pycache__/
+.mypy_cache/
+.pytest_cache/
+.coverage
+coverage/
+htmlcov/
 
-# Logs and temp files
-*.log
-*.tmp
-
-# Editors
+# Editor/IDE files
 .vscode/
 .idea/
+*.swp
+*.swo
+*.tmp
 
-# Environment
+# Logs
+*.log
+
+# Environment files
 .env
 .env.local
 *.env.*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Compressed files
+*.zip
+*.gz
+*.tar
+*.tgz
+*.bz2
+*.xz
+*.7z
+*.rar
+*.zst
+*.lz4
+*.lzh
+*.cab
+*.arj
+*.rpm
+*.deb
+*.Z
+*.lz
+*.lzo
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+*.tar.zst
 ```

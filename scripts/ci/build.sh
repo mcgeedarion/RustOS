@@ -2,7 +2,7 @@
 # scripts/ci/build.sh — Arch-aware kernel build for CI.
 #
 # Required env:
-#   ARCH    aarch64 | x86_64
+#   ARCH    aarch64 | x86_64 | riscv64
 #
 # Optional env:
 #   RELEASE    1 => --release  (default: 0)
@@ -28,10 +28,10 @@ cd "$ROOT_DIR"
 # ── Validate required inputs ────────────────────────────────────────────────────────────────────────
 
 ARCH="${ARCH:-}"
-[[ -z "$ARCH" ]] && { echo "[!] ARCH is required (aarch64|x86_64)" >&2; exit 2; }
+[[ -z "$ARCH" ]] && { echo "[!] ARCH is required (aarch64|x86_64|riscv64)" >&2; exit 2; }
 
 case "$ARCH" in
-  aarch64|x86_64) ;;
+  aarch64|x86_64|riscv64) ;;
   *) echo "[!] Unsupported ARCH='${ARCH}'" >&2; exit 2 ;;
 esac
 

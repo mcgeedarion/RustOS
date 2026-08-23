@@ -5,9 +5,11 @@
 #   AArch64: build musl from source targeting aarch64-linux-musl
 #            or install/provide aarch64-linux-musl-gcc on PATH
 #   x86_64:  apt install musl-tools   # provides musl-gcc
+#   riscv64: apt install musl-tools   # provides musl-gcc
 #
 # Usage:
 #   make ARCH=aarch64  # build AArch64 binaries
+#   make ARCH=riscv64  # build RISC-V 64-bit binaries
 #   make               # build x86_64 binaries (default)
 #   make help          # show available targets
 #
@@ -29,8 +31,11 @@ ifeq ($(ARCH),x86_64)
 else ifeq ($(ARCH),aarch64)
   CC           := aarch64-linux-musl-gcc
   ARCH_CFLAGS  := -march=armv8-a
+else ifeq ($(ARCH),riscv64)
+  CC           := riscv64-linux-musl-gcc
+  ARCH_CFLAGS  := -march=rv64gc
 else
-  $(error Unsupported ARCH=$(ARCH). Use x86_64 or aarch64)
+  $(error Unsupported ARCH=$(ARCH). Use x86_64, aarch64, or riscv64)
 endif
 
 CFLAGS := $(COMMON_CFLAGS) $(ARCH_CFLAGS) -fno-stack-protector
@@ -53,7 +58,7 @@ all: check-tools $(PROGRAMS)
 help:
 	@echo "RustOS Userspace Build System"
 	@echo ""
-	@echo "Usage: make [ARCH=x86_64|aarch64] [target]"
+	@echo "Usage: make [ARCH=x86_64|aarch64|riscv64] [target]"
 	@echo ""
 	@echo "Available targets:"
 	@echo "  all      - Build all userspace binaries (default)"
@@ -62,8 +67,9 @@ help:
 	@echo "  help     - Show this help message"
 	@echo ""
 	@echo "Examples:"
-    @echo "  make ARCH=aarch64                 # Build AArch64 binaries"
-    @echo "  make                              # Build x86_64 binaries"
+	@echo "  make ARCH=aarch64                 # Build AArch64 binaries"
+	@echo "  make ARCH=riscv64                 # Build RISC-V 64-bit binaries"
+	@echo "  make                              # Build x86_64 binaries"
 	@echo "  make install DESTDIR=/tmp/rootfs  # Install to custom location"
 
 check-tools:
@@ -71,6 +77,7 @@ check-tools:
 		echo "Error: $(CC) not found. Please install the required toolchain."; \
 		echo "For AArch64: Build musl from source targeting aarch64-linux-musl or provide aarch64-linux-musl-gcc"; \
         echo "For x86_64: apt install musl-tools"; \
+        echo "For riscv64: apt install musl-tools or build musl from source"; \
 		exit 1; \
 	}
 
