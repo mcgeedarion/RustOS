@@ -29,7 +29,7 @@ set -euo pipefail
 ARCH=${1:-aarch64}
 CLEAN_BUILD=${2:-}
 VERBOSE=${VERBOSE:-0}
-VALID_ARCHS=("aarch64" "x86_64")
+VALID_ARCHS=("aarch64" "x86_64" "riscv64")
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"

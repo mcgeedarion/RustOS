@@ -8,7 +8,7 @@
 #   ARCH=aarch64 ./scripts/ci/build-userspace.sh
 #
 # Environment variables:
-#   ARCH          x86_64 | aarch64  (default: x86_64)
+#   ARCH          x86_64 | aarch64 | riscv64  (default: x86_64)
 #   TARGET        Optional single Makefile target (default: all)
 #   SKIP_TOOLCHAIN_CHECK
 #                 Set to 1 to skip install-musl-toolchain.sh (toolchain

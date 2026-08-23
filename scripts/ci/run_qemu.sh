@@ -10,7 +10,7 @@ SMOKE_MARKER_RE=${SMOKE_MARKER_RE:-'BOOT_MINIMAL_OK|FULL_OS_USERSPACE_OK|enterin
 
 usage() {
     echo "Usage: ARCH=<arch> [TIMEOUT=<s>] [SMOKE=1] $0 [--arch <arch>] [--boot uefi] [--timeout <s>] [--smoke|--test]"
-    echo "  ARCH    : x86_64 | aarch64"
+    echo "  ARCH    : x86_64 | aarch64 | riscv64"
     echo "  TIMEOUT : seconds before QEMU is killed (default: 30)"
     echo "  SMOKE   : set to 1 to grep serial output for boot sentinel"
     echo "  --test  : CI alias for --smoke"
@@ -70,7 +70,7 @@ if [[ "$BOOT" != "uefi" ]]; then
 fi
 
 case "$ARCH" in
-    x86_64|aarch64) ;;
+    x86_64|aarch64|riscv64) ;;
     *) echo "ERROR: unsupported arch '$ARCH'" >&2; usage ;;
 esac
 

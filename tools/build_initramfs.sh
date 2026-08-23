@@ -60,12 +60,12 @@ check_command() {
 
 validate_architecture() {
     case "$ARCH" in
-        x86_64|aarch64|arm|i386)
+        x86_64|aarch64|arm|i386|riscv64)
             return 0
             ;;
         *)
             log_error "Unsupported architecture: $ARCH"
-            log_info "Supported architectures: x86_64, aarch64, arm, i386"
+            log_info "Supported architectures: x86_64, aarch64, arm, i386, riscv64"
             return 1
             ;;
     esac
