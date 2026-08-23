@@ -7,13 +7,34 @@ pub struct ArchImpl;
 
 /// Initialize the RISC-V HAL.
 #[cfg(any(not(feature = "boot_minimal"), feature = "userspace_boot"))]
-pub fn init(_boot_info: &'static crate::init::boot_info::BootInfo) -> ! {
-    // For now, just halt in a loop - this is a minimal stub.
-    // A full implementation would set up paging, interrupts, etc.
-    loop {
-        unsafe {
-            asm!("wfi");
-        }
+pub fn init(boot_info: &'static crate::init::boot_info::BootInfo) -> ! {
+    // Print boot information
+    log!("RustOS riscv64 HAL initialized");
+    log!("ACPI RSDP at: 0x{:X}", boot_info.rsdp_phys);
+    
+    if !boot_info.initramfs.is_empty() {
+        log!("Initramfs: 0x{:X} - 0x{:X}", 
+             boot_info.initramfs.start(),
+             boot_info.initramfs.end());
+    }
+    
+    // Enable interrupts after initialization
+    unsafe {
+        asm!(
+            "csrs sstatus, {bit}",
+            bit = const 1 << 1, // Set SIE (Supervisor Interrupt Enable)
+        );
+    }
+    
+    // Hand off to the scheduler
+    #[cfg(not(feature = "userspace_boot"))]
+    {
+        crate::proc::scheduler::run_scheduler();
+    }
+    
+    #[cfg(feature = "userspace_boot")]
+    {
+        crate::userspace_boot::init(boot_info);
     }
 }
 

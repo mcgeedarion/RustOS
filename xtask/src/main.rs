@@ -177,6 +177,7 @@ fn efi_boot_filename(arch: Arch) -> &'static str {
     match arch {
         Arch::AArch64 => "BOOTAA64.EFI",
         Arch::X86_64 => "BOOTX64.EFI",
+        Arch::RiscV64 => "BOOTRISCV64.EFI",
     }
 }
 
@@ -184,6 +185,7 @@ fn image_name(arch: Arch) -> &'static str {
     match arch {
         Arch::AArch64 => "boot-aarch64.img",
         Arch::X86_64 => "boot-x86_64.img",
+        Arch::RiscV64 => "boot-riscv64.img",
     }
 }
 
@@ -256,6 +258,12 @@ fn qemu_install_hint(arch: Arch) -> &'static str {
              Arch: pacman -S qemu-system-aarch64 edk2-aarch64\n\
              macOS: brew install qemu"
         },
+        Arch::RiscV64 => {
+            "Ubuntu/Debian: apt install qemu-system-misc edk2-riscv64\n\
+             Fedora: dnf install qemu-system-riscv edk2-riscv64\n\
+             Arch: pacman -S qemu-system-riscv edk2-riscv64\n\
+             macOS: brew install qemu"
+        },
     }
 }
 
@@ -263,6 +271,7 @@ fn ensure_qemu_for_arch(arch: Arch) -> Result<()> {
     let binary = match arch {
         Arch::X86_64 => "qemu-system-x86_64",
         Arch::AArch64 => "qemu-system-aarch64",
+        Arch::RiscV64 => "qemu-system-riscv64",
     };
 
     if which_first(&[binary]).is_some() {
@@ -323,6 +332,7 @@ fn parse_build_args(args: &[String]) -> BuildOpts {
                 opts.arch = match args.get(i).map(String::as_str) {
                     Some("aarch64") => Arch::AArch64,
                     Some("x86_64") => Arch::X86_64,
+                    Some("riscv64") => Arch::RiscV64,
                     other => {
                         eprintln!("[xtask] unknown --arch: {:?}", other);
                         exit(1);
@@ -769,6 +779,7 @@ fn build_partitioned_fat_image(img: &Path, esp_dir: &Path, arch: Arch) -> Result
         match arch {
             Arch::AArch64 => b"BOOTAA64",
             Arch::X86_64 => b"BOOTX64 ",
+            Arch::RiscV64 => b"BOOTRISC",
         },
         b"EFI",
         0x20,
@@ -1162,6 +1173,66 @@ fn launch_qemu_aarch64(
     run(&mut cmd)
 }
 
+fn launch_qemu_riscv64(
+    _root: &Path,
+    img: &Path,
+    initrd: Option<&Path>,
+    debug_port: Option<u16>,
+) -> Result<()> {
+    ensure_qemu_for_arch(Arch::RiscV64)?;
+
+    // Locate RISC-V UEFI firmware
+    let fw_candidates = [
+        "/usr/share/ovmf/riscv/OVMF_CODE.fd",
+        "/usr/share/qemu/edk2-riscv64-code.fd",
+        "/usr/share/edk2/riscv/OVMF_CODE.fd",
+    ];
+    let fw = fw_candidates
+        .iter()
+        .find(|p| std::path::Path::new(p).exists())
+        .map(PathBuf::from)
+        .or_else(|| env::var("QEMU_EFI_RISCV").ok().map(PathBuf::from))
+        .ok_or_else(|| {
+            anyhow!(
+                "RISC-V UEFI firmware not found.\n\
+                 Install with: apt install edk2-riscv64\n\
+                 or set QEMU_EFI_RISCV=/path/to/OVMF_CODE.fd"
+            )
+        })?;
+
+    let mut cmd = Command::new("qemu-system-riscv64");
+    cmd.args([
+        "-machine",
+        "virt",
+        "-cpu",
+        "rv64",
+        "-m",
+        "512M",
+        "-bios",
+        fw.to_str().unwrap(),
+        "-drive",
+        &format!("if=none,id=esp,format=raw,file={}", img.display()),
+        "-device",
+        "virtio-blk-device,drive=esp",
+        "-serial",
+        "stdio",
+        "-display",
+        "none",
+        "-no-reboot",
+        "-no-shutdown",
+    ]);
+
+    if let Some(initrd) = initrd {
+        cmd.arg("-initrd").arg(initrd);
+    }
+
+    if let Some(port) = debug_port {
+        cmd.args(["-s", "-S", "-gdb", &format!("tcp::{port}")]);
+    }
+
+    run(&mut cmd)
+}
+
 fn smoke_marker_regex() -> &'static str {
     "BOOT_MINIMAL_OK|FULL_OS_USERSPACE_OK|entering cpu_idle"
 }
@@ -1294,6 +1365,49 @@ fn run_smoke(root: &Path, opts: &BuildOpts) -> Result<()> {
             }
             run_until_smoke_marker(&mut cmd, &log_path, Duration::from_secs(45))?;
         },
+        Arch::RiscV64 => {
+            // RISC-V UEFI boot via OpenSBI + OVMF
+            let fw_candidates = [
+                "/usr/share/ovmf/riscv/OVMF_CODE.fd",
+                "/usr/share/qemu/edk2-riscv64-code.fd",
+                "/usr/share/edk2/riscv/OVMF_CODE.fd",
+            ];
+            let fw = fw_candidates
+                .iter()
+                .find(|p| std::path::Path::new(p).exists())
+                .map(PathBuf::from)
+                .or_else(|| env::var("QEMU_EFI_RISCV").ok().map(PathBuf::from))
+                .ok_or_else(|| {
+                    anyhow!(
+                        "RISC-V UEFI firmware not found; install edk2-riscv64 or set QEMU_EFI_RISCV"
+                    )
+                })?;
+            let mut cmd = Command::new("qemu-system-riscv64");
+            cmd.args([
+                "-machine",
+                "virt",
+                "-cpu",
+                "rv64",
+                "-m",
+                "512M",
+                "-bios",
+                fw.to_str().unwrap(),
+                "-drive",
+                &format!("if=none,id=esp,format=raw,file={}", img.display()),
+                "-device",
+                "virtio-blk-device,drive=esp",
+                "-serial",
+                &format!("file:{}", log_path.display()),
+                "-display",
+                "none",
+                "-no-reboot",
+                "-no-shutdown",
+            ]);
+            if let Some(initrd) = initrd.as_deref() {
+                cmd.arg("-initrd").arg(initrd);
+            }
+            run_until_smoke_marker(&mut cmd, &log_path, Duration::from_secs(45))?;
+        },
     }
     Ok(())
 }
@@ -1304,6 +1418,7 @@ fn build_init(root: &Path, arch: Arch) -> Result<()> {
     let target = match arch {
         Arch::X86_64 => "x86_64-unknown-none",
         Arch::AArch64 => "aarch64-unknown-none",
+        Arch::RiscV64 => "riscv64gc-unknown-none-elf",
     };
 
     // Ensure the freestanding userspace target is installed.
@@ -1532,6 +1647,9 @@ fn main() {
                     Arch::AArch64 => {
                         launch_qemu_aarch64(&root, &img, initrd.as_deref(), None)?;
                     },
+                    Arch::RiscV64 => {
+                        launch_qemu_riscv64(&root, &img, initrd.as_deref(), None)?;
+                    },
                 }
                 Ok(())
             })() {
@@ -1563,6 +1681,9 @@ fn main() {
                     },
                     Arch::AArch64 => {
                         launch_qemu_aarch64(&root, &img, initrd.as_deref(), Some(1234))?;
+                    },
+                    Arch::RiscV64 => {
+                        launch_qemu_riscv64(&root, &img, initrd.as_deref(), Some(1234))?;
                     },
                 }
                 Ok(())
