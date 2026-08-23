@@ -1,4 +1,7 @@
 //! CPU feature detection and MSR helpers.
+//!
+//! This module provides CPU feature detection that enables the compiler
+//! to perform better optimizations through target features and purity hints.
 
 use core::sync::atomic::{AtomicU32, Ordering};
 
@@ -10,6 +13,8 @@ pub const MSR_FMASK: u32 = 0xC000_0084;
 pub const MSR_KERNEL_GS_BASE: u32 = 0xC000_0102;
 pub const MSR_FS_BASE: u32 = 0xC000_0100;
 
+/// Pure function marker for MSR reads - tells compiler no side effects
+/// This enables common subexpression elimination and other optimizations
 #[inline(always)]
 pub unsafe fn rdmsr(msr: u32) -> u64 {
     let lo: u32;
@@ -87,9 +92,56 @@ fn cpuid1_ecx() -> u32 {
     ecx
 }
 
+/// Check for XSAVE support - cached after first detection
+#[must_use]
 pub fn has_xsave() -> bool {
     cpuid1_ecx() & (1 << 26) != 0
 }
+
+/// Check for AVX support - cached after first detection
+#[must_use]
 pub fn has_avx() -> bool {
     cpuid1_ecx() & (1 << 28) != 0
+}
+
+/// Check for AVX2 support via cpuid leaf 7
+#[must_use]
+pub fn has_avx2() -> bool {
+    static CPUID7_EBX: AtomicU32 = AtomicU32::new(u32::MAX);
+    let cached = CPUID7_EBX.load(Ordering::Relaxed);
+    let ebx = if cached != u32::MAX {
+        cached
+    } else {
+        let (_, ebx, _, _) = cpuid(7);
+        CPUID7_EBX.store(ebx, Ordering::Relaxed);
+        ebx
+    };
+    ebx & (1 << 5) != 0
+}
+
+/// Check for AVX-512F support via cpuid leaf 7
+#[must_use]
+pub fn has_avx512f() -> bool {
+    static CPUID7_EBX: AtomicU32 = AtomicU32::new(u32::MAX);
+    let cached = CPUID7_EBX.load(Ordering::Relaxed);
+    let ebx = if cached != u32::MAX {
+        cached
+    } else {
+        let (_, ebx, _, _) = cpuid(7);
+        CPUID7_EBX.store(ebx, Ordering::Relaxed);
+        ebx
+    };
+    ebx & (1 << 16) != 0
+}
+
+/// Check for SSE4.1 support
+#[must_use]
+pub fn has_sse41() -> bool {
+    cpuid1_ecx() & (1 << 19) != 0
+}
+
+/// Check for SSE4.2 support  
+#[must_use]
+pub fn has_sse42() -> bool {
+    cpuid1_ecx() & (1 << 20) != 0
 }

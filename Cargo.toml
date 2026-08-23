@@ -193,9 +193,13 @@ release-boot = []
 
 [profile.release]
 opt-level = 3
-lto = true
+lto = "fat"
 codegen-units = 1
 strip = false
+# Enable PGO instrumentation for profile-guided optimization
+# Compile once with this, run workloads, then use the generated profdata
+# See: https://doc.rust-lang.org/rustc/profile-guided-optimization.html
+# profile-use = "target/release/rustos-*.profdata"
 
 [profile.release-boot]
 inherits = "release"
@@ -209,6 +213,18 @@ lto = "fat"
 codegen-units = 1
 # Strip debuginfo and most symbol names from the final binary.
 strip = "debuginfo"
+
+# Profile for generating PGO instrumentation data
+# Usage: cargo build --profile release-pgo-generate --features userspace_boot
+# Then run workloads, collect .profraw files, merge to .profdata
+# Then rebuild with profile-use pointing to the .profdata file
+[profile.release-pgo-generate]
+inherits = "release"
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+# Instrument the binary to collect profiling data
+overflow-checks = false
 
 [profile.dev]
 opt-level = 0
