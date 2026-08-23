@@ -26,9 +26,7 @@
 // This allows the optimizer to assume CPU features detected at boot are available
 #![cfg_attr(target_arch = "x86_64", feature(stdarch_x86_avx512))]
 #![cfg_attr(target_arch = "x86_64", feature(avx512_target_feature))]
-#![cfg_attr(target_arch = "x86_64", feature(avx_target_feature))]
 #![cfg_attr(target_arch = "x86_64", feature(sse4a_target_feature))]
-#![cfg_attr(not(test), feature(reexport_target_features))]
 
 extern crate alloc;
 
