@@ -1,19 +1,10 @@
 # userspace/shell/Makefile
 #
-# Build the minimal rustos shell.  Links against either:
-#   a) musl-libc (preferred, full POSIX)  — set MUSL=1
-#   b) the libc shim (shim.c)             — default, -nostdlib
+# Build the minimal rustos shell. Links against either:
+#   a) musl-libc (preferred, full POSIX) — set MUSL=1
+#   b) the libc shim (shim.c)            — default, -nostdlib
 #
-# Usage:
-#   make              - Build the shell
-#   make clean        - Remove build artifacts
-#   make install      - Install shell to $(INSTALL_DIR)
-#   make help         - Show this help
-#
-# Options:
-#   MUSL=1            - Use musl-libc instead of shim
-#   V=1               - Verbose build output
-#   INSTALL_DIR=...   - Installation directory (default: /usr/local/bin)
+# See BUILDING.md for detailed build instructions and examples.
 
 # ============================================================================
 # Variable Definitions
@@ -121,19 +112,9 @@ help:
 	@echo "=============================================="
 	@echo ""
 	@echo "Targets:"
-	@echo "  all         - Build $(OUT) (default)"
+	@echo "  all         - Build \$(OUT) (default)"
 	@echo "  clean       - Remove build artifacts"
-	@echo "  install     - Install to $(INSTALL_DIR)"
+	@echo "  install     - Install to \$(INSTALL_DIR)"
 	@echo "  help        - Show this help message"
 	@echo ""
-	@echo "Options:"
-	@echo "  MUSL=1      - Use musl-libc (default: 0)"
-	@echo "  ARCH=...    - Target: x86_64 (default)"
-	@echo "  V=1         - Enable verbose output"
-	@echo "  INSTALL_DIR - Installation directory (default: $(INSTALL_DIR))"
-	@echo ""
-	@echo "Examples:"
-	@echo "  make                    # Build with default settings"
-	@echo "  make MUSL=1             # Build with musl-libc"
-	@echo "  make install            # Build and install to system"
-	@echo ""
+	@echo "See BUILDING.md for detailed instructions and examples."
