@@ -1,15 +1,6 @@
 # Build musl libc for RustOS
 #
-# Prerequisites (Debian/Ubuntu):
-#   apt install musl-tools clang lld python3
-#
-# Usage:
-#   make help      — show this help message
-#   make x86_64    — build libmusl.a + libc.so for x86_64
-#   make all       — build all supported architectures
-#   make sysroot   — install musl headers into sysroot/<arch>/include/
-#   make clean     — remove build artifacts
-#   make distclean — remove everything including sysroot
+# See BUILDING.md for detailed build instructions, prerequisites, and examples.
 
 MUSL_VERSION   ?= 1.2.5
 MUSL_SRC       ?= musl-$(MUSL_VERSION)
@@ -107,5 +98,7 @@ help:
 	@echo "  sysroot            — Install headers into sysroot/<arch>/include/"
 	@echo "  clean              — Remove build directories"
 	@echo "  distclean          — Remove everything including sysroot"
+	@echo ""
+	@echo "See BUILDING.md for detailed instructions and examples."
 
 .PHONY: all x86_64 sysroot clean distclean help

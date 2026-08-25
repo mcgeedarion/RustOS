@@ -3,11 +3,7 @@
 # Build the shim as a static archive (libshim.a) for linking into
 # -nostdlib binaries, OR as a thin object file.
 #
-# Variables (override from the parent Makefile or command line):
-#   CC         — compiler (default: musl-gcc for the static shim)
-#   SYSROOT    — path to musl sysroot (optional; not needed for shim-only builds)
-#   V          — verbose output (0=quiet, 1=verbose; default: 0)
-#   PREFIX     — installation prefix (default: /usr/local)
+# See BUILDING.md for detailed build instructions and usage examples.
 
 # ============================================================================
 # Configuration
@@ -101,25 +97,13 @@ install: $(LIB)
 help:
 	@echo "=== libshim Makefile ==="
 	@echo ""
-	@echo ""
 	@echo "Targets:"
-	@echo "  all     - Build $(LIB) (default)"
+	@echo "  all     - Build \$(LIB) (default)"
 	@echo "  clean   - Remove build artifacts"
-	@echo "  install - Install library and headers to $(PREFIX)"
+	@echo "  install - Install library and headers to \$(PREFIX)"
 	@echo "  help    - Display this help message"
 	@echo ""
-	@echo "Variables:"
-	@echo "  CC      - C compiler [$(CC)]"
-	@echo "  AR      - Archive tool [$(AR)]"
-	@echo "  RANLIB  - Archive index tool [$(RANLIB)]"
-	@echo "  V       - Verbose output (0=quiet, 1=verbose) [$(V)]"
-	@echo "  PREFIX  - Installation prefix [$(PREFIX)]"
-	@echo ""
-	@echo "Examples:"
-	@echo "  make                          # Build for x86_64"
-	@echo "  make V=1                      # Verbose build"
-	@echo "  make install PREFIX=$$HOME    # Install to home directory"
-	@echo ""
+	@echo "See BUILDING.md for detailed instructions and examples."
 
 # ============================================================================
 # Dependencies

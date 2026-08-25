@@ -1,24 +1,7 @@
 # userspace/Makefile
 # Builds all userspace C programs as static musl-libc ELF64 binaries.
 #
-# Prerequisites (install once):
-#   AArch64: build musl from source targeting aarch64-linux-musl
-#            or install/provide aarch64-linux-musl-gcc on PATH
-#   x86_64:  apt install musl-tools   # provides musl-gcc
-#   riscv64: apt install musl-tools   # provides musl-gcc
-#
-# Usage:
-#   make ARCH=aarch64  # build AArch64 binaries
-#   make ARCH=riscv64  # build RISC-V 64-bit binaries
-#   make               # build x86_64 binaries (default)
-#   make help          # show available targets
-#
-# Output layout (matches build_initramfs.sh staging expectations):
-#   build/<arch>/init               → staged as /init        (PID 1)
-#   build/<arch>/hello              → staged as /bin/hello
-#   build/<arch>/rustos-compositor  → staged as /usr/bin/rustos-compositor
-#   build/<arch>/smoke              → staged as /bin/smoke   (QEMU smoke test)
-#   build/<arch>/kmtest             → staged as /bin/kmtest  (kernel test runner)
+# See BUILDING.md for detailed build instructions, prerequisites, and examples.
 
 ARCH       ?= x86_64
 BUILD_DIR  := build/$(ARCH)
@@ -65,6 +48,8 @@ help:
 	@echo "  install  - Install binaries to DESTDIR (default: build/<arch>/rootfs)"
 	@echo "  clean    - Remove all build artifacts"
 	@echo "  help     - Show this help message"
+	@echo ""
+	@echo "See BUILDING.md for detailed instructions and examples."
 	@echo ""
 	@echo "Examples:"
 	@echo "  make ARCH=aarch64                 # Build AArch64 binaries"
@@ -117,12 +102,7 @@ $(BUILD_DIR)/kmtest: kmtest/kmtest.c | $(BUILD_DIR)
 # The Wayland compositor is a privileged userspace process.
 # It is installed as /usr/bin/rustos-compositor in the initramfs.
 # The kernel spawns it as PID 2 via execve() after init (PID 1) starts.
-#
-# CFLAGS notes:
-#   -fstack-protector-strong  — re-enabled (unlike other binaries); the
-#     compositor handles untrusted data from Wayland clients.
-#   _GNU_SOURCE               — required for epoll_create1, SOCK_CLOEXEC,
-#     accept4, and the seccomp BPF headers.
+# See BUILDING.md for detailed CFLAGS rationale.
 $(BUILD_DIR)/rustos-compositor: wayland/compositor.c | $(BUILD_DIR)
 	$(CC) $(WAYLAND_CFLAGS) -o $@ $<
 
@@ -144,17 +124,8 @@ wayland: $(BUILD_DIR)/rustos-compositor
 # Installation and cleanup
 # ============================================================================
 
-# Copies built binaries into a staging rootfs tree whose layout matches
-# what build_initramfs.sh expects when it packs the CPIO archive:
-#
-#   DESTDIR/
-#     init                        ← exec'd directly as PID 1 by the kernel
-#     bin/hello
-#     bin/smoke                   ← small QEMU smoke-test helper
-#     bin/kmtest                  ← kernel test runner
-#     usr/bin/rustos-compositor   ← spawned by init as PID 2
-#
-# Usage: make install DESTDIR=path/to/initramfs/root
+# Copies built binaries into a staging rootfs tree.
+# See BUILDING.md for detailed layout and usage.
 DESTDIR ?= $(BUILD_DIR)/rootfs
 install: all
 	mkdir -p $(DESTDIR)/bin $(DESTDIR)/usr/bin
