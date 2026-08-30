@@ -146,13 +146,13 @@ cd rustos
 git checkout v0.1.0
 
 # Build kernel
-make build
+cargo xtask build --arch x86_64
 
 # Build ISO
-make iso
+cargo xtask image --arch x86_64
 
 # Test in QEMU
-make run
+cargo xtask run --arch x86_64
 ```
 
 ## Post-Installation
