@@ -222,6 +222,66 @@ pub fn write_sector(lba: u64, buf: &[u8; SECTOR_SIZE]) -> bool {
     do_request(VIRTIO_BLK_T_OUT, lba, &mut tmp)
 }
 
+/// Flush the virtio-blk device cache to ensure all writes are persisted.
+/// Returns true on success, false on failure or timeout.
+pub fn flush_cache() -> bool {
+    // virtio-blk uses VIRTIO_BLK_T_FLUSH (value 4) for cache flush
+    const VIRTIO_BLK_T_FLUSH: u32 = 4;
+    
+    let _guard = LOCK.lock();
+    unsafe {
+        REQ_HDR.write(BlkReqHeader {
+            type_: VIRTIO_BLK_T_FLUSH,
+            _reserved: 0,
+            sector: 0,
+        });
+        REQ_STATUS.write(0xFF);
+
+        // Build 2-descriptor chain for flush (header + status only)
+        QUEUES.desc[0].addr = REQ_HDR.0.get() as u64;
+        QUEUES.desc[0].len = core::mem::size_of::<BlkReqHeader>() as u32;
+        QUEUES.desc[0].flags = VRING_DESC_F_NEXT;
+        QUEUES.desc[0].next = 1;
+
+        // Desc 1: status byte (device-writable)
+        QUEUES.desc[1].addr = REQ_STATUS.0.get() as u64;
+        QUEUES.desc[1].len = 1;
+        QUEUES.desc[1].flags = VRING_DESC_F_WRITE;
+        QUEUES.desc[1].next = 0;
+
+        // Place head descriptor in available ring
+        let avail_idx = QUEUES.avail.idx as usize % QUEUE_SIZE;
+        QUEUES.avail.ring[avail_idx] = 0;
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+        QUEUES.avail.idx = QUEUES.avail.idx.wrapping_add(1);
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+
+        // Kick device
+        mmio_w32(MMIO_QUEUE_NOTIFY, 0);
+
+        // Poll used ring with timeout
+        let mut spins = 0usize;
+        loop {
+            core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+            if QUEUES.used.idx != LAST_USED_IDX {
+                break;
+            }
+            spins += 1;
+            if spins > 5_000_000 {
+                return false;
+            }
+            core::hint::spin_loop();
+        }
+        LAST_USED_IDX = LAST_USED_IDX.wrapping_add(1);
+
+        // Ack interrupt
+        let isr = mmio_r32(MMIO_INT_STATUS);
+        mmio_w32(MMIO_INT_ACK, isr);
+
+        REQ_STATUS.read() == 0
+    }
+}
+
 fn do_request(req_type: u32, lba: u64, buf: &mut [u8; SECTOR_SIZE]) -> bool {
     let _guard = LOCK.lock();
     unsafe {
