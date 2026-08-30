@@ -62,7 +62,7 @@ the full kernel graph is available for integration work when both
 | Module | Status | Notes |
 |---|---|---|
 | `src/syscall/` dispatcher/routers | partial | Full-kernel-only syscall surface with Linux-number routing tables |
-| `src/syscall/stubs.rs` | stub | Explicit placeholder handling remains documented and guarded |
+| `src/syscall/stubs.rs` | **real** | Documented ENOSYS stubs for deprecated/complex syscalls (remap_file_pages, kexec_file_load, bpf, userfaultfd) — intentionally unimplemented, not blockers for basic operation |
 | `src/syscall/profile.rs` | partial | `syscall-trace` counters exist; performance numbers need fresh collection |
 | POSIX compatibility modules | partial | `posix_full`, `musl_compat`, `openat2_mincore`, signal/fault helpers exist |
 
@@ -159,6 +159,7 @@ See `docs/ERROR_HANDLING_AUDIT.md` for detailed audit results.
 | 6 | Promote selected full-kernel subsystems from experimental to supported | **in progress** | VFS/ext4/FAT32, SMP, IPC completeness completed |
 | 7 | Complete error handling audit across remaining modules | **in progress** | See ERROR_HANDLING_AUDIT.md |
 | 8 | Expand testing coverage with syscall tests and stability scripts | **completed** | userspace/smoke/syscall_tests.c, scripts/stability_test.sh |
+| 9 | Document intentionally unimplemented syscalls (ENOSYS by design) | **completed** | stubs.rs lines 408/422/430/438 — remap_file_pages, kexec_file_load, bpf, userfaultfd |
 
 ## Contribution rules
 
