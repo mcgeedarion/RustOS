@@ -1,16 +1,25 @@
-```
 # Compiled and build artifacts
+*.pyc
+__pycache__/
 *.o
 *.obj
+*.class
 *.exe
 *.dll
 *.so
 *.a
 *.out
+build/
+dist/
+target/
 
 # Dependencies
-target/
-**/target/
+node_modules/
+venv/
+.venv/
+.env
+.env.local
+.env.*
 
 # Logs and temp files
 *.log
@@ -20,11 +29,12 @@ target/
 # Editors
 .vscode/
 .idea/
+*.swp
+*.swo
 
-# Environment
-.env
-.env.local
-.env.*
+# System files
+.DS_Store
+Thumbs.db
 
 # Coverage
 coverage/
@@ -32,121 +42,12 @@ htmlcov/
 .coverage
 
 # Python specific
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
-env/
-venv/
-.venv/
-pip-log.txt
-pip-delete-this-directory.txt
-.tox/
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.log
-.git*
-!CHANGELOG.md
-!README.md
-!CONTRIBUTING.md
-!LICENSE
-!Makefile
+.mypy_cache/
+.pytest_cache/
 
-# Rust specific
+# Gradle
+.gradle/
+
+# Rust/Cargo (based on .rs files in changes)
 Cargo.lock
-*.rs.bk
-$CARGO_HOME/
-.cargo/
-
-# macOS
-.DS_Store
-.AppleDouble
-.LSOverride
-Icon?
-._*
-.DocumentRevisions-V100
-.fseventsd
-.Spotlight-V100
-.TemporaryItems
-.Trashes
-.VolumeIcon.icns
-.com.apple.timemachine.donotpresent
-.AppleDB
-.AppleDesktop
-Network Trash Folder
-Temporary Items
-.apdisk
-
-# Linux
-*~
-\#*\#
-/.emacs.desktop
-/.emacs.desktop.lock
-*.elc
-auto-save-list
-tramp
-.\#*
-.\\#*
-server
-*.org~
-*.txt~
-
-# Windows
-Thumbs.db
-ehthumbs.db
-Desktop.ini
-$RECYCLE.BIN/
-*.cab
-*.msi
-*.msix
-*.msm
-*.msp
-
-# Compressed files
-*.zip
-*.gz
-*.tar
-*.tgz
-*.bz2
-*.xz
-*.7z
-*.rar
-*.zst
-*.lz4
-*.lzh
-*.arj
-*.rpm
-*.deb
-*.Z
-*.lz
-*.lzo
-*.tar.gz
-*.tar.bz2
-*.tar.xz
-*.tar.zst
-
-# IDE
-.vs/
-*.swp
-*.swo
-*~
-.project
-.idea/
-*.tmproj
-*.sublime-project
-*.sublime-workspace
-nbproject/
-nbbuild/
-nbdist/
-nbsources/
-build/
-dist/
-*.egg-info/
-.eggs/
-.svn/
-CVS/
-```
+target/

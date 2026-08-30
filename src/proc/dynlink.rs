@@ -164,7 +164,7 @@ fn map_elf_phdrs(elf: &[u8]) -> Result<usize, isize> {
     }
 
     let e_type = u16::from_le_bytes([elf[16], elf[17]]);
-    let e_phoff = usize::from_le_bytes(elf[32..40].try_into().unwrap());
+    let e_phoff = usize::from_le_bytes(elf[32..40].try_into().map_err(|_| -8)?);
     let e_phentsize = u16::from_le_bytes([elf[54], elf[55]]) as usize;
     let e_phnum = u16::from_le_bytes([elf[56], elf[57]]) as usize;
 
@@ -190,16 +190,16 @@ fn map_elf_phdrs(elf: &[u8]) -> Result<usize, isize> {
         if base + e_phentsize > elf.len() {
             break;
         }
-        let p_type = u32::from_le_bytes(elf[base..base + 4].try_into().unwrap());
+        let p_type = u32::from_le_bytes(elf[base..base + 4].try_into().map_err(|_| -8)?);
         if p_type != PT_LOAD {
             continue;
         }
 
-        let p_offset = usize::from_le_bytes(elf[base + 8..base + 16].try_into().unwrap());
-        let p_vaddr = usize::from_le_bytes(elf[base + 16..base + 24].try_into().unwrap());
-        let p_filesz = usize::from_le_bytes(elf[base + 32..base + 40].try_into().unwrap());
-        let p_memsz = usize::from_le_bytes(elf[base + 40..base + 48].try_into().unwrap());
-        let p_flags = u32::from_le_bytes(elf[base + 4..base + 8].try_into().unwrap());
+        let p_offset = usize::from_le_bytes(elf[base + 8..base + 16].try_into().map_err(|_| -8)?);
+        let p_vaddr = usize::from_le_bytes(elf[base + 16..base + 24].try_into().map_err(|_| -8)?);
+        let p_filesz = usize::from_le_bytes(elf[base + 32..base + 40].try_into().map_err(|_| -8)?);
+        let p_memsz = usize::from_le_bytes(elf[base + 40..base + 48].try_into().map_err(|_| -8)?);
+        let p_flags = u32::from_le_bytes(elf[base + 4..base + 8].try_into().map_err(|_| -8)?);
 
         let load_va = (p_vaddr + bias) & !(PAGE - 1);
         let pages = (p_memsz + PAGE - 1) / PAGE;
@@ -273,5 +273,5 @@ fn get_entry_point(elf: &[u8]) -> Result<usize, isize> {
     if elf.len() < 64 {
         return Err(-8);
     }
-    Ok(usize::from_le_bytes(elf[24..32].try_into().unwrap()))
+    usize::from_le_bytes(elf[24..32].try_into().map_err(|_| -8))
 }

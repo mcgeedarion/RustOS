@@ -109,7 +109,7 @@ impl GdbTarget {
         let mut buf = [0u8; UREG_COUNT * 8];
         proc_debug_read(bfd, &mut buf, 0);
         for i in 0..UREG_COUNT {
-            regs[i] = u64::from_le_bytes(buf[i * 8..(i + 1) * 8].try_into().unwrap());
+            regs[i] = u64::from_le_bytes(buf[i * 8..(i + 1) * 8].try_into().unwrap_or([0u8; 8]));
         }
         regs
     }
