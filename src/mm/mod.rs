@@ -18,6 +18,7 @@
 //!   `memmap`         — Physical memory map parsing (E820 / UEFI memory map).
 //!   `mlock`          — `mlock`/`munlock` syscall implementation.
 //!   `mmap`           — `mmap`/`munmap`/`mprotect` syscall implementation.
+//!   `oom_handler`    — Out-of-memory handling and VMM integration.
 //!   `page_fault`     — Architecture-independent page-fault dispatch.
 //!   `phys`           — `virt_to_phys` / `phys_to_virt` for the kernel direct map.
 //!   `pmm`            — Physical memory manager (free-list of 4 KiB frames).
@@ -36,6 +37,7 @@ pub mod kstack;
 pub mod memmap;
 pub mod mlock;
 pub mod mmap;
+pub mod oom_handler;
 pub mod page_fault;
 pub mod phys;
 pub mod pkeys;
@@ -53,7 +55,7 @@ pub mod vma;
 ///      available before slab can grow.
 ///   2. heap::init_heap_tracking()  — linked_list_allocator bootstrap.
 ///   3. mm::init()                  — THIS function; pre-warms slab caches and initialises the swap
-///      subsystem.
+///      subsystem and OOM handler.
 ///
 /// After this returns, `slab::slab_alloc`, `slab::slab_free`,
 /// `slab::slab_shrink`, `slab::slab_stats`, and all `swap::` functions
@@ -61,6 +63,7 @@ pub mod vma;
 pub fn init() {
     slab::init();
     swap::init();
+    oom_handler::init();
 }
 
 // ====================================================================
