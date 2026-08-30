@@ -26,6 +26,7 @@ pub mod pipe_scheme;
 pub use crate::fs::pipe;
 pub mod sem;
 pub mod shm;
+pub mod completeness;
 
 // ====================================================================
 // Userspace driver IPC entry points.

@@ -1,11 +1,4 @@
 ```
-# Rust specific
-target/
-Cargo.lock
-
-# Dependencies
-**/node_modules/
-
 # Compiled and build artifacts
 *.o
 *.obj
@@ -14,41 +7,104 @@ Cargo.lock
 *.so
 *.a
 *.out
-build/
-dist/
 
 # Dependencies
-.venv/
-venv/
-__pycache__/
-.mypy_cache/
-.pytest_cache/
-.gradle/
 target/
+**/target/
 
 # Logs and temp files
 *.log
 *.tmp
 *.swp
-*.swo
-
-# Environment
-.env
-.env.local
-*.env.*
 
 # Editors
 .vscode/
 .idea/
 
-# System
-.DS_Store
-Thumbs.db
+# Environment
+.env
+.env.local
+.env.*
 
 # Coverage
 coverage/
 htmlcov/
 .coverage
+
+# Python specific
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+.git*
+!CHANGELOG.md
+!README.md
+!CONTRIBUTING.md
+!LICENSE
+!Makefile
+
+# Rust specific
+Cargo.lock
+*.rs.bk
+$CARGO_HOME/
+.cargo/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+# Linux
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+.\\#*
+server
+*.org~
+*.txt~
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
 
 # Compressed files
 *.zip
@@ -62,7 +118,6 @@ htmlcov/
 *.zst
 *.lz4
 *.lzh
-*.cab
 *.arj
 *.rpm
 *.deb
@@ -73,4 +128,25 @@ htmlcov/
 *.tar.bz2
 *.tar.xz
 *.tar.zst
+
+# IDE
+.vs/
+*.swp
+*.swo
+*~
+.project
+.idea/
+*.tmproj
+*.sublime-project
+*.sublime-workspace
+nbproject/
+nbbuild/
+nbdist/
+nbsources/
+build/
+dist/
+*.egg-info/
+.eggs/
+.svn/
+CVS/
 ```
