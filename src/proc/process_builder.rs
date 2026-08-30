@@ -479,29 +479,31 @@ unsafe fn create_process(config: &ProcessConfig) -> Result<Process, ProcessError
         
         // Change working directory if specified
         if let Some(ref cwd) = config.cwd {
-            // Would call sys_chdir here - for now skip or implement
-            // For simplicity, we assume the exec will handle path resolution
+            // Convert path to CString and call sys_chdir
+            if let Ok(cwd_cstr) = alloc::ffi::CString::new(cwd.as_str()) {
+                crate::fs::stat_syscalls::sys_chdir(cwd_cstr.as_ptr() as usize);
+            }
         }
         
         // Set up file descriptors for stdin/stdout/stderr
-        // This would involve dup2/close syscalls
         if let Some(stdin_fd) = config.stdin_fd {
-            // sys_dup2(stdin_fd, 0) - placeholder
-            let _ = stdin_fd;
+            crate::fs::io_syscalls::sys_dup2(stdin_fd, 0);
         }
         if let Some(stdout_fd) = config.stdout_fd {
-            // sys_dup2(stdout_fd, 1) - placeholder
-            let _ = stdout_fd;
+            crate::fs::io_syscalls::sys_dup2(stdout_fd, 1);
         }
         if let Some(stderr_fd) = config.stderr_fd {
-            // sys_dup2(stderr_fd, 2) - placeholder
-            let _ = stderr_fd;
+            crate::fs::io_syscalls::sys_dup2(stderr_fd, 2);
         }
         
         // Apply resource limits if specified
         for limit in &config.resource_limits {
-            // Would call sys_setrlimit here
-            let _ = limit;
+            crate::proc::rlimit::setrlimit_for(
+                0, // 0 means current process
+                limit.resource as usize,
+                limit.soft,
+                limit.hard,
+            );
         }
         
         // Step 2: Build argv and envp for exec
