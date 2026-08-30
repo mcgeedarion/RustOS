@@ -1,0 +1,12 @@
+[package]
+name = "rustos-smoke"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "smoke"
+path = "src/main.rs"
+
+[dependencies]
