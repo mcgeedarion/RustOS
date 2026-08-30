@@ -191,7 +191,7 @@ pub fn msgrcv(msqid: i32, msgsz: usize, msgtyp: i64, msgflg: i32) -> Result<(i64
         };
 
         if let Some(i) = idx {
-            let msg = q.messages.remove(i).unwrap();
+            let msg = q.messages.remove(i).ok_or(-90)?; // E2BIG if removal fails
             if msg.data.len() > msgsz {
                 // MSG_NOERROR not implemented — return EMSGSIZE.
                 q.messages.insert(i, msg).ok();

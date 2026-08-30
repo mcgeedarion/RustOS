@@ -305,7 +305,7 @@ unsafe fn _init(base: usize) {
     // CREATE resource 1
     let res_id = 1u32;
     let fb_size = (w * h * 4) as usize;
-    let fb_phys = alloc_dma(fb_size, 4096).unwrap();
+    let fb_phys = alloc_dma(fb_size, 4096).expect("virtio-gpu: DMA allocation failed for framebuffer");
     create_resource(base, &ctrlq, res_id, w, h);
     attach_backing(base, &ctrlq, res_id, fb_phys, fb_size as u32);
     set_scanout(base, &ctrlq, res_id, w, h);
@@ -328,7 +328,8 @@ unsafe fn _init(base: usize) {
 
 unsafe fn get_display_info(base: usize, _vq: &Vq) -> (u32, u32) {
     // Simple stub: send GET_DISPLAY_INFO, default to 1024x768 if response absent.
-    let cmd_phys = alloc_dma(core::mem::size_of::<CtrlHdr>(), 64).unwrap();
+    let cmd_phys = alloc_dma(core::mem::size_of::<CtrlHdr>(), 64)
+        .expect("virtio-gpu: DMA allocation failed for display info command");
     let cmd = &mut *(cmd_phys as *mut CtrlHdr);
     *cmd = CtrlHdr {
         hdr_type: CMD_GET_DISPLAY_INFO,
@@ -340,7 +341,8 @@ unsafe fn get_display_info(base: usize, _vq: &Vq) -> (u32, u32) {
 }
 
 unsafe fn create_resource(base: usize, _vq: &Vq, res_id: u32, w: u32, h: u32) {
-    let phys = alloc_dma(core::mem::size_of::<CmdResource2d>(), 64).unwrap();
+    let phys = alloc_dma(core::mem::size_of::<CmdResource2d>(), 64)
+        .expect("virtio-gpu: DMA allocation failed for create resource command");
     let cmd = &mut *(phys as *mut CmdResource2d);
     *cmd = CmdResource2d {
         hdr: CtrlHdr {
@@ -356,7 +358,8 @@ unsafe fn create_resource(base: usize, _vq: &Vq, res_id: u32, w: u32, h: u32) {
 }
 
 unsafe fn attach_backing(base: usize, _vq: &Vq, res_id: u32, fb_phys: u64, size: u32) {
-    let phys = alloc_dma(core::mem::size_of::<CmdAttachBacking>(), 64).unwrap();
+    let phys = alloc_dma(core::mem::size_of::<CmdAttachBacking>(), 64)
+        .expect("virtio-gpu: DMA allocation failed for attach backing command");
     let cmd = &mut *(phys as *mut CmdAttachBacking);
     *cmd = CmdAttachBacking {
         hdr: CtrlHdr {
@@ -375,7 +378,8 @@ unsafe fn attach_backing(base: usize, _vq: &Vq, res_id: u32, fb_phys: u64, size:
 }
 
 unsafe fn set_scanout(base: usize, _vq: &Vq, res_id: u32, w: u32, h: u32) {
-    let phys = alloc_dma(core::mem::size_of::<CmdSetScanout>(), 64).unwrap();
+    let phys = alloc_dma(core::mem::size_of::<CmdSetScanout>(), 64)
+        .expect("virtio-gpu: DMA allocation failed for set scanout command");
     let cmd = &mut *(phys as *mut CmdSetScanout);
     *cmd = CmdSetScanout {
         hdr: CtrlHdr {
@@ -396,7 +400,8 @@ unsafe fn set_scanout(base: usize, _vq: &Vq, res_id: u32, w: u32, h: u32) {
 
 unsafe fn transfer_flush(base: usize, _vq: &Vq, res_id: u32, w: u32, h: u32) {
     // TRANSFER_TO_HOST_2D
-    let t_phys = alloc_dma(core::mem::size_of::<CmdTransfer2d>(), 64).unwrap();
+    let t_phys = alloc_dma(core::mem::size_of::<CmdTransfer2d>(), 64)
+        .expect("virtio-gpu: DMA allocation failed for transfer command");
     let t = &mut *(t_phys as *mut CmdTransfer2d);
     *t = CmdTransfer2d {
         hdr: CtrlHdr {
@@ -416,7 +421,8 @@ unsafe fn transfer_flush(base: usize, _vq: &Vq, res_id: u32, w: u32, h: u32) {
     send_cmd_sync(base, t_phys, core::mem::size_of::<CmdTransfer2d>());
 
     // RESOURCE_FLUSH
-    let f_phys = alloc_dma(core::mem::size_of::<CmdFlush>(), 64).unwrap();
+    let f_phys = alloc_dma(core::mem::size_of::<CmdFlush>(), 64)
+        .expect("virtio-gpu: DMA allocation failed for flush command");
     let f = &mut *(f_phys as *mut CmdFlush);
     *f = CmdFlush {
         hdr: CtrlHdr {
@@ -463,7 +469,7 @@ unsafe fn setup_vq(base: usize, q: u32) -> Vq {
     let desc_b = qsz * 16;
     let avail_b = 4 + qsz * 2;
     let total = align_up(desc_b + avail_b, 4096) + align_up(4 + qsz * 8, 4096);
-    let phys = alloc_dma(total, 4096).unwrap();
+    let phys = alloc_dma(total, 4096).expect("virtio-gpu: DMA allocation failed for virtqueue");
     core::ptr::write_bytes(phys as *mut u8, 0, total);
     write32(base, MMIO_QUEUE_PFN, (phys >> 12) as u32);
     write32(base, MMIO_QUEUE_READY, 1);

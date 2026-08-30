@@ -273,10 +273,10 @@ unsafe fn _init(bar5: usize) {
             continue;
         }
 
-        let clb = alloc_dma(32 * 32, 1024).expect("ahci clb");
-        let fb = alloc_dma(256, 256).expect("ahci fb");
-        let ct = alloc_dma(core::mem::size_of::<CmdTable>(), 128).expect("ahci ct");
-        let dma = alloc_dma(512 * 256, 4096).expect("ahci dma");
+        let clb = alloc_dma(32 * 32, 1024).expect("ahci: DMA allocation failed for command list base");
+        let fb = alloc_dma(256, 256).expect("ahci: DMA allocation failed for FIS base");
+        let ct = alloc_dma(core::mem::size_of::<CmdTable>(), 128).expect("ahci: DMA allocation failed for command table");
+        let dma = alloc_dma(512 * 256, 4096).expect("ahci: DMA allocation failed for data buffer");
 
         stop_engine(pbase);
 

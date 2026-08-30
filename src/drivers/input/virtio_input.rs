@@ -199,7 +199,7 @@ unsafe fn setup_queue(base: usize, q: u32) -> Vq {
     let avail_bytes = core::mem::size_of::<Avail>();
     let used_bytes = core::mem::size_of::<Used>();
     let total = align_up(desc_bytes + avail_bytes, 4096) + align_up(used_bytes, 4096);
-    let phys = alloc_dma(total, 4096).unwrap();
+    let phys = alloc_dma(total, 4096).expect("virtio-input: DMA allocation failed for virtqueue");
     core::ptr::write_bytes(phys as *mut u8, 0, total);
 
     write32(base, MMIO_QUEUE_PFN, (phys >> 12) as u32);
@@ -211,7 +211,7 @@ unsafe fn setup_queue(base: usize, q: u32) -> Vq {
 
     let mut bufs = Vec::with_capacity(qsz);
     for _ in 0..qsz {
-        bufs.push(alloc_dma(EVT_SIZE, 8).unwrap());
+        bufs.push(alloc_dma(EVT_SIZE, 8).expect("virtio-input: DMA allocation failed for event buffer"));
     }
 
     Vq {

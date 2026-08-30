@@ -197,12 +197,14 @@ unsafe fn _init(mmio: usize) {
     write32(opr, OPR_CONFIG, max_slots as u32);
 
     // Allocate DCBAA (max_slots+1 pointers, 8 bytes each).
-    let dcbaa_phys = alloc_dma((max_slots + 1) * 8, 64).unwrap();
+    let dcbaa_phys = alloc_dma((max_slots + 1) * 8, 64)
+        .expect("xhci: DMA allocation failed for DCBAA");
     write64(opr, OPR_DCBAAP, dcbaa_phys);
     let dcbaa = dcbaa_phys as *mut u64;
 
     // Allocate and register command ring.
-    let cmd_ring_phys = alloc_dma(TR_SIZE * 16, 64).unwrap();
+    let cmd_ring_phys = alloc_dma(TR_SIZE * 16, 64)
+        .expect("xhci: DMA allocation failed for command ring");
     let cmd_ring = cmd_ring_phys as *mut Trb;
     // Last TRB is a link back to start.
     let link = &mut *cmd_ring.add(TR_SIZE - 1);
@@ -211,10 +213,12 @@ unsafe fn _init(mmio: usize) {
     write64(opr, OPR_CRCR, cmd_ring_phys | 1); // cycle bit
 
     // Allocate event ring (primary interrupter).
-    let evt_ring_phys = alloc_dma(TR_SIZE * 16, 64).unwrap();
+    let evt_ring_phys = alloc_dma(TR_SIZE * 16, 64)
+        .expect("xhci: DMA allocation failed for event ring");
     let evt_ring = evt_ring_phys as *mut Trb;
     // Event Ring Segment Table.
-    let erst_phys = alloc_dma(16, 64).unwrap();
+    let erst_phys = alloc_dma(16, 64)
+        .expect("xhci: DMA allocation failed for ERST");
     let erst = erst_phys as *mut u64;
     *erst = evt_ring_phys; // base
     *erst.add(1) = TR_SIZE as u64; // size
