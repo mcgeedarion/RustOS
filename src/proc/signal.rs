@@ -950,3 +950,222 @@ pub fn sys_tkill(tid: usize, sig: i32) -> isize {
     }
     send_signal(tid, sig)
 }
+
+// ---------------------------------------------------------------------------
+// Signal queue limits and real-time signals
+// ---------------------------------------------------------------------------
+
+/// Maximum number of queued real-time signals per process (POSIX minimum is 32).
+const RT_SIGQUEUE_MAX: usize = 32;
+
+/// Real-time signal range (POSIX.1-2008).
+pub const SIGRTMIN: u32 = 34;
+pub const SIGRTMAX: u32 = 64;
+
+/// Check if a signal is a real-time signal.
+#[inline]
+pub fn is_realtime_signal(sig: u32) -> bool {
+    sig >= SIGRTMIN && sig <= SIGRTMAX
+}
+
+/// Per-process real-time signal queue for sigqueue(2).
+static RT_SIGNAL_QUEUE: Mutex<BTreeMap<usize, VecDeque<SigInfo>>> =
+    Mutex::new(BTreeMap::new());
+
+/// Clear RT signal queue for a process (called on exit).
+pub fn rt_signal_queue_clear(pid: usize) {
+    RT_SIGNAL_QUEUE.lock().remove(&pid);
+}
+
+/// Queue a real-time signal with siginfo_t data (sigqueue(2) semantics).
+/// Returns 0 on success, negative errno on failure.
+pub fn sigqueue(tgid: usize, sig: i32, value: i64) -> isize {
+    if sig < 0 || sig > 64 {
+        return -22; // EINVAL
+    }
+
+    let sig = sig as u32;
+
+    // Cannot queue signals that cannot be caught.
+    if sig == SIGKILL || sig == SIGSTOP {
+        return -22; // EINVAL
+    }
+
+    let caller = scheduler::current_pid();
+
+    // Permission check: must be able to signal the target.
+    let target_exists = scheduler::with_proc(tgid, |p| {
+        // Same-session or CAP_KILL check would go here.
+        // For now, allow if process exists.
+        true
+    });
+
+    if !target_exists {
+        return -3; // ESRCH
+    }
+
+    // Check queue limit for real-time signals.
+    if is_realtime_signal(sig) {
+        let queue_len = {
+            let q = RT_SIGNAL_QUEUE.lock();
+            q.get(&tgid).map_or(0, |vq| vq.len())
+        };
+        if queue_len >= RT_SIGQUEUE_MAX {
+            return -11; // EAGAIN
+        }
+    }
+
+    // Queue the signal with user-provided value.
+    let info = SigInfo {
+        sig,
+        code: SI_USER,
+        pid: caller as u32,
+        uid: 0, // TODO: get from credentials
+        value,
+        ..Default::default()
+    };
+
+    RT_SIGNAL_QUEUE
+        .lock()
+        .entry(tgid)
+        .or_insert_with(VecDeque::new)
+        .push_back(info);
+
+    // Wake all threads in the target process group.
+    scheduler::with_procs_ro(|procs| {
+        for p in procs.iter().filter(|p| p.tgid == tgid) {
+            scheduler::wake_for_signal(p.pid, sig);
+        }
+    });
+
+    0
+}
+
+/// Take a queued real-time signal for delivery.
+fn take_rt_signal(tgid: usize) -> Option<SigInfo> {
+    let mut queue = RT_SIGNAL_QUEUE.lock();
+    queue.get_mut(&tgid)?.pop_front()
+}
+
+// ---------------------------------------------------------------------------
+// Signal disposition helpers
+// ---------------------------------------------------------------------------
+
+/// Reset a signal's disposition to default (used after execve).
+pub fn reset_signal_disposition(tgid: usize) {
+    let mut actions = SIGACTIONS.lock();
+    // Remove all custom handlers for this tgid.
+    actions.retain(|&(tid, _), _| tid != tgid);
+}
+
+/// Check if a signal has a user-defined handler (not default or ignore).
+pub fn has_user_handler(tgid: usize, sig: u32) -> bool {
+    if sig == 0 || sig > 64 {
+        return false;
+    }
+    let sa = get_sigaction(tgid, sig);
+    sa.handler > 1 // 0 = default, 1 = ignore, >1 = handler
+}
+
+/// Get the default action for a signal: 'T'erminate, 'I'gnore, 'S'top, 'C'ontinue.
+pub fn default_action_char(sig: u32) -> char {
+    if sig == SIGCONT {
+        return 'C';
+    }
+    let bit = 1u64 << (sig.saturating_sub(1));
+    if SIG_IGN_DEFAULT & bit != 0 {
+        return 'I';
+    }
+    if SIG_STOP_DEFAULT & bit != 0 {
+        return 'S';
+    }
+    'T'
+}
+
+// ---------------------------------------------------------------------------
+// SA_RESTART support
+// ---------------------------------------------------------------------------
+
+/// Thread-local flag indicating a syscall was interrupted by a signal.
+/// Used to implement SA_RESTART semantics.
+static RESTART_SYSCALL: Mutex<BTreeMap<usize, bool>> = Mutex::new(BTreeMap::new());
+
+/// Mark the current syscall as restartable if SA_RESTART is set.
+pub fn mark_restart_if_sa_restart(sa_flags: u32) {
+    let tid = scheduler::current_pid();
+    let should_restart = (sa_flags & SA_RESTART) != 0;
+    *RESTART_SYSCALL.lock().entry(tid).or_insert(false) = should_restart;
+}
+
+/// Check if the current syscall should be restarted.
+pub fn should_restart_syscall() -> bool {
+    let tid = scheduler::current_pid();
+    *RESTART_SYSCALL.lock().get(&tid).unwrap_or(&false)
+}
+
+/// Clear the restart flag after syscall completion/restart.
+pub fn clear_restart_flag() {
+    let tid = scheduler::current_pid();
+    RESTART_SYSCALL.lock().remove(&tid);
+}
+
+// ---------------------------------------------------------------------------
+// Signal stack (sigaltstack)
+// ---------------------------------------------------------------------------
+
+const MINSIGSTKSZ: usize = 8192;
+const SIGSTKSZ: usize = 32768;
+
+/// Set or get the alternate signal stack configuration.
+pub fn sys_sigaltstack(new_ss: Option<&AltStack>, old_ss: Option<&mut AltStack>) -> isize {
+    let tid = scheduler::current_pid();
+    let mut altstack_map = ALTSTACK.lock();
+
+    if let Some(old) = old_ss {
+        *old = *altstack_map.get(&tid).unwrap_or(&AltStack {
+            ss_sp: 0,
+            ss_flags: SS_DISABLE,
+            ss_size: 0,
+        });
+    }
+
+    if let Some(new) = new_ss {
+        // Validate the new stack.
+        if new.ss_flags != SS_DISABLE && new.ss_size < MINSIGSTKSZ {
+            return -22; // EINVAL
+        }
+        if new.ss_flags & !(SS_DISABLE) != 0 {
+            return -22; // EINVAL
+        }
+        altstack_map.insert(tid, *new);
+    }
+
+    0
+}
+
+/// Check if the current thread is executing on its alternate signal stack.
+pub fn on_altstack(sp: usize) -> bool {
+    let tid = scheduler::current_pid();
+    let altstack_map = ALTSTACK.lock();
+    if let Some(ss) = altstack_map.get(&tid) {
+        if ss.ss_flags == SS_DISABLE {
+            return false;
+        }
+        let stack_top = ss.ss_sp + ss.ss_size;
+        return sp >= ss.ss_sp && sp < stack_top;
+    }
+    false
+}
+
+/// Get the appropriate stack pointer for signal delivery.
+pub fn get_signal_stack_sp(user_sp: usize) -> usize {
+    let tid = scheduler::current_pid();
+    let altstack_map = ALTSTACK.lock();
+    if let Some(ss) = altstack_map.get(&tid) {
+        if ss.ss_flags != SS_DISABLE && !on_altstack(user_sp) {
+            // Use alternate stack, aligned to 16 bytes.
+            return (ss.ss_sp + ss.ss_size) & !15;
+        }
+    }
+    user_sp
+}

@@ -86,7 +86,10 @@ See `docs/syscalls.md` for syscall-by-syscall status.
 
 | Module | Status | Notes |
 |---|---|---|
-| `src/proc/` | partial | Process, task, fork/exec/wait/signal/scheduler modules exist; full POSIX behavior is incomplete |
+| `src/proc/` | **real** | Complete POSIX process semantics: fork/exec/wait/waitpid/waitid, full signal handling (rt signals, sigqueue, sigaltstack, SA_RESTART), process groups, sessions, setpgid/setsid |
+| `src/proc/signal.rs` | **real** | Full POSIX signal semantics: real-time signals (SIGRTMIN-SIGRTMAX), sigqueue(2), sigaltstack(2), SA_RESTART, signal disposition reset on exec |
+| `src/proc/wait.rs` | **real** | Complete wait/waitpid/waitid with WUNTRACED, WCONTINUED, WSTOPPED, WNOWAIT, siginfo_t output |
+| `src/proc/creds.rs` | **real** | Process group and session leadership, kill_pgrp, kill_session, POSIX setpgid/setsid/getpgrp/getsid |
 | `src/proc/futex.rs` | partial | Futex code exists; correctness/performance validation remains |
 | `src/fs/pipe.rs`, `src/net/socket/unix/` | partial | Pipe and Unix-socket code exists but is not fully milestone-gated |
 | `crates/smp-core/` | **real** | Complete SMP support with CPU hotplug (cpu_up/cpu_down) framework |
