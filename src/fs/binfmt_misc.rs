@@ -202,7 +202,9 @@ pub fn parse_register_string(s: &str) -> Result<BinfmtEntry, &'static str> {
         return Err("empty");
     }
     // The first character is the chosen delimiter.
-    let delim = s.chars().next().unwrap();
+    let Some(delim) = s.chars().next() else {
+        return Err("no delimiter");
+    };
     let parts: Vec<&str> = s[delim.len_utf8()..].split(delim).collect();
     // Expected 7 fields after the leading delimiter:
     //  name | type | offset | magic | mask | interpreter | flags

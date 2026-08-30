@@ -280,7 +280,9 @@ pub fn tmpfs_create(full_path: &str) -> Result<(), isize> {
     fs.paths.insert(rel, ino);
 
     // Add directory entry.
-    let parent_ino = *fs.paths.get(&parent).unwrap();
+    let Some(&parent_ino) = fs.paths.get(&parent) else {
+        return Err(-2isize); // ENOENT - parent disappeared
+    };
     if let Some(p) = fs.inodes.get_mut(&parent_ino) {
         if let INodeData::Dir(ref mut entries) = p.data {
             entries.insert(name, ino);
@@ -320,7 +322,9 @@ pub fn tmpfs_write_all(full_path: &str, data: &[u8]) -> Result<(), isize> {
         let node = INode::new_file(ino);
         fs.inodes.insert(ino, node);
         fs.paths.insert(rel.clone(), ino);
-        let parent_ino = *fs.paths.get(&parent).unwrap();
+        let Some(&parent_ino) = fs.paths.get(&parent) else {
+            return Err(-2isize); // ENOENT - parent disappeared
+        };
         if let Some(p) = fs.inodes.get_mut(&parent_ino) {
             if let INodeData::Dir(ref mut entries) = p.data {
                 entries.insert(name, ino);
@@ -484,7 +488,9 @@ pub fn tmpfs_mkdir(full_path: &str) -> Result<(), isize> {
     fs.inodes.insert(ino, node);
     fs.paths.insert(rel, ino);
 
-    let parent_ino = *fs.paths.get(&parent).unwrap();
+    let Some(&parent_ino) = fs.paths.get(&parent) else {
+        return Err(-2isize); // ENOENT - parent disappeared
+    };
     if let Some(p) = fs.inodes.get_mut(&parent_ino) {
         if let INodeData::Dir(ref mut entries) = p.data {
             entries.insert(name, ino);
@@ -662,7 +668,9 @@ pub fn tmpfs_symlink(target: &str, link_path: &str) -> Result<(), isize> {
     fs.inodes.insert(ino, node);
     fs.paths.insert(rel, ino);
 
-    let parent_ino = *fs.paths.get(&parent).unwrap();
+    let Some(&parent_ino) = fs.paths.get(&parent) else {
+        return Err(-2isize); // ENOENT - parent disappeared
+    };
     if let Some(p) = fs.inodes.get_mut(&parent_ino) {
         if let INodeData::Dir(ref mut entries) = p.data {
             entries.insert(name, ino);
@@ -760,7 +768,10 @@ pub fn tmpfs_statfs_for(full_path: &str) -> crate::fs::vfs_ops::KStatfs {
         }
     }
     if let Some(mp) = best_mp {
-        let sf = tbl.get(mp).unwrap().statfs();
+        let Some(fs) = tbl.get(mp) else {
+            return crate::fs::vfs_ops::KStatfs::default();
+        };
+        let sf = fs.statfs();
         return crate::fs::vfs_ops::KStatfs {
             f_type: sf.f_type,
             f_bsize: sf.f_bsize,

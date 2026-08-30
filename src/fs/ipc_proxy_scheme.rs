@@ -211,11 +211,13 @@ fn push_bytes(v: &mut Vec<u8>, b: &[u8]) {
 }
 fn read_u32(b: &[u8]) -> Option<u32> {
     b.get(..4)
-        .map(|s| u32::from_le_bytes(s.try_into().unwrap()))
+        .and_then(|s| s.try_into().ok())
+        .map(u32::from_le_bytes)
 }
 fn read_u64(b: &[u8]) -> Option<u64> {
     b.get(..8)
-        .map(|s| u64::from_le_bytes(s.try_into().unwrap()))
+        .and_then(|s| s.try_into().ok())
+        .map(u64::from_le_bytes)
 }
 fn scheme_error_from_u32(n: u32) -> SchemeError {
     match n {

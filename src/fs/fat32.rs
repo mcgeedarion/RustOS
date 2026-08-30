@@ -660,7 +660,9 @@ impl Fat32Fs {
             }
         }
         // Need a new cluster
-        let last = *chain.last().unwrap();
+        let Some(&last) = chain.last() else {
+            return Err(-28isize); // ENOSPC - no clusters available
+        };
         let new_c = self.alloc_cluster(Some(last))?;
         let mut buf = vec![0u8; csz];
         write_short_entry(&mut buf[0..32], name, cluster, size, attr);

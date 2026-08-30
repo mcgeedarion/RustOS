@@ -369,7 +369,9 @@ pub fn proc_fd_open(pid: usize, path: &str, flags: u32, _mode: u32) -> isize {
         if !lock.contains_key(&pid) {
             lock.insert(pid, ProcFdTable::default());
         }
-        let table = lock.get_mut(&pid).expect("proc fd table inserted");
+        let table = lock.get_mut(&pid).unwrap_or_else(|| {
+            panic!("proc fd table inserted");
+        });
         let fd = table.alloc_fd(3);
         table.insert(fd, entry);
         fd
@@ -425,7 +427,7 @@ pub fn proc_fd_dup2(pid: usize, old_fd: usize, new_fd: usize) -> isize {
         lock.insert(pid, ProcFdTable::default());
     }
     lock.get_mut(&pid)
-        .expect("proc fd table inserted")
+        .unwrap_or_else(|| panic!("proc fd table inserted"))
         .insert(new_fd, new_entry);
 
     new_fd as isize
@@ -502,7 +504,7 @@ pub fn proc_fd_install(
     if !lock.contains_key(&pid) {
         lock.insert(pid, ProcFdTable::default());
     }
-    let table = lock.get_mut(&pid).expect("proc fd table inserted");
+    let table = lock.get_mut(&pid).unwrap_or_else(|| panic!("proc fd table inserted"));
     let fd = match preferred {
         Some(n) => n,
         None => table.alloc_fd(3),
