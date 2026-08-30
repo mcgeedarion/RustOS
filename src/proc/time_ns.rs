@@ -27,8 +27,15 @@ fn read_timespec(va: usize) -> Option<(i64, i64)> {
     }
     let mut buf = [0u8; 16];
     copy_from_user(&mut buf, va).ok()?;
-    let sec = i64::from_le_bytes(buf[0..8].try_into().unwrap());
-    let nsec = i64::from_le_bytes(buf[8..16].try_into().unwrap());
+    // Safe casts: slices are guaranteed to be exact size by array declaration
+    let sec = i64::from_le_bytes(match buf[0..8].try_into() {
+        Ok(arr) => arr,
+        Err(_) => return None,
+    });
+    let nsec = i64::from_le_bytes(match buf[8..16].try_into() {
+        Ok(arr) => arr,
+        Err(_) => return None,
+    });
     Some((sec, nsec))
 }
 
@@ -138,8 +145,15 @@ pub fn sys_settimeofday(tv_va: usize, _tz_va: usize) -> isize {
     if copy_from_user(&mut buf, tv_va).is_err() {
         return -14;
     }
-    let sec = i64::from_le_bytes(buf[0..8].try_into().unwrap());
-    let usec = i64::from_le_bytes(buf[8..16].try_into().unwrap());
+    // Safe casts: slices are guaranteed to be exact size by array declaration
+    let sec = i64::from_le_bytes(match buf[0..8].try_into() {
+        Ok(arr) => arr,
+        Err(_) => return -22,
+    });
+    let usec = i64::from_le_bytes(match buf[8..16].try_into() {
+        Ok(arr) => arr,
+        Err(_) => return -22,
+    });
     if usec < 0 || usec >= 1_000_000 {
         return -22;
     }
@@ -185,8 +199,15 @@ pub fn sys_utime(path_va: usize, times_va: usize) -> isize {
         if copy_from_user(&mut buf, times_va).is_err() {
             return -14;
         }
-        let actime = i64::from_le_bytes(buf[0..8].try_into().unwrap());
-        let modtime = i64::from_le_bytes(buf[8..16].try_into().unwrap());
+        // Safe casts: slices are guaranteed to be exact size by array declaration
+        let actime = i64::from_le_bytes(match buf[0..8].try_into() {
+            Ok(arr) => arr,
+            Err(_) => return -22,
+        });
+        let modtime = i64::from_le_bytes(match buf[8..16].try_into() {
+            Ok(arr) => arr,
+            Err(_) => return -22,
+        });
         (
             actime as u64 * 1_000_000_000,
             modtime as u64 * 1_000_000_000,
@@ -227,10 +248,23 @@ pub fn sys_utimes(path_va: usize, times_va: usize) -> isize {
         if copy_from_user(&mut buf, times_va).is_err() {
             return -14;
         }
-        let a_sec = i64::from_le_bytes(buf[0..8].try_into().unwrap());
-        let a_usec = i64::from_le_bytes(buf[8..16].try_into().unwrap());
-        let m_sec = i64::from_le_bytes(buf[16..24].try_into().unwrap());
-        let m_usec = i64::from_le_bytes(buf[24..32].try_into().unwrap());
+        // Safe casts: slices are guaranteed to be exact size by array declaration
+        let a_sec = i64::from_le_bytes(match buf[0..8].try_into() {
+            Ok(arr) => arr,
+            Err(_) => return -22,
+        });
+        let a_usec = i64::from_le_bytes(match buf[8..16].try_into() {
+            Ok(arr) => arr,
+            Err(_) => return -22,
+        });
+        let m_sec = i64::from_le_bytes(match buf[16..24].try_into() {
+            Ok(arr) => arr,
+            Err(_) => return -22,
+        });
+        let m_usec = i64::from_le_bytes(match buf[24..32].try_into() {
+            Ok(arr) => arr,
+            Err(_) => return -22,
+        });
         (
             a_sec as u64 * 1_000_000_000 + a_usec as u64 * 1_000,
             m_sec as u64 * 1_000_000_000 + m_usec as u64 * 1_000,
@@ -293,10 +327,23 @@ pub fn sys_utimensat(dirfd: i32, path_va: usize, times_va: usize, _flags: u32) -
         if copy_from_user(&mut buf, times_va).is_err() {
             return -14;
         }
-        let a_sec = i64::from_le_bytes(buf[0..8].try_into().unwrap());
-        let a_nsec = i64::from_le_bytes(buf[8..16].try_into().unwrap());
-        let m_sec = i64::from_le_bytes(buf[16..24].try_into().unwrap());
-        let m_nsec = i64::from_le_bytes(buf[24..32].try_into().unwrap());
+        // Safe casts: slices are guaranteed to be exact size by array declaration
+        let a_sec = i64::from_le_bytes(match buf[0..8].try_into() {
+            Ok(arr) => arr,
+            Err(_) => return -22,
+        });
+        let a_nsec = i64::from_le_bytes(match buf[8..16].try_into() {
+            Ok(arr) => arr,
+            Err(_) => return -22,
+        });
+        let m_sec = i64::from_le_bytes(match buf[16..24].try_into() {
+            Ok(arr) => arr,
+            Err(_) => return -22,
+        });
+        let m_nsec = i64::from_le_bytes(match buf[24..32].try_into() {
+            Ok(arr) => arr,
+            Err(_) => return -22,
+        });
 
         let resolve_ts = |sec: i64, nsec: i64| -> Option<u64> {
             if nsec == UTIME_NOW {

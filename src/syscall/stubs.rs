@@ -101,8 +101,23 @@ pub(super) fn sys_renameat2_impl(
     new_va: usize,
     flags: u32,
 ) -> isize {
+    const RENAME_NOREPLACE: u32 = 1;
+    const RENAME_EXCHANGE: u32 = 2;
+    const RENAME_WHITEOUT: u32 = 4;
+
+    // Validate flags - only known flags are accepted
+    let known_flags = RENAME_NOREPLACE | RENAME_EXCHANGE | RENAME_WHITEOUT;
+    if flags & !known_flags != 0 {
+        return einval();
+    }
+
     if flags != 0 {
-        // RENAME_NOREPLACE / RENAME_EXCHANGE / RENAME_WHITEOUT not yet implemented.
+        // RENAME_NOREPLACE: Don't overwrite target (atomically check existence)
+        // RENAME_EXCHANGE: Atomically exchange source and target
+        // RENAME_WHITEOUT: Create whiteout entry for source
+        // These advanced rename operations require VFS support for atomic
+        // operations and whiteout entries (used by overlay filesystems).
+        // Not yet implemented in this kernel.
         return enosys();
     }
     sys_renameat_impl(old_dirfd, old_va, new_dirfd, new_va)
@@ -377,16 +392,52 @@ pub(super) fn sys_fchmod_impl(fd: usize, mode: u32) -> isize {
     }
 }
 
-pub(super) fn sys_remap_file_pages_impl() -> isize {
+/// NR 256 remap_file_pages(start, size, prot, pgoff, flags)
+/// Legacy syscall for non-linear mappings. Modern kernels implement via mmap.
+pub(super) fn sys_remap_file_pages_impl(
+    _start: usize,
+    _size: usize,
+    _prot: i32,
+    _pgoff: usize,
+    _flags: i32,
+) -> isize {
+    // This syscall is deprecated and obsolete. Modern userspace should use
+    // mmap with appropriate flags instead. Return ENOSYS to indicate
+    // the functionality is not available.
     enosys()
 }
-pub(super) fn sys_kexec_file_load_impl() -> isize {
+
+/// NR 320 kexec_file_load(kernel_fd, initrd_fd, cmdline_len, cmdline_ptr, flags)
+/// Load a new kernel/initrd for kexec reboot. Requires secure boot handling
+/// and architecture-specific implementation. Not yet implemented.
+pub(super) fn sys_kexec_file_load_impl(
+    _kernel_fd: usize,
+    _initrd_fd: usize,
+    _cmdline_len: usize,
+    _cmdline_ptr: usize,
+    _flags: u32,
+) -> isize {
+    // Kexec requires careful handling of secure boot, IMA signatures, and
+    // architecture-specific reboot paths. Not implemented in this kernel.
     enosys()
 }
-pub(super) fn sys_bpf_impl() -> isize {
+
+/// NR 321 bpf(cmd, attr, size)
+/// Extended Berkeley Packet Filter syscall for eBPF programs.
+/// Requires JIT compiler, verifier, and extensive kernel infrastructure.
+pub(super) fn sys_bpf_impl(_cmd: i32, _attr_va: usize, _size: usize) -> isize {
+    // eBPF support requires a program verifier, JIT compiler, and extensive
+    // kernel subsystems (maps, programs, helpers). Not implemented.
     enosys()
 }
-pub(super) fn sys_userfaultfd_impl() -> isize {
+
+/// NR 323 userfaultfd(flags)
+/// Create a file descriptor for handling page faults in userspace.
+/// Requires userfaultfd subsystem and careful memory management integration.
+pub(super) fn sys_userfaultfd_impl(_flags: i32) -> isize {
+    // userfaultfd requires integration with the page fault handler,
+    // userfaultfd context management, and careful synchronization.
+    // Not implemented in this kernel.
     enosys()
 }
 

@@ -57,10 +57,23 @@ fn read_itimerval(va: usize) -> Option<(u64 /* interval_ns */, u64 /* value_ns *
     }
     let mut buf = [0u8; 32]; // two timevals, 16 bytes each
     copy_from_user(&mut buf, va).ok()?;
-    let itv_sec = i64::from_le_bytes(buf[0..8].try_into().unwrap());
-    let itv_usec = i64::from_le_bytes(buf[8..16].try_into().unwrap());
-    let val_sec = i64::from_le_bytes(buf[16..24].try_into().unwrap());
-    let val_usec = i64::from_le_bytes(buf[24..32].try_into().unwrap());
+    // Safe casts: slices are guaranteed to be exact size by array declaration
+    let itv_sec = i64::from_le_bytes(match buf[0..8].try_into() {
+        Ok(arr) => arr,
+        Err(_) => return None,
+    });
+    let itv_usec = i64::from_le_bytes(match buf[8..16].try_into() {
+        Ok(arr) => arr,
+        Err(_) => return None,
+    });
+    let val_sec = i64::from_le_bytes(match buf[16..24].try_into() {
+        Ok(arr) => arr,
+        Err(_) => return None,
+    });
+    let val_usec = i64::from_le_bytes(match buf[24..32].try_into() {
+        Ok(arr) => arr,
+        Err(_) => return None,
+    });
     if itv_sec < 0 || itv_usec < 0 || val_sec < 0 || val_usec < 0 {
         return None;
     }

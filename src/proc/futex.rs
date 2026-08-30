@@ -139,8 +139,15 @@ fn read_deadline(va: usize) -> Result<Option<u64>, isize> {
     }
     let mut buf = [0u8; 16];
     copy_from_user(&mut buf, va).map_err(|_| -14isize)?;
-    let secs = i64::from_le_bytes(buf[0..8].try_into().unwrap());
-    let nsecs = i64::from_le_bytes(buf[8..16].try_into().unwrap());
+    // Safe casts: slices are guaranteed to be exact size by array declaration
+    let secs = i64::from_le_bytes(match buf[0..8].try_into() {
+        Ok(arr) => arr,
+        Err(_) => return Err(-22),
+    });
+    let nsecs = i64::from_le_bytes(match buf[8..16].try_into() {
+        Ok(arr) => arr,
+        Err(_) => return Err(-22),
+    });
     if secs < 0 || nsecs < 0 || nsecs >= 1_000_000_000 {
         return Err(-22);
     }
