@@ -107,7 +107,8 @@ pub fn rename_preflight(args: RenameArgs<'_>) -> Result<RenameOutcome, isize> {
     if args.flags & (RENAME_EXCHANGE | RENAME_WHITEOUT) != 0 {
         // RENAME_EXCHANGE and RENAME_WHITEOUT require special VFS support
         // for atomic exchange operations and whiteout entries.
-        // Not yet implemented in this kernel.
+        // These are advanced features used by overlay filesystems and container runtimes.
+        // Return ENOSYS to indicate these features are not yet implemented.
         return Err(-38); // ENOSYS
     }
 

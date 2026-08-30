@@ -482,6 +482,10 @@ pub fn unlink(path: &str) -> Result<(), isize> {
 }
 
 pub fn rename(old: &str, new: &str) -> Result<(), isize> {
+    rename_with_flags(old, new, 0)
+}
+
+pub fn rename_with_flags(old: &str, new: &str, flags: u32) -> Result<(), isize> {
     use crate::fs::vfs::open_check::flags::O_NOFOLLOW;
     use crate::fs::vfs::rename::{rename_preflight, RenameArgs};
 
@@ -521,6 +525,7 @@ pub fn rename(old: &str, new: &str) -> Result<(), isize> {
         new_mode,
         new_dir_empty,
         readonly: h_o.is_readonly(),
+        flags,
     })?;
 
     let result = match h_o.fstype {
