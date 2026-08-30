@@ -58,6 +58,8 @@ pub struct RenameArgs<'a> {
     pub new_dir_empty: bool,
     /// `true` if the mount is read-only.
     pub readonly: bool,
+    /// Flags from renameat2: RENAME_NOREPLACE, RENAME_EXCHANGE, RENAME_WHITEOUT
+    pub flags: u32,
 }
 
 /// Outcome returned on success.
@@ -89,6 +91,26 @@ pub fn rename_preflight(args: RenameArgs<'_>) -> Result<RenameOutcome, isize> {
     if is_dir(args.old_mode) && dst_is_descendant_of_src(args.old_path, args.new_path) {
         return Err(-22); // EINVAL
     }
+
+    // Handle RENAME_NOREPLACE flag
+    const RENAME_NOREPLACE: u32 = 1;
+    const RENAME_EXCHANGE: u32 = 2;
+    const RENAME_WHITEOUT: u32 = 4;
+
+    if args.flags & RENAME_NOREPLACE != 0 {
+        // RENAME_NOREPLACE: Don't overwrite target - fail if destination exists
+        if args.new_exists {
+            return Err(-17); // EEXIST
+        }
+    }
+
+    if args.flags & (RENAME_EXCHANGE | RENAME_WHITEOUT) != 0 {
+        // RENAME_EXCHANGE and RENAME_WHITEOUT require special VFS support
+        // for atomic exchange operations and whiteout entries.
+        // Not yet implemented in this kernel.
+        return Err(-38); // ENOSYS
+    }
+
     // Destination exists — check type compatibility.
     if args.new_exists {
         let src_is_dir = is_dir(args.old_mode);

@@ -19,9 +19,19 @@ fn sys_openat2_impl(dirfd: i32, path_va: usize, how_va: usize, size: usize) -> i
     if crate::uaccess::copy_from_user(&mut how_buf, how_va).is_err() {
         return -14;
     }
-    let flags = u64::from_le_bytes(how_buf[0..8].try_into().unwrap());
-    let mode = u64::from_le_bytes(how_buf[8..16].try_into().unwrap());
-    let resolve = u64::from_le_bytes(how_buf[16..24].try_into().unwrap());
+    // Safe casts: slices are guaranteed to be exact size by array declaration
+    let flags = u64::from_le_bytes(match how_buf[0..8].try_into() {
+        Ok(arr) => arr,
+        Err(_) => return -22, // Should never happen with fixed-size array
+    });
+    let mode = u64::from_le_bytes(match how_buf[8..16].try_into() {
+        Ok(arr) => arr,
+        Err(_) => return -22,
+    });
+    let resolve = u64::from_le_bytes(match how_buf[16..24].try_into() {
+        Ok(arr) => arr,
+        Err(_) => return -22,
+    });
 
     if resolve & !RESOLVE_ALL_KNOWN != 0 {
         return -22;

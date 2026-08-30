@@ -275,8 +275,15 @@ pub fn sys_semop(semid: i32, sops_va: usize, nsops: usize) -> isize {
         None => return -22,
     };
     for i in 0..nsops {
-        let sem_num = u16::from_le_bytes(ops_buf[i * 6..i * 6 + 2].try_into().unwrap()) as usize;
-        let sem_op = i16::from_le_bytes(ops_buf[i * 6 + 2..i * 6 + 4].try_into().unwrap()) as i32;
+        // Safe casts: slice indices are guaranteed by fixed-size struct layout
+        let sem_num = u16::from_le_bytes(match ops_buf[i * 6..i * 6 + 2].try_into() {
+            Ok(arr) => arr,
+            Err(_) => return -22,
+        }) as usize;
+        let sem_op = i16::from_le_bytes(match ops_buf[i * 6 + 2..i * 6 + 4].try_into() {
+            Ok(arr) => arr,
+            Err(_) => return -22,
+        }) as i32;
         if sem_num >= set.vals.len() {
             return -22;
         }
@@ -539,8 +546,15 @@ pub fn sys_mq_open(name_va: usize, oflag: u32, _mode: u32, attr_va: usize) -> is
         if copy_from_user(&mut buf, attr_va).is_err() {
             return -14;
         }
-        let maxmsg = i64::from_le_bytes(buf[8..16].try_into().unwrap()).max(1) as usize;
-        let msgsize = i64::from_le_bytes(buf[16..24].try_into().unwrap()).max(1) as usize;
+        // Safe casts: slices are guaranteed to be exact size by array declaration
+        let maxmsg = i64::from_le_bytes(match buf[8..16].try_into() {
+            Ok(arr) => arr,
+            Err(_) => return -22,
+        }).max(1) as usize;
+        let msgsize = i64::from_le_bytes(match buf[16..24].try_into() {
+            Ok(arr) => arr,
+            Err(_) => return -22,
+        }).max(1) as usize;
         (maxmsg.min(1024), msgsize.min(65536))
     } else {
         (10, 8192)
