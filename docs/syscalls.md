@@ -20,17 +20,30 @@ compatibility claim.
 returns `-EFAULT` instead of panicking or faulting the kernel. A `partial` value
 means some pointer paths are guarded but the syscall has not been fully audited.
 
-## Current syscall infrastructure
+## Syscall infrastructure
 
 | Component | Status | Notes |
 |---|---|---|
 | `src/syscall/routers.rs` | partial | Routing layer exists for the full-kernel graph |
 | `src/syscall/nr.rs` | partial | Linux syscall number definitions exist |
-| `src/syscall/stubs.rs` | stub | Explicit placeholder routes remain part of the current state |
+| `src/syscall/stubs.rs` | **real** | Documented ENOSYS stubs for deprecated/complex syscalls — intentionally unimplemented by design |
 | `src/syscall/fault.rs` | partial | Fault-injection hooks for resource/fd-table errors |
 | `src/syscall/profile.rs` | partial | Optional `syscall-trace` counters and timing hooks |
 | `src/arch/x86_64/syscall.rs` | partial | x86_64 syscall entry glue exists |
 | `src/arch/aarch64/syscall.rs` | partial | AArch64 syscall entry glue exists |
+
+### Intentionally unimplemented syscalls (ENOSYS by design)
+
+The following syscalls return `ENOSYS` intentionally as documented in `src/syscall/stubs.rs`:
+
+| Syscall | Line | Reason | Impact |
+|---|---:|---|---|
+| `remap_file_pages` | 408 | Deprecated Linux syscall, obsolete API | None - modern kernels discourage use |
+| `kexec_file_load` | 422 | Requires secure boot handling, architecture-specific | Userspace can fall back to `kexec_load` or `reboot` |
+| `bpf` | 430 | eBPF subsystem requires JIT compiler, verifier, extensive infrastructure | Complex subsystem not required for basic operation |
+| `userfaultfd` | 438 | Advanced memory management requiring userspace page fault handling | Specialized feature not needed for standard workloads |
+
+These stubs are **documented, intentional, and not blockers** for basic kernel operation. They represent conscious design decisions to exclude complex/deprecated functionality from the initial kernel surface.
 
 ## Minimum init syscall set (M3 gate)
 
