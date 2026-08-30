@@ -1,33 +1,33 @@
 ```
-# Linker script specific ignores (if any build artifacts are generated)
-*.o
-*.obj
-*.a
-*.so
-*.dylib
-*.dll
+# Dependencies
+target/
 
-# Build directories
-build/
-dist/
-
-# Temporary files
-*.tmp
+# Logs and temp files
 *.log
-
-# Editor/IDE files
-.vscode/
-.idea/
+*.tmp
 *.swp
 
-# Environment files
+# Environment
 .env
 .env.local
-*.env.*
+.env.*
 
-# Python specific (if applicable)
-__pycache__/
-*.pyc
-*.pyo
-.Python
+# Editors
+.vscode/
+.idea/
+
+# Coverage reports
+coverage/
+htmlcov/
+*.coverage
+
+# MyPy cache
+.mypy_cache/
+
+# Pytest cache
+.pytest_cache/
+
+# Build artifacts
+build/
+dist/
 ```

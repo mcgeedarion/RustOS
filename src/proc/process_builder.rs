@@ -169,8 +169,44 @@ impl ProcessBuilder {
     
     /// Execute, replacing current process (exec variant)
     pub fn exec(self) -> Result<(), ProcessError> {
-        // This would call the exec syscall directly
-        unimplemented!("exec implementation")
+        // Build argv and envp arrays from the builder configuration
+        let argv: Vec<String> = core::iter::once(self.program.clone())
+            .chain(self.args.iter().cloned())
+            .collect();
+        
+        let envp: Vec<String> = self.env
+            .iter()
+            .map(|(k, v)| alloc::format!("{}={}", k, v))
+            .collect();
+        
+        // Convert to C-style string pointers for execve
+        let argv_cstr: Vec<alloc::ffi::CString> = argv
+            .iter()
+            .filter_map(|s| alloc::ffi::CString::new(s.as_str()).ok())
+            .collect();
+        let argv_ptrs: Vec<*const i8> = argv_cstr.iter().map(|s| s.as_ptr()).collect();
+        
+        let envp_cstr: Vec<alloc::ffi::CString> = envp
+            .iter()
+            .filter_map(|s| alloc::ffi::CString::new(s.as_str()).ok())
+            .collect();
+        let envp_ptrs: Vec<*const i8> = envp_cstr.iter().map(|s| s.as_ptr()).collect();
+        
+        // Call execve syscall - this replaces the current process image
+        let path_cstr = alloc::ffi::CString::new(self.program.as_str()).map_err(|_| ProcessError::InvalidProgram)?;
+        let result = crate::proc::exec::sys_execve(
+            path_cstr.as_ptr() as usize,
+            argv_ptrs.as_ptr() as usize,
+            envp_ptrs.as_ptr() as usize,
+        );
+        
+        // If we return, execve failed
+        if result < 0 {
+            Err(ProcessError::from_errno(-(result as i32)))
+        } else {
+            // execve only returns on error
+            Ok(())
+        }
     }
 }
 
@@ -277,6 +313,20 @@ pub enum ProcessError {
     Io = 5,
 }
 
+impl ProcessError {
+    pub fn from_errno(errno: i32) -> Self {
+        match errno {
+            2 => ProcessError::NotFound,
+            5 => ProcessError::Io,
+            11 => ProcessError::TooManyProcesses,
+            12 => ProcessError::OutOfMemory,
+            13 => ProcessError::PermissionDenied,
+            22 => ProcessError::InvalidProgram,
+            _ => ProcessError::Io,
+        }
+    }
+}
+
 impl From<ProcessError> for isize {
     fn from(err: ProcessError) -> Self {
         -(err as isize)
@@ -298,13 +348,45 @@ impl Process {
     }
     
     pub fn wait(self) -> Result<ExitStatus, ProcessError> {
-        // Wait for process to exit
-        unimplemented!("wait implementation")
+        // Use the wait4 syscall to wait for this specific process
+        let mut wstatus: u32 = 0;
+        let result = crate::proc::wait::sys_wait4(
+            self.pid as isize,
+            &mut wstatus as *mut u32 as usize,
+            0, // options: blocking wait
+            0, // no rusage
+        );
+        
+        if result < 0 {
+            return Err(ProcessError::from_errno(-(result as i32)));
+        }
+        
+        // Decode the exit status
+        let exit_code = if (wstatus & 0x7f) == 0 {
+            // Normal exit: extract high byte
+            ((wstatus >> 8) & 0xff) as i32
+        } else if (wstatus & 0x7f) != 0x7f {
+            // Terminated by signal: use negative signal number
+            -((wstatus & 0x7f) as i32)
+        } else {
+            // Stopped or continued - treat as error for now
+            -1
+        };
+        
+        Ok(ExitStatus { code: exit_code })
     }
     
     pub fn kill(self) -> Result<(), ProcessError> {
-        // Send SIGKILL
-        unimplemented!("kill implementation")
+        use crate::proc::signal::SIGKILL;
+        
+        // Send SIGKILL to the process using the signal module's sys_kill
+        let result = crate::proc::signal::sys_kill(self.pid as isize, SIGKILL);
+        
+        if result < 0 {
+            Err(ProcessError::from_errno(-(result as i32)))
+        } else {
+            Ok(())
+        }
     }
 }
 
