@@ -37,7 +37,7 @@ if [[ ! -f "$INIT_BIN" ]]; then
     echo "error: $INIT_BIN not found." >&2
     echo "       Build userspace first:" >&2
     echo "         cargo xtask build-init --arch x86_64" >&2
-    echo "       or:  make -C userspace" >&2
+    echo "       or run a direct Cargo build from userspace/init." >&2
     exit 1
 fi
 

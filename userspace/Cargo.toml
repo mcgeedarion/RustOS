@@ -9,9 +9,9 @@
 #   cargo build --release --target riscv64gc-unknown-none
 #
 # Or via xtask:
-#   cargo xtask build-userspace --arch x86_64
-#   cargo xtask build-userspace --arch aarch64
-#   cargo xtask build-userspace --arch riscv64
+#   cargo xtask build-init --arch x86_64
+#   cargo xtask build-init --arch aarch64
+#   cargo xtask build-init --arch riscv64
 
 [workspace]
 resolver = "2"
