@@ -82,14 +82,12 @@ cc = "1"
 full_kernel = ["uefi_boot", "userspace_boot"]
 
 # ---------------------------------------------------------------------------
-# Default: only the UEFI firmware handoff path is active for plain
-# `cargo check` / `cargo xtask build --arch x86_64` runs.
-#
-# `userspace_boot` must be opted in explicitly via --features userspace_boot
-# so that the stub fs/proc shims (and the bump allocator) are clearly
-# intentional rather than accidentally compiled into every build.
+# Default: Full kernel with userspace boot support for production builds.
+# This enables the complete kernel functionality including memory manager,
+# virtual filesystem, process scheduler, and syscall interface.
+# Requires UEFI boot and userspace boot infrastructure.
 # ---------------------------------------------------------------------------
-default = ["uefi_boot"]
+default = ["full_kernel"]
 
 # Compile only the firmware handoff, common BootInfo path, early console,
 # panic handler, and an architecture idle loop. This is the first-stage boot
@@ -186,13 +184,15 @@ boot_debug = []
 # ---------------------------------------------------------------------------
 # Meta-features for build profiles.
 #
-# `release-boot` is the lean CI / normal-boot image:
+# `release-boot` is the lean production image:
 #   - No kmtest harness
 #   - No fault-inject framework
 #   - No syscall-trace profiling hooks
 #   - No GDB stub or trace ring buffer
 #   - No boot_debug verbose logging
+#   - No debug assertions
 #
+# These development features are explicitly excluded from release-boot.
 # Debug and profiling images opt into these explicitly via `--features`.
 # ---------------------------------------------------------------------------
 release-boot = []
