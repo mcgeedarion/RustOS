@@ -16,8 +16,10 @@ use alloc::vec::Vec;
 use spin::Mutex;
 
 pub mod fs;
+pub mod fs_integrity;
 pub mod ipc;
 pub mod mm;
+pub mod oom_recovery;
 pub mod panic_format_tests;
 pub mod proc;
 pub mod sync;
@@ -56,7 +58,9 @@ pub fn init() {
     mm::register();
     proc::register();
     fs::register();
+    fs_integrity::register();
     sync::register();
     ipc::register();
     panic_format_tests::register();
+    oom_recovery::register();
 }
