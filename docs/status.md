@@ -1,12 +1,12 @@
 # RustOS Subsystem Status
 
-_Last reviewed: 2026-07-01._
+_Last reviewed: 2026-08-30._
 
 This file is the authoritative high-level status registry. The repository is in
-a **boot-first stabilization** state: default builds exercise the UEFI minimal
-boot path, `userspace_boot` provides a deliberately thin handoff profile, and
-the full kernel graph is available for integration work when both
-`boot_minimal` and `userspace_boot` are disabled.
+an **integration-first stabilization** state: the default Cargo feature set is
+`full_kernel`, which currently expands to `uefi_boot` and `userspace_boot`.
+Slim boot profiles are still maintained for UEFI smoke testing and staged
+userspace handoff validation.
 
 ## Legend
 
@@ -22,10 +22,10 @@ the full kernel graph is available for integration work when both
 
 | Feature selection | Status | Notes |
 |---|---|---|
-| default `uefi_boot` | real | Enables `boot_minimal`; this is the default local/CI smoke path |
+| default `full_kernel` | partial | Cargo default; expands to `uefi_boot` and `userspace_boot` |
 | `boot_minimal` | real | Firmware handoff, `BootInfo`, early console, boot markers, idle loop |
 | `userspace_boot` | partial | Uses `src/userspace_shims.rs` for minimal fs/proc surfaces |
-| full kernel graph | experimental | Active when neither `boot_minimal` nor `userspace_boot` is selected |
+| full kernel graph | partial/experimental | Large module graph exists, but many subsystems are not yet supported smoke-contract claims |
 | `release-boot` profile/feature | real | Lean image profile with LTO, opt-level=z, single codegen unit; size baselines tracked in CI |
 | `boot_debug` feature | real | Gates verbose `log::debug!`/`log::trace!` during boot; off by default for performance |
 | `syscall-trace` feature | partial | Per-syscall counters and TSC/PMCCNTR_EL0 timing via `/proc/syscall_stats` |
@@ -54,7 +54,7 @@ the full kernel graph is available for integration work when both
 | `src/mm/` physical memory | partial | Allocator and boot-memory code exist; integration remains full-kernel only |
 | `src/mm/` virtual memory/mmap | partial | VMA, mmap, page-fault, and protection modules exist; edge-case correctness remains under development |
 | `src/mm/` slab/heap | partial | Kernel allocation code exists; production hardening remains |
-| `crates/vmm-core/` | **real** | Complete VMM integration with OOM handling and memory pressure management |
+| `crates/mm-core/` | partial | Workspace MM abstractions exist; full kernel integration continues in `src/mm/` |
 | COW/swap/mlock/pkeys/KASAN helpers | experimental | Code exists but is not part of the default smoke contract |
 
 ## Syscalls
@@ -75,7 +75,6 @@ See `docs/syscalls.md` for syscall-by-syscall status.
 | `crates/vfs-core/` | **real** | Complete VFS core with FileSystem trait, FileOps, and error handling |
 | `crates/fs-ext4/` | **real** | Production-ready ext4 implementation with journaling support |
 | `crates/fs-fat32/` | **real** | FAT32 implementation optimized for EFI System Partition use cases |
-| `crates/fs-btrfs/` | **real** | Btrfs implementation with copy-on-write and checksumming |
 | `src/fs/vfs/` | partial | VFS data structures and POSIX operation helpers exist |
 | `src/fs/initramfs.rs` | partial | Initramfs support exists for boot handoff work |
 | `src/fs/devfs.rs`, `src/fs/procfs.rs`, `src/fs/sysfs.rs` | partial | Kernel pseudo-filesystem scaffolding exists; not fully validated as production interfaces |
@@ -94,10 +93,10 @@ See `docs/syscalls.md` for syscall-by-syscall status.
 | `src/proc/creds.rs` | **real** | Process group and session leadership, kill_pgrp, kill_session, POSIX setpgid/setsid/getpgrp/getsid |
 | `src/proc/futex.rs` | partial | Futex code exists; correctness/performance validation remains |
 | `src/fs/pipe.rs`, `src/net/socket/unix/` | partial | Pipe and Unix-socket code exists but is not fully milestone-gated |
-| `crates/smp-core/` | **real** | Complete SMP support with CPU hotplug (cpu_up/cpu_down) framework |
-| `crates/sync-primitives/` | **real** | Ticket locks, reader-writer locks, RCU, and per-CPU data structures |
-| `crates/load-balancer/` | **real** | Work-stealing load balancer with automatic rebalancing |
-| `crates/ipc-completeness/` | **real** | POSIX-correct futex/pipe/socket with performance benchmarks |
+| `crates/smp-core/` | experimental | Crate exists in-tree but is not currently a workspace member |
+| `crates/sync-primitives/` | partial | Workspace synchronization primitives exist |
+| `crates/load-balancer/` | experimental | Crate exists in-tree but is not currently a workspace member |
+| IPC completeness helpers | partial | POSIX IPC code and tests exist; full compatibility remains under validation |
 
 ## Drivers & Devices
 
@@ -130,7 +129,7 @@ See `docs/syscalls.md` for syscall-by-syscall status.
 |---|---|---|---|
 | `src/debug/` | partial | `debug`, `gdbstub`, `trace` | GDB RSP, trace, oops/debug console modules exist |
 | `src/kmtest/` | **real** | `kmtest` | In-kernel tests with filesystem integrity, OOM recovery, and long-running stability tests |
-| `userspace/smoke/syscall_tests.c` | **real** | n/a | Comprehensive POSIX syscall test suite |
+| `userspace/smoke/src/main.rs` | **real** | n/a | Comprehensive POSIX syscall test suite |
 | `scripts/stability_test.sh` | **real** | n/a | Extended stability and reliability testing script |
 | `src/fault_inject/` | partial | `fault-inject` | PMM/VMM/syscall fault points exist for controlled error-path testing |
 | `scripts/ci/check-stubs.sh` | real | n/a | Local documented-stub guard |
@@ -153,12 +152,12 @@ See `docs/ERROR_HANDLING_AUDIT.md` for detailed audit results.
 |---:|---|---|---|
 | 1 | Keep x86_64 minimal UEFI smoke green | real | `cargo xtask smoke --arch x86_64` |
 | 2 | Keep AArch64 boot contracts buildable/smokeable where firmware exists | real | `cargo xtask smoke --arch aarch64` |
-| 3 | Replace `userspace_boot` shims with real fs/proc/mm paths | **completed** | `FULL_OS_USERSPACE_OK` plus syscall tests |
+| 3 | Replace `userspace_boot` shims with real fs/proc/mm paths | **in progress** | `FULL_OS_USERSPACE_OK` plus syscall tests |
 | 4 | Make minimum init syscalls real and EFAULT-safe | partial | `docs/syscalls.md` plus kmtest coverage |
 | 5 | Refresh boot-image and boot-performance baselines | **completed** | In-kernel boot markers with CI parser; baseline collection via `scripts/ci/parse-boot-marks.sh` |
 | 6 | Promote selected full-kernel subsystems from experimental to supported | **in progress** | VFS/ext4/FAT32, SMP, IPC completeness completed |
 | 7 | Complete error handling audit across remaining modules | **in progress** | See ERROR_HANDLING_AUDIT.md |
-| 8 | Expand testing coverage with syscall tests and stability scripts | **completed** | userspace/smoke/syscall_tests.c, scripts/stability_test.sh |
+| 8 | Expand testing coverage with syscall tests and stability scripts | **in progress** | `userspace/smoke`, `src/kmtest/`, scripts/stability_test.sh |
 | 9 | Document intentionally unimplemented syscalls (ENOSYS by design) | **completed** | stubs.rs lines 408/422/430/438 — remap_file_pages, kexec_file_load, bpf, userfaultfd |
 | 10 | Implement filesystem integrity tests for VFS/ext4/FAT32 | **completed** | `src/kmtest/fs_integrity.rs` with 15+ in-kernel integrity tests |
 | 11 | Add long-running stability validation for memory and filesystem | **completed** | `src/kmtest/fs_integrity.rs`, `src/kmtest/oom_recovery.rs` with extended cycling tests |

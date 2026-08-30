@@ -1,15 +1,16 @@
 # RustOS Product Milestones
 
-_Last reviewed: 2026-07-01._
+_Last reviewed: 2026-08-30._
 
-The project is currently between **M1** and **M2**: the default UEFI path is a
-minimal boot image, and `userspace_boot` provides a thin userspace handoff path
-while the full mm/fs/proc/syscall graph is stabilized.
+The project is currently between **M2** and **M3**: the default Cargo feature set is `full_kernel`
+(expanding to `uefi_boot` and `userspace_boot`), while the full
+mm/fs/proc/syscall graph is still being stabilized behind documented validation
+gates.
 
 | Milestone | Goal | Cargo feature path | CI/local sentinel | Current state |
 |---|---|---|---|---|
-| **M1** | Minimal UEFI boot reaches the idle loop on x86_64 and remains aligned on aarch64 | `boot_minimal` / default `uefi_boot` | `BOOT_MINIMAL_OK` or `entering cpu_idle` | **Current default path** |
-| **M2** | Build an initramfs and reach a userspace handoff marker | `userspace_boot` with `--initrd` when needed | `FULL_OS_USERSPACE_OK` | **Partial**: thin fs/proc shims are intentional |
+| **M1** | Minimal UEFI boot reaches the idle loop on x86_64 and remains aligned on aarch64 | `boot_minimal` / `uefi_boot` | `BOOT_MINIMAL_OK` or `entering cpu_idle` | **Maintained smoke path** |
+| **M2** | Build an initramfs and reach a userspace handoff marker | `userspace_boot` with `--initrd` when needed | `FULL_OS_USERSPACE_OK` | **Current integration focus**: thin fs/proc shims remain intentional |
 | **M3** | Minimum init syscalls have real semantics and bad-pointer safety | full kernel graph, syscall modules | init exercises `open/fork/exec/wait/exit` without `ENOSYS` or panic | **In progress** |
 | **M4** | VFS/initramfs/devfs/procfs are usable enough for real init workloads | full kernel graph | `/init`, `/dev/null`, `/proc/version` accessible | **In progress** |
 | **M5** | Network, display, and input demos run as userspace processes | full kernel graph plus optional device features | shell/compositor/network demo sentinel | **Experimental/planned** |

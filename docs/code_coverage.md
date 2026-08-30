@@ -1,6 +1,6 @@
 # Code Coverage Integration for RustOS
 
-This document describes how to integrate code coverage measurement into the CI pipeline.
+This document describes local coverage collection options for host-testable portions of the workspace. Coverage is advisory: kernel boot validation still relies on `xtask` checks and QEMU smoke tests.
 
 ## Overview
 
@@ -56,14 +56,11 @@ grcov rustos-*.profraw -s . --binary-path ./target/debug/ \
 
 ## CI Integration
 
-The GitHub Actions workflow automatically:
-1. Installs cargo-tarpaulin
-2. Runs tests with coverage
-3. Uploads coverage reports to Codecov.io
+Coverage upload is not an authoritative release gate in the current workflow set. Use this section as a template if coverage reporting is re-enabled in CI.
 
 ### Workflow Configuration
 
-See `.github/workflows/regression-tests.yml` for the complete CI setup.
+If coverage reporting is re-enabled, keep the workflow in `.github/workflows/` and ensure it complements the existing build, smoke, kernel-test, and roadmap-check workflows.
 
 Key steps:
 ```yaml
@@ -136,13 +133,6 @@ Inline functions may not show correct coverage. Add `#[inline(never)]` for testi
 Some kernel code may not be compatible with instrumentation. Exclude those modules:
 ```bash
 cargo tarpaulin --exclude src/arch/* --exclude src/boot/*
-```
-
-## Generating Coverage Badge
-
-Add to README.md:
-```markdown
-[![Coverage](https://codecov.io/gh/rust-os/rustos/branch/main/graph/badge.svg)](https://codecov.io/gh/rust-os/rustos)
 ```
 
 ## Best Practices

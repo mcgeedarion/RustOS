@@ -310,7 +310,7 @@ macro_rules! try_result {
 
 #### Test Categories
 
-1. **Syscall Tests** (`userspace/smoke/syscall_tests.c`)
+1. **Syscall Tests** (`userspace/smoke/src/main.rs`)
    ```c
    // Test mmap/munmap
    void *addr = mmap(NULL, 4096, PROT_READ | PROT_WRITE, 
