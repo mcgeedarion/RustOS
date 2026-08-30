@@ -1,19 +1,29 @@
-```rust
+```
 # Compiled and build artifacts
 *.o
 *.obj
 *.a
-*.lib
-*.dll
 *.so
-*.dylib
+*.dll
 *.exe
+*.out
+build/
+dist/
 target/
 
 # Dependencies
-Cargo.lock
-**/vendor/
-**/deps/
+node_modules/
+venv/
+.venv/
+__pycache__/
+.mypy_cache/
+.pytest_cache/
+.coverage
+coverage/
+htmlcov/
+.julia/
+zig*/
+julia-*/
 
 # Logs and temp files
 *.log
@@ -21,30 +31,42 @@ Cargo.lock
 *.swp
 *.swo
 
+# Environment
+.env
+.env.local
+.env.*
+
 # Editors
 .vscode/
 .idea/
 *.swp
 *.swo
 
-# OS files
+# System
 .DS_Store
 Thumbs.db
 
-# Coverage
-coverage/
-htmlcov/
-.coverage
-
-# Environment
-.env
-.env.local
-*.env.*
-
-# Cache directories
-**/__pycache__/
-**/.mypy_cache/
-**/.pytest_cache/
-**/.ruff_cache/
-**/.cargo/
+# Archives
+*.zip
+*.gz
+*.tar
+*.tgz
+*.bz2
+*.xz
+*.7z
+*.rar
+*.zst
+*.lz4
+*.lzh
+*.cab
+*.arj
+*.rpm
+*.deb
+*.Z
+*.lz
+*.lzo
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+*.tar.zst
 ```

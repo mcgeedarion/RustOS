@@ -24,6 +24,7 @@ pub mod net_ns;
 pub mod pid_ns;
 pub mod user_ns;
 pub mod uts_ns;
+pub mod isolation;
 
 extern crate alloc;
 use alloc::sync::Arc;
