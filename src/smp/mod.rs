@@ -8,6 +8,7 @@
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
+pub mod hotplug;
 pub mod ipi;
 pub mod percpu;
 
