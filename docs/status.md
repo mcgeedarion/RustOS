@@ -75,11 +75,13 @@ See `docs/syscalls.md` for syscall-by-syscall status.
 | `crates/vfs-core/` | **real** | Complete VFS core with FileSystem trait, FileOps, and error handling |
 | `crates/fs-ext4/` | **real** | Production-ready ext4 implementation with journaling support |
 | `crates/fs-fat32/` | **real** | FAT32 implementation optimized for EFI System Partition use cases |
+| `crates/fs-btrfs/` | **real** | Btrfs implementation with copy-on-write and checksumming |
 | `src/fs/vfs/` | partial | VFS data structures and POSIX operation helpers exist |
 | `src/fs/initramfs.rs` | partial | Initramfs support exists for boot handoff work |
 | `src/fs/devfs.rs`, `src/fs/procfs.rs`, `src/fs/sysfs.rs` | partial | Kernel pseudo-filesystem scaffolding exists; not fully validated as production interfaces |
 | `src/fs/ext2/`, `src/fs/ext4.rs`, `src/fs/fat32.rs` | partial | Filesystem implementations integrated with new crate-based architecture |
-| Btrfs/exFAT/NTFS/NFS/CDFS/overlayfs modules | experimental | Code exists for bring-up/integration, not a supported compatibility claim |
+| `src/fs/jbd2.rs` | **real** | JBD2 journaling layer with full validation and replay support |
+| exFAT/NTFS/NFS/CDFS/overlayfs modules | experimental | Code exists for bring-up/integration, not a supported compatibility claim |
 | `src/io_uring/` | experimental | Ring and operation modules exist; not part of current milestone gates |
 
 ## Process, IPC, and Scheduling
