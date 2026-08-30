@@ -1,24 +1,23 @@
 # RustOS Userspace
 
-This directory contains all userspace binaries for RustOS, implemented as pure `#![no_std]` Rust programs.
+This directory contains early userspace binaries and support crates for RustOS. Most programs are small `no_std` Rust targets used for boot and syscall validation.
 
 ## Architecture
 
 All userspace binaries are built as a Cargo workspace with cross-compilation support for:
 - `x86_64-unknown-none`
 - `aarch64-unknown-none`
-- `riscv64gc-unknown-none`
 
 ## Components
 
 | Component | Description | Status |
 |-----------|-------------|--------|
-| `init` | PID 1 init process | ✅ Complete |
-| `hello` | Minimal hello world binary | ✅ Complete |
-| `smoke` | Comprehensive syscall smoke tests | ✅ Complete |
-| `kmtest` | Kernel test runner | ✅ Complete |
-| `libc-shim` | POSIX-compatible FFI shim | ✅ Complete |
-| `wayland` | Wayland compositor | 🔄 TODO (Rust port) |
+| `init` | Early PID 1 experiment for initramfs handoff | Partial |
+| `hello` | Minimal userspace hello-world binary | Partial |
+| `smoke` | Rust syscall smoke-test binary | Partial |
+| `kmtest` | Userspace launcher/companion for kernel tests | Experimental |
+| `libc-shim` | Small POSIX-style FFI shim for userspace experiments | Partial |
+| `drivers/virtio_net` | Userspace virtio-net experiment | Experimental |
 
 ## Building
 
@@ -30,9 +29,6 @@ cargo xtask build-init --arch x86_64
 
 # Build for AArch64
 cargo xtask build-init --arch aarch64
-
-# Build for RISC-V 64
-cargo xtask build-init --arch riscv64
 ```
 
 ### Direct Cargo build
@@ -45,9 +41,6 @@ cargo build --release --target x86_64-unknown-none
 
 # Build for AArch64
 cargo build --release --target aarch64-unknown-none
-
-# Build for RISC-V 64
-cargo build --release --target riscv64gc-unknown-none
 ```
 
 ## Output Locations
