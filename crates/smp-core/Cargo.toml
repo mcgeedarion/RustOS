@@ -1,0 +1,15 @@
+[package]
+name = "smp-core"
+version = "0.1.0"
+edition = "2021"
+description = "SMP (Symmetric Multi-Processing) core framework for RustOS"
+license = "MIT"
+
+[dependencies]
+spin = { version = "0.9", default-features = false }
+bitflags = "2.4"
+log = "0.4"
+
+[features]
+default = []
+kernel = []

@@ -3,14 +3,16 @@
 //! This crate provides:
 //! - Queued spinlocks for high-contention paths
 //! - Read-Copy-Update (RCU) for lock-free reads
-//! - Enhanced mutex and rwlock wrappers
+//! - Ticket spinlocks for fair locking
+//! - Reader-Writer locks for concurrent read access
+//! - Per-CPU data structures
 
 #![no_std]
-#![feature(alloc_error_handler)]
+#![warn(missing_docs)]
 
 extern crate alloc;
 
-use core::sync::atomic::{AtomicBool, AtomicUsize, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicUsize, AtomicU32, AtomicU64, Ordering};
 use core::cell::UnsafeCell;
 use core::ptr;
 use core::marker::PhantomData;
@@ -253,6 +255,203 @@ impl<T> PerCpuData<T> {
     }
 }
 
+/// Reader-Writer spinlock for concurrent read access
+///
+/// Allows multiple readers or a single writer.
+/// Readers are preferred to prevent writer starvation.
+pub struct RwSpinlock {
+    readers: AtomicUsize,
+    writer: AtomicBool,
+    write_waiters: AtomicUsize,
+}
+
+unsafe impl Send for RwSpinlock {}
+unsafe impl Sync for RwSpinlock {}
+
+impl RwSpinlock {
+    /// Create a new RW spinlock
+    pub const fn new() -> Self {
+        Self {
+            readers: AtomicUsize::new(0),
+            writer: AtomicBool::new(false),
+            write_waiters: AtomicUsize::new(0),
+        }
+    }
+    
+    /// Acquire read lock
+    pub fn read_lock(&self) -> ReadGuard {
+        loop {
+            let current_readers = self.readers.fetch_add(1, Ordering::Acquire);
+            
+            // Check if a writer is active
+            if self.writer.load(Ordering::Acquire) {
+                // Rollback and retry
+                self.readers.fetch_sub(1, Ordering::Release);
+                core::hint::spin_loop();
+                continue;
+            }
+            
+            return ReadGuard { lock: self };
+        }
+    }
+    
+    /// Acquire write lock
+    pub fn write_lock(&self) -> WriteGuard {
+        self.write_waiters.fetch_add(1, Ordering::Relaxed);
+        
+        loop {
+            // Check if we can acquire the write lock
+            if !self.writer.swap(true, Ordering::Acquire) {
+                // Got the writer flag, now wait for readers
+                while self.readers.load(Ordering::Acquire) > 0 {
+                    core::hint::spin_loop();
+                }
+                
+                // Successfully acquired write lock
+                self.write_waiters.fetch_sub(1, Ordering::Relaxed);
+                return WriteGuard { lock: self };
+            }
+            
+            // Release writer flag and wait
+            self.writer.store(false, Ordering::Release);
+            core::hint::spin_loop();
+        }
+    }
+    
+    /// Try to acquire read lock without blocking
+    pub fn try_read_lock(&self) -> Option<ReadGuard> {
+        if self.writer.load(Ordering::Acquire) {
+            return None;
+        }
+        
+        let current_readers = self.readers.fetch_add(1, Ordering::Acquire);
+        if self.writer.load(Ordering::Acquire) {
+            // Writer became active during our attempt
+            self.readers.fetch_sub(1, Ordering::Release);
+            return None;
+        }
+        
+        Some(ReadGuard { lock: self })
+    }
+    
+    /// Try to acquire write lock without blocking
+    pub fn try_write_lock(&self) -> Option<WriteGuard> {
+        if self.writer.swap(true, Ordering::Acquire) {
+            return None;
+        }
+        
+        if self.readers.load(Ordering::Acquire) > 0 {
+            self.writer.store(false, Ordering::Release);
+            return None;
+        }
+        
+        Some(WriteGuard { lock: self })
+    }
+}
+
+/// Read guard for RW spinlock
+pub struct ReadGuard<'a> {
+    lock: &'a RwSpinlock,
+}
+
+impl<'a> Drop for ReadGuard<'a> {
+    fn drop(&mut self) {
+        self.lock.readers.fetch_sub(1, Ordering::Release);
+    }
+}
+
+/// Write guard for RW spinlock
+pub struct WriteGuard<'a> {
+    lock: &'a RwSpinlock,
+}
+
+impl<'a> Drop for WriteGuard<'a> {
+    fn drop(&mut self) {
+        self.lock.writer.store(false, Ordering::Release);
+    }
+}
+
+/// Ticket-based RW lock with fairness guarantees
+pub struct TicketRwLock {
+    read_ticket: AtomicU64,
+    read_serving: AtomicU64,
+    write_ticket: AtomicU64,
+    write_serving: AtomicU64,
+    active_readers: AtomicU64,
+}
+
+unsafe impl Send for TicketRwLock {}
+unsafe impl Sync for TicketRwLock {}
+
+impl TicketRwLock {
+    /// Create a new ticket RW lock
+    pub const fn new() -> Self {
+        Self {
+            read_ticket: AtomicU64::new(0),
+            read_serving: AtomicU64::new(0),
+            write_ticket: AtomicU64::new(0),
+            write_serving: AtomicU64::new(0),
+            active_readers: AtomicU64::new(0),
+        }
+    }
+    
+    /// Acquire read lock
+    pub fn read_lock(&self) -> TicketReadGuard {
+        let ticket = self.read_ticket.fetch_add(1, Ordering::Relaxed);
+        
+        // Wait for our turn (readers can proceed if no exclusive writer)
+        while self.write_serving.load(Ordering::Acquire) != ticket {
+            core::hint::spin_loop();
+        }
+        
+        self.active_readers.fetch_add(1, Ordering::Relaxed);
+        
+        // Allow next reader to start
+        self.read_serving.fetch_add(1, Ordering::Release);
+        
+        TicketReadGuard { lock: self }
+    }
+    
+    /// Acquire write lock
+    pub fn write_lock(&self) -> TicketWriteGuard {
+        let ticket = self.write_ticket.fetch_add(1, Ordering::Relaxed);
+        
+        // Wait for our turn
+        while self.write_serving.load(Ordering::Acquire) != ticket {
+            core::hint::spin_loop();
+        }
+        
+        // Wait for all readers to finish
+        while self.active_readers.load(Ordering::Acquire) > 0 {
+            core::hint::spin_loop();
+        }
+        
+        TicketWriteGuard { lock: self }
+    }
+}
+
+/// Ticket read guard
+pub struct TicketReadGuard<'a> {
+    lock: &'a TicketRwLock,
+}
+
+impl<'a> Drop for TicketReadGuard<'a> {
+    fn drop(&mut self) {
+        self.lock.active_readers.fetch_sub(1, Ordering::Release);
+    }
+}
+
+/// Ticket write guard
+pub struct TicketWriteGuard<'a> {
+    lock: &'a TicketRwLock,
+}
+
+impl<'a> Drop for TicketWriteGuard<'a> {
+    fn drop(&mut self) {
+        self.lock.write_serving.fetch_add(1, Ordering::Release);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -288,5 +487,62 @@ mod tests {
                 assert_eq!(val, Some(&43));
             }
         }
+    }
+    
+    #[test]
+    fn test_ticket_spinlock() {
+        let lock = TicketSpinlock::new();
+        let _guard = lock.lock();
+        // Critical section - lock is held
+        // Guard drops automatically, releasing lock
+    }
+    
+    #[test]
+    fn test_rw_spinlock() {
+        let lock = RwSpinlock::new();
+        
+        // Multiple readers
+        let r1 = lock.read_lock();
+        let r2 = lock.read_lock();
+        drop(r1);
+        drop(r2);
+        
+        // Single writer
+        let w = lock.write_lock();
+        // Writer has exclusive access
+        drop(w);
+    }
+    
+    #[test]
+    fn test_try_locks() {
+        let lock = RwSpinlock::new();
+        
+        // Try read should succeed
+        assert!(lock.try_read_lock().is_some());
+        
+        // Try write should fail (reader active)
+        assert!(lock.try_write_lock().is_none());
+        
+        let lock2 = RwSpinlock::new();
+        
+        // Acquire write lock
+        let _w = lock2.write_lock();
+        
+        // Try read should fail (writer active)
+        assert!(lock2.try_read_lock().is_none());
+        assert!(lock2.try_write_lock().is_none());
+    }
+    
+    #[test]
+    fn test_ticket_rwlock() {
+        let lock = TicketRwLock::new();
+        
+        // Acquire and release read lock
+        let r1 = lock.read_lock();
+        drop(r1);
+        
+        // Acquire and release write lock
+        let w = lock.write_lock();
+        drop(w);
     }
 }

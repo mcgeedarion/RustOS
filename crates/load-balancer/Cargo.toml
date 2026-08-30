@@ -1,0 +1,16 @@
+[package]
+name = "load-balancer"
+version = "0.1.0"
+edition = "2021"
+description = "Workload distribution framework for RustOS SMP systems"
+license = "MIT"
+
+[dependencies]
+smp-core = { path = "../smp-core" }
+spin = { version = "0.9", default-features = false }
+log = "0.4"
+bitflags = "2.4"
+
+[features]
+default = []
+kernel = []
