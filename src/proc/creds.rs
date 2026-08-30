@@ -326,8 +326,82 @@ pub fn sys_setpgid(pid: u32, pgid: u32) -> isize {
         if p.sid != caller_sid {
             return -1isize; // EPERM
         }
+        // pgid must exist in the same session or equal target_pid.
+        if target_pgid as usize != target_pid {
+            let pgid_exists = crate::proc::scheduler::with_procs_ro(|procs| {
+                procs.iter().any(|p| p.pgid == target_pgid as usize && p.sid == caller_sid)
+            });
+            if !pgid_exists {
+                return -1isize; // EPERM
+            }
+        }
         p.pgid = target_pgid as usize;
         0isize
     })
     .unwrap_or(-3) // ESRCH
+}
+
+// ---------------------------------------------------------------------------
+// Process group and session helpers
+// ---------------------------------------------------------------------------
+
+/// Get the process group ID of a specific PID.
+pub fn get_pgid_of(pid: usize) -> isize {
+    crate::proc::scheduler::with_proc(pid, |p| p.pgid as isize).unwrap_or(-3) // ESRCH
+}
+
+/// Check if a process is a process group leader (pid == pgid).
+pub fn is_pgrp_leader(pid: usize) -> bool {
+    crate::proc::scheduler::with_proc(pid, |p| p.pid == p.pgid).unwrap_or(false)
+}
+
+/// Check if a process is a session leader (pid == sid).
+pub fn is_session_leader(pid: usize) -> bool {
+    crate::proc::scheduler::with_proc(pid, |p| p.pid == p.sid).unwrap_or(false)
+}
+
+/// Get all PIDs in a process group.
+pub fn pids_in_process_group(pgid: usize) -> alloc::vec::Vec<usize> {
+    crate::proc::scheduler::with_procs_ro(|procs| {
+        procs
+            .iter()
+            .filter(|p| p.pgid == pgid && p.pid == p.tgid)
+            .map(|p| p.tgid)
+            .collect()
+    })
+}
+
+/// Get all PIDs in a session.
+pub fn pids_in_session(sid: usize) -> alloc::vec::Vec<usize> {
+    crate::proc::scheduler::with_procs_ro(|procs| {
+        procs
+            .iter()
+            .filter(|p| p.sid == sid && p.pid == p.tgid)
+            .map(|p| p.tgid)
+            .collect()
+    })
+}
+
+/// Send a signal to all processes in a process group.
+pub fn kill_pgrp(pgid: usize, sig: i32) -> isize {
+    if sig < 0 || sig > 64 {
+        return -22; // EINVAL
+    }
+    let targets = pids_in_process_group(pgid);
+    for tgid in targets {
+        crate::proc::signal::send_signal_group(tgid, sig);
+    }
+    0
+}
+
+/// Send a signal to all processes in a session.
+pub fn kill_session(sid: usize, sig: i32) -> isize {
+    if sig < 0 || sig > 64 {
+        return -22; // EINVAL
+    }
+    let targets = pids_in_session(sid);
+    for tgid in targets {
+        crate::proc::signal::send_signal_group(tgid, sig);
+    }
+    0
 }
