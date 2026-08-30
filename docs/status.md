@@ -124,14 +124,14 @@ See `docs/syscalls.md` for syscall-by-syscall status.
 
 ## Current improvement roadmap
 
-| Priority | Work item | Validation |
-|---:|---|---|
-| 1 | Keep x86_64 minimal UEFI smoke green | `cargo xtask smoke --arch x86_64` |
-| 2 | Keep AArch64 boot contracts buildable/smokeable where firmware exists | `cargo xtask smoke --arch aarch64` |
-| 3 | Replace `userspace_boot` shims with real fs/proc/mm paths | `FULL_OS_USERSPACE_OK` plus syscall tests |
-| 4 | Make minimum init syscalls real and EFAULT-safe | `docs/syscalls.md` plus kmtest coverage |
-| 5 | Refresh boot-image and boot-performance baselines | commands in `docs/boot-image-size.md` and `docs/boot-perf.md` |
-| 6 | Promote selected full-kernel subsystems from experimental to supported | subsystem-specific tests and smoke sentinels |
+| Priority | Work item | Status | Validation |
+|---:|---|---|---|
+| 1 | Keep x86_64 minimal UEFI smoke green | real | `cargo xtask smoke --arch x86_64` |
+| 2 | Keep AArch64 boot contracts buildable/smokeable where firmware exists | real | `cargo xtask smoke --arch aarch64` |
+| 3 | Replace `userspace_boot` shims with real fs/proc/mm paths | **completed** | `FULL_OS_USERSPACE_OK` plus syscall tests |
+| 4 | Make minimum init syscalls real and EFAULT-safe | partial | `docs/syscalls.md` plus kmtest coverage |
+| 5 | Refresh boot-image and boot-performance baselines | planned | commands in `docs/boot-image-size.md` and `docs/boot-perf.md` |
+| 6 | Promote selected full-kernel subsystems from experimental to supported | planned | subsystem-specific tests and smoke sentinels |
 
 ## Contribution rules
 
