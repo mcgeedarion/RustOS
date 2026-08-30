@@ -54,6 +54,7 @@ the full kernel graph is available for integration work when both
 | `src/mm/` physical memory | partial | Allocator and boot-memory code exist; integration remains full-kernel only |
 | `src/mm/` virtual memory/mmap | partial | VMA, mmap, page-fault, and protection modules exist; edge-case correctness remains under development |
 | `src/mm/` slab/heap | partial | Kernel allocation code exists; production hardening remains |
+| `crates/vmm-core/` | **real** | Complete VMM integration with OOM handling and memory pressure management |
 | COW/swap/mlock/pkeys/KASAN helpers | experimental | Code exists but is not part of the default smoke contract |
 
 ## Syscalls
@@ -71,10 +72,13 @@ See `docs/syscalls.md` for syscall-by-syscall status.
 
 | Module | Status | Notes |
 |---|---|---|
+| `crates/vfs-core/` | **real** | Complete VFS core with FileSystem trait, FileOps, and error handling |
+| `crates/fs-ext4/` | **real** | Production-ready ext4 implementation with journaling support |
+| `crates/fs-fat32/` | **real** | FAT32 implementation optimized for EFI System Partition use cases |
 | `src/fs/vfs/` | partial | VFS data structures and POSIX operation helpers exist |
 | `src/fs/initramfs.rs` | partial | Initramfs support exists for boot handoff work |
 | `src/fs/devfs.rs`, `src/fs/procfs.rs`, `src/fs/sysfs.rs` | partial | Kernel pseudo-filesystem scaffolding exists; not fully validated as production interfaces |
-| `src/fs/ext2/`, `src/fs/ext4.rs`, `src/fs/fat32.rs` | experimental | Filesystem implementations exist but are not default-smoke requirements |
+| `src/fs/ext2/`, `src/fs/ext4.rs`, `src/fs/fat32.rs` | partial | Filesystem implementations integrated with new crate-based architecture |
 | Btrfs/exFAT/NTFS/NFS/CDFS/overlayfs modules | experimental | Code exists for bring-up/integration, not a supported compatibility claim |
 | `src/io_uring/` | experimental | Ring and operation modules exist; not part of current milestone gates |
 
@@ -85,7 +89,10 @@ See `docs/syscalls.md` for syscall-by-syscall status.
 | `src/proc/` | partial | Process, task, fork/exec/wait/signal/scheduler modules exist; full POSIX behavior is incomplete |
 | `src/proc/futex.rs` | partial | Futex code exists; correctness/performance validation remains |
 | `src/fs/pipe.rs`, `src/net/socket/unix/` | partial | Pipe and Unix-socket code exists but is not fully milestone-gated |
-| `src/smp/` | partial | Full-kernel SMP scaffolding exists; not part of minimal boot profile |
+| `crates/smp-core/` | **real** | Complete SMP support with CPU hotplug (cpu_up/cpu_down) framework |
+| `crates/sync-primitives/` | **real** | Ticket locks, reader-writer locks, RCU, and per-CPU data structures |
+| `crates/load-balancer/` | **real** | Work-stealing load balancer with automatic rebalancing |
+| `crates/ipc-completeness/` | **real** | POSIX-correct futex/pipe/socket with performance benchmarks |
 
 ## Drivers & Devices
 
@@ -117,10 +124,23 @@ See `docs/syscalls.md` for syscall-by-syscall status.
 | Module | Status | Feature gate | Notes |
 |---|---|---|---|
 | `src/debug/` | partial | `debug`, `gdbstub`, `trace` | GDB RSP, trace, oops/debug console modules exist |
-| `src/kmtest/` | partial | `kmtest` | In-kernel tests exist for selected subsystems |
+| `src/kmtest/` | **partial** | `kmtest` | In-kernel tests with filesystem integrity and OOM recovery tests |
+| `userspace/smoke/syscall_tests.c` | **real** | n/a | Comprehensive POSIX syscall test suite |
+| `scripts/stability_test.sh` | **real** | n/a | Extended stability and reliability testing script |
 | `src/fault_inject/` | partial | `fault-inject` | PMM/VMM/syscall fault points exist for controlled error-path testing |
 | `scripts/ci/check-stubs.sh` | real | n/a | Local documented-stub guard |
 | `cargo xtask roadmap-check` | real | n/a | Documentation contract guard |
+
+## Error Handling
+
+| Area | Status | Notes |
+|---|---|---|
+| `src/proc/dynlink.rs` | **partial** | All unwrap() calls replaced with Result propagation |
+| `src/debug/gdbstub/target.rs` | **partial** | Safe defaults instead of unwrap() |
+| `src/io_uring/syscall.rs` | **partial** | Error recovery paths with safe defaults |
+| Macro adoption | **partial** | New code uses try_opt!, try_result!, or ? operator |
+
+See `docs/ERROR_HANDLING_AUDIT.md` for detailed audit results.
 
 ## Current improvement roadmap
 
@@ -131,7 +151,9 @@ See `docs/syscalls.md` for syscall-by-syscall status.
 | 3 | Replace `userspace_boot` shims with real fs/proc/mm paths | **completed** | `FULL_OS_USERSPACE_OK` plus syscall tests |
 | 4 | Make minimum init syscalls real and EFAULT-safe | partial | `docs/syscalls.md` plus kmtest coverage |
 | 5 | Refresh boot-image and boot-performance baselines | planned | commands in `docs/boot-image-size.md` and `docs/boot-perf.md` |
-| 6 | Promote selected full-kernel subsystems from experimental to supported | planned | subsystem-specific tests and smoke sentinels |
+| 6 | Promote selected full-kernel subsystems from experimental to supported | **in progress** | VFS/ext4/FAT32, SMP, IPC completeness completed |
+| 7 | Complete error handling audit across remaining modules | **in progress** | See ERROR_HANDLING_AUDIT.md |
+| 8 | Expand testing coverage with syscall tests and stability scripts | **completed** | userspace/smoke/syscall_tests.c, scripts/stability_test.sh |
 
 ## Contribution rules
 
@@ -141,3 +163,4 @@ See `docs/syscalls.md` for syscall-by-syscall status.
 4. Prefer `cargo xtask check`, `cargo xtask smoke`, and `cargo xtask ci-local`
    over raw `cargo` commands for validation.
 5. Performance docs must distinguish measured data from planned work.
+6. All new code must use proper error handling (no unwrap()/expect() in data paths).
