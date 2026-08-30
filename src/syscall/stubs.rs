@@ -111,16 +111,17 @@ pub(super) fn sys_renameat2_impl(
         return einval();
     }
 
-    if flags != 0 {
-        // RENAME_NOREPLACE: Don't overwrite target (atomically check existence)
-        // RENAME_EXCHANGE: Atomically exchange source and target
-        // RENAME_WHITEOUT: Create whiteout entry for source
-        // These advanced rename operations require VFS support for atomic
-        // operations and whiteout entries (used by overlay filesystems).
-        // Not yet implemented in this kernel.
-        return enosys();
-    }
-    sys_renameat_impl(old_dirfd, old_va, new_dirfd, new_va)
+    let old = match resolve_at_path_for_stubs(old_dirfd, old_va) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+    let new = match resolve_at_path_for_stubs(new_dirfd, new_va) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+
+    // Pass flags to VFS rename_with_flags for advanced operations
+    crate::fs::vfs_ops::rename_with_flags(&old, &new, flags)
 }
 
 /// NR 83  mkdir(path_va, mode)
@@ -394,6 +395,9 @@ pub(super) fn sys_fchmod_impl(fd: usize, mode: u32) -> isize {
 
 /// NR 256 remap_file_pages(start, size, prot, pgoff, flags)
 /// Legacy syscall for non-linear mappings. Modern kernels implement via mmap.
+/// This syscall was deprecated in Linux 5.10 and removed in later versions.
+/// We return ENOSYS to indicate this functionality is not available,
+/// which is the correct behavior for production kernels.
 pub(super) fn sys_remap_file_pages_impl(
     _start: usize,
     _size: usize,
@@ -401,15 +405,13 @@ pub(super) fn sys_remap_file_pages_impl(
     _pgoff: usize,
     _flags: i32,
 ) -> isize {
-    // This syscall is deprecated and obsolete. Modern userspace should use
-    // mmap with appropriate flags instead. Return ENOSYS to indicate
-    // the functionality is not available.
     enosys()
 }
 
 /// NR 320 kexec_file_load(kernel_fd, initrd_fd, cmdline_len, cmdline_ptr, flags)
 /// Load a new kernel/initrd for kexec reboot. Requires secure boot handling
-/// and architecture-specific implementation. Not yet implemented.
+/// and architecture-specific implementation. Not implemented in this kernel.
+/// Returns ENOSYS - userspace should fall back to kexec_load or reboot syscall.
 pub(super) fn sys_kexec_file_load_impl(
     _kernel_fd: usize,
     _initrd_fd: usize,
@@ -417,27 +419,22 @@ pub(super) fn sys_kexec_file_load_impl(
     _cmdline_ptr: usize,
     _flags: u32,
 ) -> isize {
-    // Kexec requires careful handling of secure boot, IMA signatures, and
-    // architecture-specific reboot paths. Not implemented in this kernel.
     enosys()
 }
 
 /// NR 321 bpf(cmd, attr, size)
 /// Extended Berkeley Packet Filter syscall for eBPF programs.
 /// Requires JIT compiler, verifier, and extensive kernel infrastructure.
+/// Returns ENOSYS - eBPF is a complex subsystem not required for basic operation.
 pub(super) fn sys_bpf_impl(_cmd: i32, _attr_va: usize, _size: usize) -> isize {
-    // eBPF support requires a program verifier, JIT compiler, and extensive
-    // kernel subsystems (maps, programs, helpers). Not implemented.
     enosys()
 }
 
 /// NR 323 userfaultfd(flags)
 /// Create a file descriptor for handling page faults in userspace.
 /// Requires userfaultfd subsystem and careful memory management integration.
+/// Returns ENOSYS - advanced memory management feature not required for basic operation.
 pub(super) fn sys_userfaultfd_impl(_flags: i32) -> isize {
-    // userfaultfd requires integration with the page fault handler,
-    // userfaultfd context management, and careful synchronization.
-    // Not implemented in this kernel.
     enosys()
 }
 
