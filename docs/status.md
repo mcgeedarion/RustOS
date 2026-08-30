@@ -161,6 +161,9 @@ See `docs/ERROR_HANDLING_AUDIT.md` for detailed audit results.
 | 9 | Document intentionally unimplemented syscalls (ENOSYS by design) | **completed** | stubs.rs lines 408/422/430/438 — remap_file_pages, kexec_file_load, bpf, userfaultfd |
 | 10 | Implement filesystem integrity tests for VFS/ext4/FAT32 | **completed** | `src/kmtest/fs_integrity.rs` with 15+ in-kernel integrity tests |
 | 11 | Add long-running stability validation for memory and filesystem | **completed** | `src/kmtest/fs_integrity.rs`, `src/kmtest/oom_recovery.rs` with extended cycling tests |
+| 12 | Add syscall conformance matrix with EFAULT hardening plan | **completed** | See `docs/M3_M5_ROADMAP.md` for detailed matrix and implementation patterns |
+| 13 | Plan filesystem corruption/recovery tests for M4 gate | **completed** | Image corruption framework documented in `docs/M3_M5_ROADMAP.md` |
+| 14 | Plan network stack promotion for M5 gate | **completed** | Three-phase ARP/ICMP→UDP→TCP plan in `docs/M3_M5_ROADMAP.md` |
 
 ## Contribution rules
 

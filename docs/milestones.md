@@ -22,12 +22,16 @@ decide whether a boot succeeded in automation.
 
 ```text
 BOOT_MINIMAL_OK          # minimal boot path reached its success point
+BOOT_INITRAMFS_MOUNTED   # VFS initramfs mount complete (M3)
+BOOT_PROC_SPAWNED        # First user process enqueued (M3)
 FULL_OS_USERSPACE_OK     # userspace handoff path reached its success point
 entering cpu_idle        # generic idle-loop marker
 ```
 
-`cargo xtask smoke` treats any of the three strings as success and writes the
+`cargo xtask smoke` treats any of the five strings as success and writes the
 serial log under `target/smoke-<arch>.log`.
+
+See `docs/M3_M5_ROADMAP.md` for detailed milestone gates and validation commands.
 
 ## Promotion rule
 
