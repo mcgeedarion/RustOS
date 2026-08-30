@@ -276,8 +276,12 @@ pub fn receive6(frame: &[u8]) {
         return;
     }
 
-    let src: Addr6 = frame[8..24].try_into().unwrap();
-    let dst: Addr6 = frame[24..40].try_into().unwrap();
+    let Ok(src): Result<Addr6, _> = frame[8..24].try_into() else {
+        return;
+    };
+    let Ok(dst): Result<Addr6, _> = frame[24..40].try_into() else {
+        return;
+    };
 
     // Accept: our unicast, loopback, or any multicast addressed to us.
     let our = our_ip6();

@@ -479,7 +479,9 @@ pub fn accept(listen_idx: usize) -> isize {
         return -11;
     };
 
-    let accepted = listener.backlog.remove(pos).unwrap();
+    let Some(accepted) = listener.backlog.remove(pos) else {
+        return -4; // EINTR - connection removed concurrently
+    };
     let idx = alloc_tcp_slot(&mut conns);
     conns[idx] = Some(accepted);
 

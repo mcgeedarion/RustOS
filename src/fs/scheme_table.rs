@@ -232,7 +232,7 @@ mod tests {
 
         let result = t.open_url("tcp:127.0.0.1:8080", OpenFlags::RDWR);
         assert!(result.is_ok());
-        let (_scheme, fid) = result.unwrap();
+        let (_scheme, fid) = result.expect("open_url should succeed in test");
         assert_eq!(fid.0, 99);
     }
 

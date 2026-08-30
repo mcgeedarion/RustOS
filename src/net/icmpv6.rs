@@ -175,7 +175,9 @@ fn handle_ns(src: &Addr6, dst: &Addr6, payload: &[u8]) {
     if payload.len() < 24 {
         return;
     } // 4 reserved + 16 target
-    let target: Addr6 = payload[4..20].try_into().unwrap();
+    let Ok(target): Result<Addr6, _> = payload[4..20].try_into() else {
+        return;
+    };
     let our = ipv6::our_ip6();
     if target != our {
         return;
@@ -208,7 +210,9 @@ fn handle_na(payload: &[u8]) {
     if payload.len() < 20 {
         return;
     }
-    let target: Addr6 = payload[4..20].try_into().unwrap();
+    let Ok(target): Result<Addr6, _> = payload[4..20].try_into() else {
+        return;
+    };
     // TLLA option starts at byte 20.
     if let Some(mac) = parse_lladdr_option(&payload[20..]) {
         ndp_learn(&target, mac);
@@ -293,7 +297,9 @@ fn handle_redirect(payload: &[u8]) {
     if payload.len() < 36 {
         return;
     }
-    let target: Addr6 = payload[4..20].try_into().unwrap();
+    let Ok(target): Result<Addr6, _> = payload[4..20].try_into() else {
+        return;
+    };
     // Learn target MAC from TLLA option if present.
     if let Some(mac) = parse_lladdr_option(&payload[36..]) {
         ndp_learn(&target, mac);

@@ -220,7 +220,9 @@ pub fn receive(_src_mac: [u8; 6], pkt: &[u8]) {
         return;
     }
     let op = u16::from_be_bytes([pkt[6], pkt[7]]);
-    let sender_mac: [u8; 6] = pkt[8..14].try_into().unwrap();
+    let Ok(sender_mac): Result<[u8; 6], _> = pkt[8..14].try_into() else {
+        return;
+    };
     let sender_ip = u32::from_be_bytes([pkt[14], pkt[15], pkt[16], pkt[17]]);
     let target_ip = u32::from_be_bytes([pkt[24], pkt[25], pkt[26], pkt[27]]);
 

@@ -242,7 +242,7 @@ fn write_regs(pid: usize, data: &[u8]) -> isize {
     }
     let mut regs = [0u64; UREG_COUNT];
     for i in 0..UREG_COUNT {
-        regs[i] = u64::from_le_bytes(data[i * 8..(i + 1) * 8].try_into().unwrap());
+        regs[i] = u64::from_le_bytes(data[i * 8..(i + 1) * 8].try_into().unwrap_or([0u8; 8]));
     }
     let ok = scheduler::with_proc_mut(pid, |p, _| {
         if p.kstack_top == 0 {

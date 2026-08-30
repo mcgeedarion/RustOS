@@ -145,10 +145,10 @@ fn read_itimerspec(va: usize) -> Result<(u64, u64), isize> {
     }
     let mut buf = [0u8; 32];
     copy_from_user(&mut buf, va).map_err(|_| -14isize)?;
-    let interval_sec = i64::from_le_bytes(buf[0..8].try_into().unwrap());
-    let interval_nsec = i64::from_le_bytes(buf[8..16].try_into().unwrap());
-    let value_sec = i64::from_le_bytes(buf[16..24].try_into().unwrap());
-    let value_nsec = i64::from_le_bytes(buf[24..32].try_into().unwrap());
+    let interval_sec = i64::from_le_bytes(buf[0..8].try_into().unwrap_or([0u8; 8]));
+    let interval_nsec = i64::from_le_bytes(buf[8..16].try_into().unwrap_or([0u8; 8]));
+    let value_sec = i64::from_le_bytes(buf[16..24].try_into().unwrap_or([0u8; 8]));
+    let value_nsec = i64::from_le_bytes(buf[24..32].try_into().unwrap_or([0u8; 8]));
     let interval_ns = (interval_sec.max(0) as u64) * 1_000_000_000 + (interval_nsec.max(0) as u64);
     let value_ns = (value_sec.max(0) as u64) * 1_000_000_000 + (value_nsec.max(0) as u64);
     Ok((interval_ns, value_ns))
