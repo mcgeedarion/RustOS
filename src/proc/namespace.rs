@@ -390,13 +390,14 @@ pub fn unshare_ns(pid: usize, name: &str) -> isize {
 }
 
 const CLONE_NEWNS: usize = 0x0002_0000; // mount
-const CLONE_NEWUTS: usize = 0x0400_0000; // UTS
-const CLONE_NEWIPC: usize = 0x0800_0000; // IPC
-const CLONE_NEWUSER: usize = 0x1000_0000; // user
-const CLONE_NEWPID: usize = 0x2000_0000; // PID
-const CLONE_NEWNET: usize = 0x4000_0000; // network
-const CLONE_NEWTIME: usize = 0x0000_0080; // time
-const CLONE_NEWCGROUP: usize = 0x0200_0000; // cgroup
+pub(crate) const CLONE_NEWNS_VAL: usize = 0x0002_0000; // mount (exported alias)
+pub(crate) const CLONE_NEWUTS: usize = 0x0400_0000; // UTS
+pub(crate) const CLONE_NEWIPC: usize = 0x0800_0000; // IPC
+pub(crate) const CLONE_NEWUSER: usize = 0x1000_0000; // user
+pub(crate) const CLONE_NEWPID: usize = 0x2000_0000; // PID
+pub(crate) const CLONE_NEWNET: usize = 0x4000_0000; // network
+pub(crate) const CLONE_NEWTIME: usize = 0x0000_0080; // time
+pub(crate) const CLONE_NEWCGROUP: usize = 0x0200_0000; // cgroup
 
 /// NR 272  unshare(flags)
 pub fn sys_unshare(flags: usize) -> isize {
