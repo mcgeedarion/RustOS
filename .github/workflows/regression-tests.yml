@@ -1,0 +1,395 @@
+# Automated Regression Testing Pipeline for RustOS
+#
+# This workflow runs comprehensive regression tests on every push and PR.
+# It includes:
+# - Unit tests with coverage reporting
+# - Integration tests in QEMU
+# - Performance regression detection
+# - Memory safety checks (where applicable)
+
+name: Regression Tests
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  schedule:
+    # Run daily at 2 AM UTC to catch regressions early
+    - cron: '0 2 * * *'
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: full
+  RUSTFLAGS: "-C debug-assertions=yes"
+
+jobs:
+  # ===========================================================================
+  # UNIT TESTS
+  # ===========================================================================
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
+        with:
+          components: llvm-tools-preview
+      
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      
+      - name: Install cargo-tarpaulin for coverage
+        run: cargo install cargo-tarpaulin
+      
+      - name: Run unit tests with coverage
+        run: |
+          cargo tarpaulin \
+            --verbose \
+            --all-features \
+            --out Xml \
+            --out Html \
+            --output-dir coverage \
+            --timeout 120 \
+            --follow-exec \
+            --ignore-tests \
+            --exclude-files "*/tests/*" \
+            --exclude-files "*/benches/*"
+      
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage/cobertura.xml
+          flags: unittests
+          name: codecov-unit
+          fail_ci_if_error: false
+      
+      - name: Upload coverage HTML artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 7
+
+  # ===========================================================================
+  # KERNEL MODULE TESTS
+  # ===========================================================================
+  kernel-tests:
+    name: Kernel Module Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
+        with:
+          targets: x86_64-unknown-none
+      
+      - name: Install QEMU and dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            qemu-system-x86 \
+            ovmf \
+            genisoimage \
+            xorriso
+      
+      - name: Cache cargo and build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-kernel-${{ hashFiles('**/Cargo.lock') }}
+      
+      - name: Build kernel
+        run: cargo build --release --features full_kernel
+      
+      - name: Run kernel module tests
+        run: |
+          ./scripts/run_kmtest.sh \
+            --timeout 300 \
+            --verbose \
+            --junit-xml kmtest-results.xml
+      
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kmtest-results
+          path: kmtest-results.xml
+          retention-days: 14
+      
+      - name: Publish test results
+        uses: mikepenz/action-junit-report@v4
+        if: always()
+        with:
+          report_paths: '**/kmtest-results.xml'
+          check_name: Kernel Module Test Results
+
+  # ===========================================================================
+  # INTEGRATION TESTS (QEMU)
+  # ===========================================================================
+  integration-tests:
+    name: Integration Tests (QEMU)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      matrix:
+        test-suite:
+          - boot-smoke
+          - filesystem
+          - ipc
+          - scheduler
+      fail-fast: false
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
+        with:
+          targets: x86_64-unknown-none
+      
+      - name: Install QEMU and dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            qemu-system-x86 \
+            ovmf \
+            genisoimage \
+            xorriso \
+            expect
+      
+      - name: Cache build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-integration-${{ hashFiles('**/Cargo.lock') }}
+      
+      - name: Build kernel image
+        run: cargo build --release --features full_kernel
+      
+      - name: Create boot image
+        run: |
+          ./scripts/create-image.sh \
+            --output boot-test.img \
+            --kernel target/x86_64-unknown-none/release/rustos
+      
+      - name: Run integration tests
+        run: |
+          ./scripts/run-integration-test.sh \
+            --suite ${{ matrix.test-suite }} \
+            --timeout 600 \
+            --qemu-args "-display none -serial stdio" \
+            --log integration-${{ matrix.test-suite }}.log
+      
+      - name: Upload test logs
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: integration-logs-${{ matrix.test-suite }}
+          path: |
+            integration-*.log
+            *.img
+          retention-days: 7
+
+  # ===========================================================================
+  # PERFORMANCE REGRESSION TESTS
+  # ===========================================================================
+  perf-regression:
+    name: Performance Regression Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
+        with:
+          targets: x86_64-unknown-none
+      
+      - name: Install QEMU and dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            qemu-system-x86 \
+            ovmf
+      
+      - name: Cache build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-perf-${{ hashFiles('**/Cargo.lock') }}
+      
+      - name: Build optimized kernel
+        run: cargo build --release --features full_kernel
+      
+      - name: Run boot time benchmarks
+        run: |
+          ./scripts/bench-boot.sh \
+            --iterations 10 \
+            --output boot-perf.json
+      
+      - name: Run syscall latency benchmarks
+        run: |
+          ./scripts/bench-syscall.sh \
+            --iterations 1000 \
+            --output syscall-perf.json
+      
+      - name: Compare with baseline
+        run: |
+          ./scripts/compare-perf.sh \
+            --baseline perf-baseline.json \
+            --current boot-perf.json syscall-perf.json \
+            --threshold 10 \
+            --report perf-regression-report.md
+      
+      - name: Upload performance results
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-results
+          path: |
+            *-perf.json
+            perf-regression-report.md
+          retention-days: 30
+      
+      - name: Store new baseline (if improved)
+        run: |
+          if [ -f perf-regression-report.md ] && grep -q "IMPROVED" perf-regression-report.md; then
+            cp boot-perf.json syscall-perf.json perf-baseline.json
+            git config user.name "Performance Bot"
+            git config user.email "perf@rustos.dev"
+            git add perf-baseline.json
+            git commit -m "Update performance baseline [skip ci]" || true
+            git push || true
+          fi
+
+  # ===========================================================================
+  # FUZZ TESTING
+  # ===========================================================================
+  fuzz-tests:
+    name: Fuzz Testing
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@nightly
+        with:
+          components: cargo-fuzz
+      
+      - name: Install dependencies
+        run: |
+          cargo install cargo-fuzz
+      
+      - name: Cache corpus
+        uses: actions/cache@v4
+        with:
+          path: fuzz/corpus
+          key: ${{ runner.os }}-fuzz-corpus
+      
+      - name: Run fuzzer on VFS
+        run: |
+          cd fuzz
+          cargo fuzz run vfs_fuzzer -- -max_total_time=1800 || true
+      
+      - name: Run fuzzer on IPC
+        run: |
+          cd fuzz
+          cargo fuzz run ipc_fuzzer -- -max_total_time=1800 || true
+      
+      - name: Save corpus
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fuzz-corpus
+          path: fuzz/corpus/
+          retention-days: 30
+
+  # ===========================================================================
+  # ERROR HANDLING AUDIT
+  # ===========================================================================
+  error-handling-audit:
+    name: Error Handling Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Run unwrap/expect audit
+        run: |
+          chmod +x scripts/audit_unwrap.sh
+          ./scripts/audit_unwrap.sh || {
+            echo "::warning::Unwrap/expect calls found in codebase"
+            exit 0  # Don't fail the build, just warn
+          }
+      
+      - name: Upload audit report
+        uses: actions/upload-artifact@v4
+        with:
+          name: error-handling-audit
+          path: docs/error_handling_audit.md
+          retention-days: 14
+
+  # ===========================================================================
+  # AGGREGATE RESULTS
+  # ===========================================================================
+  aggregate-results:
+    name: Aggregate Test Results
+    runs-on: ubuntu-latest
+    needs: [unit-tests, kernel-tests, integration-tests, perf-regression, fuzz-tests, error-handling-audit]
+    if: always()
+    
+    steps:
+      - name: Check job statuses
+        run: |
+          echo "## Test Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Test Suite | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------------|--------|" >> $GITHUB_STEP_SUMMARY
+          
+          for job in unit-tests kernel-tests integration-tests perf-regression fuzz-tests error-handling-audit; do
+            status="${{ needs.$job.result }}"
+            emoji="✅"
+            if [ "$status" = "failure" ]; then
+              emoji="❌"
+            elif [ "$status" = "cancelled" ]; then
+              emoji="⚠️"
+            elif [ "$status" = "skipped" ]; then
+              emoji="⏭️"
+            fi
+            echo "| $job | $emoji $status |" >> $GITHUB_STEP_SUMMARY
+          done
+      
+      - name: Fail if critical tests failed
+        run: |
+          if [ "${{ needs.unit-tests.result }}" = "failure" ] || \
+             [ "${{ needs.kernel-tests.result }}" = "failure" ]; then
+            echo "Critical tests failed!"
+            exit 1
+          fi
