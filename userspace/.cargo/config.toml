@@ -1,0 +1,12 @@
+# RustOS Userspace Cargo Configuration
+[build]
+target = "x86_64-unknown-none"
+
+[target.x86_64-unknown-none]
+rustflags = ["-C", "link-arg=-nostartfiles", "-C", "relocation-model=static"]
+
+[target.aarch64-unknown-none]
+rustflags = ["-C", "link-arg=-nostartfiles", "-C", "relocation-model=static"]
+
+[target.riscv64gc-unknown-none]
+rustflags = ["-C", "link-arg=-nostartfiles", "-C", "relocation-model=static"]

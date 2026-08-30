@@ -1,0 +1,17 @@
+[package]
+name = "rustos-libc-shim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+name = "libc_shim"
+path = "src/lib.rs"
+
+[features]
+default = []
+# Enable _start entry point for programs using this as their libc
+provide_start = []
+
+[dependencies]
