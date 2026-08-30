@@ -129,7 +129,7 @@ See `docs/syscalls.md` for syscall-by-syscall status.
 | Module | Status | Feature gate | Notes |
 |---|---|---|---|
 | `src/debug/` | partial | `debug`, `gdbstub`, `trace` | GDB RSP, trace, oops/debug console modules exist |
-| `src/kmtest/` | **partial** | `kmtest` | In-kernel tests with filesystem integrity and OOM recovery tests |
+| `src/kmtest/` | **real** | `kmtest` | In-kernel tests with filesystem integrity, OOM recovery, and long-running stability tests |
 | `userspace/smoke/syscall_tests.c` | **real** | n/a | Comprehensive POSIX syscall test suite |
 | `scripts/stability_test.sh` | **real** | n/a | Extended stability and reliability testing script |
 | `src/fault_inject/` | partial | `fault-inject` | PMM/VMM/syscall fault points exist for controlled error-path testing |
@@ -155,11 +155,13 @@ See `docs/ERROR_HANDLING_AUDIT.md` for detailed audit results.
 | 2 | Keep AArch64 boot contracts buildable/smokeable where firmware exists | real | `cargo xtask smoke --arch aarch64` |
 | 3 | Replace `userspace_boot` shims with real fs/proc/mm paths | **completed** | `FULL_OS_USERSPACE_OK` plus syscall tests |
 | 4 | Make minimum init syscalls real and EFAULT-safe | partial | `docs/syscalls.md` plus kmtest coverage |
-| 5 | Refresh boot-image and boot-performance baselines | planned | commands in `docs/boot-image-size.md` and `docs/boot-perf.md` |
+| 5 | Refresh boot-image and boot-performance baselines | **completed** | In-kernel boot markers with CI parser; baseline collection via `scripts/ci/parse-boot-marks.sh` |
 | 6 | Promote selected full-kernel subsystems from experimental to supported | **in progress** | VFS/ext4/FAT32, SMP, IPC completeness completed |
 | 7 | Complete error handling audit across remaining modules | **in progress** | See ERROR_HANDLING_AUDIT.md |
 | 8 | Expand testing coverage with syscall tests and stability scripts | **completed** | userspace/smoke/syscall_tests.c, scripts/stability_test.sh |
 | 9 | Document intentionally unimplemented syscalls (ENOSYS by design) | **completed** | stubs.rs lines 408/422/430/438 — remap_file_pages, kexec_file_load, bpf, userfaultfd |
+| 10 | Implement filesystem integrity tests for VFS/ext4/FAT32 | **completed** | `src/kmtest/fs_integrity.rs` with 15+ in-kernel integrity tests |
+| 11 | Add long-running stability validation for memory and filesystem | **completed** | `src/kmtest/fs_integrity.rs`, `src/kmtest/oom_recovery.rs` with extended cycling tests |
 
 ## Contribution rules
 

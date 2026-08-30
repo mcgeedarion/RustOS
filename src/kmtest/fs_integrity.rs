@@ -1,35 +1,74 @@
 //! Filesystem Integrity Tests for RustOS
 //! 
 //! This module provides comprehensive filesystem integrity testing for VFS, ext4, and FAT32.
-//! Run with: cargo test --package kmtest --lib fs_integrity
+//! These tests run in-kernel when feature="kmtest" is enabled.
+//! 
+//! Run with: cargo xtask qemu --features kmtest
 
-#[cfg(test)]
-mod tests {
-    use std::fs;
-    use std::io::{Read, Write, Seek, SeekFrom};
-    use std::path::Path;
-    use tempfile::TempDir;
+use crate::fs::{
+    io_syscalls::{sys_close, sys_open, sys_read, sys_write},
+    stat_syscalls::{sys_lseek, sys_rename, sys_stat, sys_unlink},
+};
+use crate::kmtest::{register, KmTestResult};
 
-    // ========================================================================
-    // VFS Core Integrity Tests
-    // ========================================================================
+// O_* and S_* flag literals (matching Linux ABI).
+const O_RDONLY: u32 = 0;
+const O_WRONLY: u32 = 1;
+const O_RDWR: u32 = 2;
+const O_CREAT: u32 = 0o100;
+const O_EXCL: u32 = 0o200;
+const O_TRUNC: u32 = 0o1000;
+const O_APPEND: u32 = 0o2000;
+const S_IRUSR: u32 = 0o400;
+const S_IWUSR: u32 = 0o200;
+const S_MODE: u32 = S_IRUSR | S_IWUSR;
+const SEEK_SET: i32 = 0;
+const SEEK_CUR: i32 = 1;
+const SEEK_END: i32 = 2;
 
-    #[test]
-    fn test_vfs_basic_operations() {
-        let tmpdir = TempDir::new().expect("create temp dir");
-        let test_file = tmpdir.path().join("vfs_test.txt");
-        
-        // Create and write
-        let mut file = fs::File::create(&test_file).expect("create file");
-        file.write_all(b"Hello, VFS!").expect("write data");
-        drop(file);
-        
-        // Read and verify
-        let mut file = fs::File::open(&test_file).expect("open file");
-        let mut contents = String::new();
-        file.read_to_string(&mut contents).expect("read file");
-        assert_eq!(contents, "Hello, VFS!");
+// Test scratch paths — in tmpfs so they don't persist across reboots.
+const PATH_TEST: &[u8] = b"/tmp/kmtest_integrity\0";
+const PATH_LINK: &[u8] = b"/tmp/kmtest_link\0";
+
+fn path(p: &[u8]) -> usize {
+    p.as_ptr() as usize
+}
+
+// ========================================================================
+// VFS Core Integrity Tests
+// ========================================================================
+
+/// Basic write/read round-trip test
+fn vfs_basic_write_read() -> KmTestResult {
+    let data = b"Hello, VFS!";
+    let fd = sys_open(path(PATH_TEST), O_WRONLY | O_CREAT | O_TRUNC, S_MODE);
+    if fd < 0 {
+        return Err("open for write failed");
     }
+    let n = sys_write(fd as usize, data.as_ptr() as usize, data.len());
+    if n != data.len() as isize {
+        sys_close(fd as usize);
+        return Err("write returned wrong count");
+    }
+    sys_close(fd as usize);
+
+    let fd2 = sys_open(path(PATH_TEST), O_RDONLY, 0);
+    if fd2 < 0 {
+        return Err("open for read failed");
+    }
+    let mut buf = [0u8; 32];
+    let r = sys_read(fd2 as usize, buf.as_mut_ptr() as usize, buf.len());
+    sys_close(fd2 as usize);
+    let _ = sys_unlink(path(PATH_TEST));
+    
+    if r != data.len() as isize {
+        return Err("read returned wrong count");
+    }
+    if &buf[..data.len()] != data {
+        return Err("read data does not match written data");
+    }
+    Ok(())
+}
 
     #[test]
     fn test_vfs_directory_operations() {
