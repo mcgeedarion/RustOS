@@ -161,11 +161,13 @@ unsafe fn _init(mmio: usize) {
     let _ = read32(mmio, ICR);
 
     // Allocate RX ring + buffers.
-    let rx_descs_phys = alloc_dma(core::mem::size_of::<RxDesc>() * RX_DESC_COUNT, 4096).unwrap();
+    let rx_descs_phys = alloc_dma(core::mem::size_of::<RxDesc>() * RX_DESC_COUNT, 4096)
+        .expect("e1000e: DMA allocation failed for RX descriptors");
     let rx_descs = rx_descs_phys as *mut RxDesc;
     let mut rx_bufs = Vec::with_capacity(RX_DESC_COUNT);
     for i in 0..RX_DESC_COUNT {
-        let buf = alloc_dma(RX_BUF_SIZE, 2048).unwrap();
+        let buf = alloc_dma(RX_BUF_SIZE, 2048)
+            .expect("e1000e: DMA allocation failed for RX buffer");
         rx_bufs.push(buf);
         (*rx_descs.add(i)) = RxDesc {
             addr: buf,
@@ -174,11 +176,13 @@ unsafe fn _init(mmio: usize) {
     }
 
     // Allocate TX ring + buffers.
-    let tx_descs_phys = alloc_dma(core::mem::size_of::<TxDesc>() * TX_DESC_COUNT, 4096).unwrap();
+    let tx_descs_phys = alloc_dma(core::mem::size_of::<TxDesc>() * TX_DESC_COUNT, 4096)
+        .expect("e1000e: DMA allocation failed for TX descriptors");
     let tx_descs = tx_descs_phys as *mut TxDesc;
     let mut tx_bufs = Vec::with_capacity(TX_DESC_COUNT);
     for i in 0..TX_DESC_COUNT {
-        let buf = alloc_dma(2048, 2048).unwrap();
+        let buf = alloc_dma(2048, 2048)
+            .expect("e1000e: DMA allocation failed for TX buffer");
         tx_bufs.push(buf);
         (*tx_descs.add(i)) = TxDesc {
             status: TXD_STAT_DD,

@@ -204,7 +204,7 @@ unsafe fn setup_queue(iobase: u16, q: u16) -> Queue {
     let bytes_avail = core::mem::size_of::<Avail>();
     let bytes_used = core::mem::size_of::<Used>();
     let total = align_up(bytes_desc + bytes_avail, 4096) + align_up(bytes_used, 4096);
-    let phys = alloc_dma(total, 4096).unwrap();
+    let phys = alloc_dma(total, 4096).expect("virtio-net: DMA allocation failed for queue descriptors");
 
     out32(iobase + VIRTIO_PCI_QUEUE_PFN, (phys >> 12) as u32);
 
@@ -215,7 +215,7 @@ unsafe fn setup_queue(iobase: u16, q: u16) -> Queue {
 
     let mut bufs = Vec::with_capacity(QSZ);
     for _ in 0..QSZ {
-        bufs.push(alloc_dma(PKT_BUF, 2048).unwrap());
+        bufs.push(alloc_dma(PKT_BUF, 2048).expect("virtio-net: DMA allocation failed for packet buffer"));
     }
 
     Queue {
