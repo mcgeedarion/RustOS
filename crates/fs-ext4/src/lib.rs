@@ -10,7 +10,10 @@ extern crate alloc;
 
 use alloc::string::String;
 use alloc::vec::Vec;
-use vfs_core::{FileSystem, FileHandle, OpenFlags, Stat, DirEntry, FileType, VfsError, SeekWhence, FileOps};
+use vfs_core::{
+    DirEntry, FileHandle, FileOps, FileSystem, FileSystemExt, FileType, OpenFlags, SeekWhence, Stat,
+    VfsError,
+};
 
 /// EXT4 filesystem driver with complete VMM integration
 pub struct Ext4FileSystem {
@@ -418,6 +421,13 @@ mod kernel_ext4 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_file_ops_exposed_via_extension_trait() {
+        let fs = Ext4FileSystem::new();
+        let fs: &dyn FileSystemExt = &fs;
+        assert!(fs.file_ops().is_some());
+    }
     
     #[test]
     fn test_ext4_new() {
