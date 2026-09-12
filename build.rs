@@ -34,9 +34,9 @@ fn main() {
 
     // ----------------------------------------------------------------
     // Bare-metal ELF targets only (x86_64-kernel.json, aarch64-kernel.json)
-    // UEFI PE/COFF targets (x86_64-uefi-loader.json, aarch64-uefi-loader.json)
-    // have target_os == "uefi"; they use the PE/COFF layout built into
-    // lld-link and must NOT have an ELF linker script injected.
+    // UEFI PE/COFF targets (aarch64-uefi-loader.json) have target_os ==
+    // "uefi"; they use the PE/COFF layout built into lld-link and must NOT
+    // have an ELF linker script injected.
     // ----------------------------------------------------------------
     if target_os != "uefi" {
         let script = match target_arch.as_str() {
@@ -118,6 +118,16 @@ fn configure_crt_compiler(build: &mut cc::Build, target_arch: &str) {
         "aarch64" if command_exists("clang") => {
             build.compiler("clang");
             build.flag("--target=aarch64-none-elf");
+        },
+        // Use LLVM/clang's integrated assembler for RISC-V instead of relying on
+        // a separately installed GNU `riscv64-unknown-elf-as`/`riscv64-unknown-elf-gcc`
+        // toolchain. clang targets riscv64-unknown-elf directly and assembles with
+        // the LLVM integrated assembler, so no external binutils are required.
+        "riscv64" if command_exists("clang") => {
+            build.compiler("clang");
+            build.flag("--target=riscv64-unknown-elf");
+            build.flag("-march=rv64gc");
+            build.flag("-mabi=lp64d");
         },
         _ => {},
     }
