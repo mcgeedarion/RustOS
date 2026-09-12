@@ -1,0 +1,31 @@
+name: Focused host regressions
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  host-regressions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
+          components: rust-src
+      - name: Test ext4 extension trait
+        run: |
+          cargo test --locked -p fs-ext4 --lib \
+            --target x86_64-unknown-linux-gnu -Z build-std=std,test
+      - name: Test smoke assertion failure propagation
+        run: |
+          rustc --edition=2021 --target x86_64-unknown-linux-gnu --test \
+            userspace/smoke/tests/assertions.rs -o "$RUNNER_TEMP/smoke-assertions"
+          "$RUNNER_TEMP/smoke-assertions"
