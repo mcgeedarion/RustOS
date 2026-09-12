@@ -29,3 +29,39 @@ jobs:
           rustc --edition=2021 --target x86_64-unknown-linux-gnu --test \
             userspace/smoke/tests/assertions.rs -o "$RUNNER_TEMP/smoke-assertions"
           "$RUNNER_TEMP/smoke-assertions"
+      - name: Test transitional userspace profile
+        run: |
+          cargo test --locked -p rustos-kernel --lib --no-default-features \
+            --features userspace_boot --target x86_64-unknown-linux-gnu \
+            -Z build-std=std,test
+
+  boot-profile-builds:
+    name: Boot profile contracts (${{ matrix.arch }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, aarch64]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
+          components: rust-src
+      - name: Build minimal, userspace-only, and Cargo default profiles
+        env:
+          TARGET: ${{ matrix.arch }}-unknown-uefi
+        run: |
+          for profile in debug release; do
+            profile_args=()
+            if [ "$profile" = release ]; then
+              profile_args+=(--release)
+            fi
+            cargo build --locked --target "$TARGET" "${profile_args[@]}" \
+              --no-default-features --features boot_minimal
+            cargo build --locked --target "$TARGET" "${profile_args[@]}" \
+              --no-default-features --features userspace_boot
+            cargo build --locked --target "$TARGET" "${profile_args[@]}"
+          done

@@ -261,7 +261,7 @@ unsafe extern "efiapi" fn efi_main(
             let phys_start = *data as usize;
             let byte_size = *data.add(1) as usize;
             if phys_start != 0 && byte_size > 0 {
-                #[cfg(not(feature = "boot_minimal"))]
+                #[cfg(any(not(feature = "boot_minimal"), feature = "userspace_boot"))]
                 crate::init::initramfs::set_initramfs_range(phys_start, byte_size);
                 initramfs = BootRange::new(phys_start, byte_size);
                 ovmf_initrd_found = true;
@@ -278,7 +278,7 @@ unsafe extern "efiapi" fn efi_main(
 
     // 4b. xtask fallback: embed initramfs.cpio into the EFI image for QEMU/OVMF
     // runs where fw_cfg/LoadFile2 is not surfaced as an EFI initrd handle.
-    #[cfg(not(feature = "boot_minimal"))]
+    #[cfg(any(not(feature = "boot_minimal"), feature = "userspace_boot"))]
     if initramfs.is_empty() {
         if let Some(range) = load_embedded_initramfs(bs) {
             initramfs = range;
@@ -449,14 +449,14 @@ unsafe fn load_initrd_via_loadfile2(bs: &EfiBootServices) -> Option<BootRange> {
         initrd_buf as *mut core::ffi::c_void,
     );
     if status == EFI_SUCCESS {
-        #[cfg(not(feature = "boot_minimal"))]
+        #[cfg(any(not(feature = "boot_minimal"), feature = "userspace_boot"))]
         crate::init::initramfs::set_initramfs_range(initrd_buf as usize, initrd_size);
         return Some(BootRange::new(initrd_buf as usize, initrd_size));
     }
     None
 }
 
-#[cfg(not(feature = "boot_minimal"))]
+#[cfg(any(not(feature = "boot_minimal"), feature = "userspace_boot"))]
 unsafe fn load_embedded_initramfs(bs: &EfiBootServices) -> Option<BootRange> {
     let bytes = crate::embedded_initramfs::INITRAMFS;
     if bytes.is_empty() {

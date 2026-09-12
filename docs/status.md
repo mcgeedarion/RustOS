@@ -24,7 +24,7 @@ userspace handoff validation.
 |---|---|---|
 | default `full_kernel` | partial | Cargo default; expands to `uefi_boot` and `userspace_boot` |
 | `boot_minimal` | real | Firmware handoff, `BootInfo`, early console, boot markers, idle loop |
-| `userspace_boot` | partial | Uses `src/userspace_shims.rs` for minimal fs/proc surfaces |
+| `userspace_boot` | partial | Raw initramfs/ELF diagnostics only; valid images report execution unavailable because full MM/VFS/scheduler services are excluded |
 | full kernel graph | partial/experimental | Large module graph exists, but many subsystems are not yet supported smoke-contract claims |
 | `release-boot` profile/feature | real | Lean image profile with LTO, opt-level=z, single codegen unit; size baselines tracked in CI |
 | `boot_debug` feature | real | Gates verbose `log::debug!`/`log::trace!` during boot; off by default for performance |
@@ -37,8 +37,8 @@ userspace handoff validation.
 | `src/boot_minimal.rs` | real | `boot_minimal` | Emits the minimal boot success path and parks the CPU |
 | `src/kernel_main.rs` | partial | all profiles | Common architecture-independent entry dispatcher and boot markers |
 | `src/init/` | partial | all profiles | `BootInfo`, initramfs metadata, loader/scheme scaffolding |
-| `src/userspace_boot.rs` | partial | `userspace_boot` | Handoff marker path with thin shim services |
-| `src/userspace_shims.rs` | stub | `userspace_boot` | Intentional temporary fs/proc surface for M2 work |
+| `src/userspace_boot.rs` | partial | `userspace_boot` | Checks for an initramfs and `/init`, then reports validation errors or unavailable execution; no PID-created or `BOOT_INIT_EXEC` success claim |
+| `src/userspace_shims.rs` | stub | `userspace_boot` | Uses the real raw CPIO parser; validates ELF metadata and returns explicit `ExecutionUnavailable`, without pretend VFS mounting or scheduling |
 
 ## Architecture
 

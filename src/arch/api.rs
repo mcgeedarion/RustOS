@@ -134,16 +134,19 @@ pub trait FpState {
 }
 
 #[inline]
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub fn kernel_va_range() -> Range<usize> {
     crate::arch::hal::kernel_va_range()
 }
 
 #[inline]
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub fn is_user_addr(addr: usize) -> bool {
     crate::arch::hal::is_user_addr(addr)
 }
 
 #[inline]
+#[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub fn is_valid_addr(addr: usize) -> bool {
     crate::arch::hal::is_valid_addr(addr)
 }
