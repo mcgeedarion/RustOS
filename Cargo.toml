@@ -75,17 +75,14 @@ thiserror.workspace = true
 cc = "1"
 
 [features]
-# Full kernel: complete OS with all subsystems (MM, FS, Proc, Scheduler, Syscalls)
-# This is the production-ready kernel configuration that includes the full
-# memory manager, virtual filesystem, process scheduler, and syscall interface.
-# Requires UEFI boot and userspace boot infrastructure.
+# Historical default feature name. Currently selects the transitional UEFI
+# userspace-diagnostic profile, NOT the complete MM/VFS/scheduler graph.
+# Keep this alias stable while the full subsystem graph is integrated.
 full_kernel = ["uefi_boot", "userspace_boot"]
 
 # ---------------------------------------------------------------------------
-# Default: Full kernel with userspace boot support for production builds.
-# This enables the complete kernel functionality including memory manager,
-# virtual filesystem, process scheduler, and syscall interface.
-# Requires UEFI boot and userspace boot infrastructure.
+# Default: transitional userspace diagnostics with UEFI boot infrastructure.
+# This profile can inspect /init but cannot yet execute a userspace process.
 # ---------------------------------------------------------------------------
 default = ["full_kernel"]
 
@@ -95,14 +92,9 @@ default = ["full_kernel"]
 # re-enabling the full kernel services.
 boot_minimal = []
 
-# Compile the current full-boot skeleton without the legacy experimental
-# subsystems that are still API-inconsistent. This path keeps the firmware
-# handoff, common BootInfo path, early console, and a userspace handoff marker
-# enabled as the default "boot to userspace" milestone.
-#
-# NOTE: crate::fs and crate::proc are provided as thin stubs (no-op /
-# returns-false) while the real mm/fs/proc stack is still being stabilised.
-# See src/lib.rs for the stub definitions and the Phase 3 replacement plan.
+# Compile the firmware handoff, raw initramfs lookup, and ELF diagnostics
+# without the full MM/VFS/scheduler. Valid ELF images report an explicit
+# ExecutionUnavailable error; no PID or userspace-success marker is produced.
 userspace_boot = []
 
 # Evdev / virtio-input subsystem.

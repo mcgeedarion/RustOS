@@ -9,9 +9,11 @@
 //! |------------------------------|-----------------------------|
 //! | `boot_minimal` without `userspace_boot` | First-stage boot only |
 //! | `userspace_boot`             | Boot + thin userspace shims |
-//! | neither (default / release)  | Full kernel                 |
+//! | neither slim feature        | Full subsystem graph        |
 //!
-//! The `arch`, `boot_perf`, `console`, `init`, `kernel`, and `smp` modules
+//! Cargo's `full_kernel` default currently activates both slim flags and
+//! therefore selects userspace diagnostics, not the full subsystem graph.
+//! The `arch`, `boot_perf`, `console`, `init`, and `kernel` modules
 //! compile under all three profiles because the panic handler, early console,
 //! and BootInfo parser are needed everywhere.
 

@@ -107,6 +107,7 @@ cargo xtask run --arch x86_64 --features userspace_boot --initrd
 
 - `docs/status.md` is the authoritative subsystem status registry.
 - `docs/architecture.md` describes architecture contracts and code organization rules.
+- `docs/boot-profile-contracts.md` separates slim-profile build, boot, and unsupported userspace-execution guarantees.
 - `docs/milestones.md` tracks M1-M5 product milestones and serial sentinels.
 - `docs/syscalls.md` records syscall maturity and EFAULT-safety expectations.
 - `docs/ci.md`, `docs/getting-started.md`, and `docs/code_coverage.md` cover developer validation.
