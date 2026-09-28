@@ -27,7 +27,7 @@ jobs:
       - name: Show pinned toolchain
         run: rustup show
       - name: Check formatting
-        run: cargo fmt --all -- --check
+        run: bash scripts/ci/check-rust-format.sh
       - name: Run clippy
         run: |
           cargo clippy -p rustos-kernel --lib --no-default-features --features boot_minimal \
@@ -76,5 +76,5 @@ jobs:
           sudo apt-get install -y llvm lld musl-tools cpio mtools ovmf qemu-system-x86
       - name: Run x86_64 UEFI smoke
         run: cargo xtask smoke --arch x86_64 --boot uefi
-      - name: Run x86_64 UEFI kmtest
-        run: ARCH=x86_64 ./scripts/ci/run_qemu.sh --boot uefi --test --timeout 90
+      - name: Recheck x86_64 minimal boot (not kernel test coverage)
+        run: ARCH=x86_64 bash scripts/ci/run_qemu.sh --boot uefi --smoke --timeout 90

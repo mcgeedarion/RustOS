@@ -21,7 +21,7 @@ pub fn ecam_base() -> usize {
 }
 
 /// PCI configuration space access via ECAM.
-/// 
+///
 /// ECAM formula:
 ///   cfg_addr = ECAM_BASE + (bus << 20) | (device << 15) | (function << 12) | register
 #[inline]
@@ -55,11 +55,11 @@ pub fn config_write(bus: u32, device: u32, function: u32, register: u32, value: 
 pub fn read_bar(bus: u32, device: u32, function: u32, bar_index: u32) -> Option<u64> {
     let bar_reg = 0x10 + (bar_index * 4);
     let bar_val = config_read(bus, device, function, bar_reg);
-    
+
     if bar_val == 0 || bar_val == 0xFFFF_FFFF {
         return None;
     }
-    
+
     // Check if memory-mapped or I/O
     if bar_val & 1 == 0 {
         // Memory space
@@ -87,10 +87,10 @@ pub fn find_device_by_class(class: u8) -> Option<(u32, u32, u32)> {
                 if vendor_id == 0xFFFF_FFFF {
                     continue; // No device at this location
                 }
-                
+
                 let class_reg = config_read(bus, device, function, 0x08);
                 let class_code = (class_reg >> 24) as u8;
-                
+
                 if class_code == class {
                     return Some((bus, device, function));
                 }

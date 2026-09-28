@@ -76,7 +76,7 @@ impl fmt::Display for AcpiError {
             AcpiError::NotImplemented => write!(f, "operation not implemented"),
             AcpiError::InvalidPhysicalAddress(addr) => {
                 write!(f, "invalid physical address {:#x}", addr)
-            }
+            },
             AcpiError::NoGpeBlock => write!(f, "no GPE0 block available"),
             AcpiError::FacsInvalid => write!(f, "FACS not found or invalid"),
             AcpiError::SratError => write!(f, "SRAT parsing error"),
@@ -105,19 +105,19 @@ pub const fn is_valid_physical_address(addr: usize, size: usize) -> bool {
     if addr == 0 {
         return false;
     }
-    
+
     // Reject addresses that would overflow
     if addr.checked_add(size).is_none() {
         return false;
     }
-    
+
     // Reject addresses above 512 GiB (reasonable upper bound for most systems)
     // This can be adjusted based on target hardware
     const MAX_PHYSICAL_ADDR: usize = 0x80_0000_0000; // 512 GiB
     if addr > MAX_PHYSICAL_ADDR {
         return false;
     }
-    
+
     true
 }
 
@@ -172,19 +172,19 @@ mod tests {
         assert!(is_valid_physical_address(0x1000, 100));
         assert!(is_valid_physical_address(0x1_0000_0000, 4096)); // 4 GiB
         assert!(is_valid_physical_address(0x80_0000_0000 - 100, 100)); // Just under 512 GiB
-        
+
         // Null address
         assert!(!is_valid_physical_address(0, 100));
         assert!(!is_valid_physical_address(0, 4096));
-        
+
         // Above 512 GiB limit
         assert!(!is_valid_physical_address(0x100_0000_0000, 100)); // 1 TiB
         assert!(!is_valid_physical_address(0x80_0000_0000, 100)); // Exactly 512 GiB
-        
+
         // Overflow cases
         assert!(!is_valid_physical_address(usize::MAX, 100));
         assert!(!is_valid_physical_address(usize::MAX - 50, 100));
-        
+
         // Edge case: exactly at boundary
         assert!(is_valid_physical_address(0x7FFF_FFFF, 100));
     }
@@ -193,7 +193,7 @@ mod tests {
     fn test_result_type_alias() {
         let ok_result: AcpiResult<()> = Ok(());
         let err_result: AcpiResult<()> = Err(AcpiError::RsdpNotFound);
-        
+
         assert!(ok_result.is_ok());
         assert!(err_result.is_err());
         assert_eq!(err_result.unwrap_err(), AcpiError::RsdpNotFound);

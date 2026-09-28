@@ -5,13 +5,11 @@
 //! these traits to integrate with the VFS.
 
 #![no_std]
-#![feature(alloc_error_handler)]
 
 extern crate alloc;
 
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::fmt;
 
 pub use bitflags::bitflags;
 pub use thiserror::Error;
@@ -21,52 +19,52 @@ pub use thiserror::Error;
 pub enum VfsError {
     #[error("File not found")]
     NotFound = 2,
-    
+
     #[error("Permission denied")]
     PermissionDenied = 13,
-    
+
     #[error("File exists")]
     AlreadyExists = 17,
-    
+
     #[error("Not a directory")]
     NotADirectory = 20,
-    
+
     #[error("Is a directory")]
     IsADirectory = 21,
-    
+
     #[error("Invalid argument")]
     InvalidArg = 22,
-    
+
     #[error("Too many open files")]
     TooManyOpenFiles = 24,
-    
+
     #[error("Read-only file system")]
     ReadOnly = 30,
-    
+
     #[error("Operation not supported")]
     NotSupported = 95,
-    
+
     #[error("Out of memory")]
     OutOfMemory = 12,
-    
+
     #[error("I/O error")]
     Io = 5,
-    
+
     #[error("Resource temporarily unavailable")]
     WouldBlock = 11,
-    
+
     #[error("Bad file descriptor")]
     BadFd = 9,
-    
+
     #[error("File too large")]
     FileTooLarge = 27,
-    
+
     #[error("No space left on device")]
     NoSpace = 28,
-    
+
     #[error("Cross-device link")]
     CrossDevice = 18,
-    
+
     #[error("Directory not empty")]
     NotEmpty = 39,
 }
@@ -103,18 +101,18 @@ impl Stat {
     pub fn is_dir(&self) -> bool {
         (self.mode & 0o170000) == 0o040000
     }
-    
+
     pub fn is_file(&self) -> bool {
         (self.mode & 0o170000) == 0o100000
     }
-    
+
     pub fn is_symlink(&self) -> bool {
         (self.mode & 0o170000) == 0o120000
     }
 }
 
-/// Open flags for file operations
 bitflags! {
+    /// Open flags for file operations.
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
     pub struct OpenFlags: u32 {
         const O_RDONLY = 0x0000;
@@ -155,7 +153,7 @@ impl FileHandle {
             _marker: core::marker::PhantomData,
         }
     }
-    
+
     pub fn with_data(inode: u64, flags: OpenFlags, data: *mut ()) -> Self {
         Self {
             inode,
@@ -204,7 +202,12 @@ pub enum SeekWhence {
 pub trait FileOps: Send + Sync {
     fn read(&self, handle: &FileHandle, buf: &mut [u8]) -> Result<usize, VfsError>;
     fn write(&self, handle: &FileHandle, buf: &[u8]) -> Result<usize, VfsError>;
-    fn seek(&self, handle: &mut FileHandle, offset: isize, whence: SeekWhence) -> Result<usize, VfsError>;
+    fn seek(
+        &self,
+        handle: &mut FileHandle,
+        offset: isize,
+        whence: SeekWhence,
+    ) -> Result<usize, VfsError>;
     fn flush(&self, handle: &FileHandle) -> Result<(), VfsError>;
     fn fstat(&self, handle: &FileHandle) -> Result<Stat, VfsError>;
     fn close(&self, handle: FileHandle) -> Result<(), VfsError>;
@@ -235,14 +238,24 @@ pub struct VfsRegistry {
     filesystems: spin::Mutex<alloc::collections::BTreeMap<&'static str, &'static dyn FileSystem>>,
 }
 
+impl Default for VfsRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl VfsRegistry {
     pub const fn new() -> Self {
         Self {
             filesystems: spin::Mutex::new(alloc::collections::BTreeMap::new()),
         }
     }
-    
-    pub fn register(&self, name: &'static str, fs: &'static dyn FileSystem) -> Result<(), VfsError> {
+
+    pub fn register(
+        &self,
+        name: &'static str,
+        fs: &'static dyn FileSystem,
+    ) -> Result<(), VfsError> {
         let mut filesystems = self.filesystems.lock();
         if filesystems.contains_key(name) {
             return Err(VfsError::AlreadyExists);
@@ -250,12 +263,12 @@ impl VfsRegistry {
         filesystems.insert(name, fs);
         Ok(())
     }
-    
+
     pub fn get(&self, name: &str) -> Option<&'static dyn FileSystem> {
         let filesystems = self.filesystems.lock();
         filesystems.get(name).copied()
     }
-    
+
     pub fn auto_detect(&self, data: &[u8]) -> Option<&'static str> {
         if data.len() >= 1082 && data[1080..1082] == [0x53, 0xEF] {
             return Some("ext4");
@@ -265,7 +278,7 @@ impl VfsRegistry {
         }
         None
     }
-    
+
     pub fn list_filesystems(&self) -> Vec<&'static str> {
         let filesystems = self.filesystems.lock();
         filesystems.keys().copied().collect()

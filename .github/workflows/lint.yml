@@ -22,7 +22,7 @@ jobs:
           components: rust-src, rustfmt, clippy
 
       - name: Check formatting
-        run: cargo fmt --all -- --check
+        run: bash scripts/ci/check-rust-format.sh
 
       - name: Run clippy
         run: |

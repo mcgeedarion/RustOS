@@ -35,6 +35,4 @@ jobs:
           restore-keys: ${{ runner.os }}-fmt-
 
       - name: Check formatting
-        run: |
-          find src xtask crates -name '*.rs' -print0 \
-            | xargs -0 rustfmt --edition 2021 --check
+        run: bash scripts/ci/check-rust-format.sh

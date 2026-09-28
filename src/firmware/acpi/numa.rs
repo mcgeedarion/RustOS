@@ -82,36 +82,40 @@ static NODE_COUNT: AtomicUsize = AtomicUsize::new(0);
 static DISTANCES: Once<[[u8; MAX_NODES]; MAX_NODES]> = Once::new();
 
 /// Get mutable reference to NODES array during initialization.
-/// 
+///
 /// # Safety
 /// - Must only be called during single-threaded boot before SMP
 /// - NODES must not have been initialized yet
 unsafe fn get_nodes_mut() -> &'static mut [NumaNode; MAX_NODES] {
-    NODES.get_or_try_init(|| {
-        let mut nodes = [NumaNode::empty(); MAX_NODES];
-        Ok::<[NumaNode; MAX_NODES], ()>(nodes)
-    }).unwrap()
+    NODES
+        .get_or_try_init(|| {
+            let mut nodes = [NumaNode::empty(); MAX_NODES];
+            Ok::<[NumaNode; MAX_NODES], ()>(nodes)
+        })
+        .unwrap()
 }
 
 /// Get mutable reference to DISTANCES array during initialization.
-/// 
+///
 /// # Safety
 /// - Must only be called during single-threaded boot before SMP
 /// - DISTANCES must not have been initialized yet
 unsafe fn get_distances_mut() -> &'static mut [[u8; MAX_NODES]; MAX_NODES] {
-    DISTANCES.get_or_try_init(|| {
-        let mut d = [[20u8; MAX_NODES]; MAX_NODES];
-        for i in 0..MAX_NODES {
-            d[i][i] = SRAT_DISTANCE_LOCAL;
-        }
-        Ok::<[[u8; MAX_NODES]; MAX_NODES], ()>(d)
-    }).unwrap()
+    DISTANCES
+        .get_or_try_init(|| {
+            let mut d = [[20u8; MAX_NODES]; MAX_NODES];
+            for i in 0..MAX_NODES {
+                d[i][i] = SRAT_DISTANCE_LOCAL;
+            }
+            Ok::<[[u8; MAX_NODES]; MAX_NODES], ()>(d)
+        })
+        .unwrap()
 }
 
 unsafe fn node_for_domain(domain: u32) -> Option<&'static mut NumaNode> {
     let count = NODE_COUNT.load(Ordering::Relaxed);
     let nodes = get_nodes_mut();
-    
+
     // Look for existing entry.
     for n in &mut nodes[..count] {
         if n.domain == domain {
@@ -280,14 +284,11 @@ pub unsafe fn parse_srat() {
     }
 
     let count = NODE_COUNT.load(Ordering::Relaxed);
-    println!(
-        "acpi/numa: {} NUMA node(s) discovered from SRAT",
-        count
-    );
-    
+    println!("acpi/numa: {} NUMA node(s) discovered from SRAT", count);
+
     // Ensure NODES is initialized before reading
     let _ = get_nodes_mut();
-    
+
     let nodes = NODES.get().unwrap();
     for i in 0..count {
         let n = &nodes[i];
@@ -337,7 +338,7 @@ pub unsafe fn parse_slit() {
 
     let matrix = (hdr as usize + matrix_off) as *const u8;
     let n = locality_count.min(MAX_NODES);
-    
+
     // Get mutable reference to distances during init
     let distances = get_distances_mut();
     for i in 0..n {
@@ -371,21 +372,19 @@ pub fn node_count() -> usize {
 }
 
 /// Immutable reference to all discovered nodes.
-/// 
+///
 /// # Panics
 /// Panics if called before `init()` has initialized the NUMA subsystem.
 pub fn nodes() -> &'static [NumaNode] {
     // Ensure initialization has completed
     let _ = NODES.get().expect("NUMA nodes not initialized");
     let count = NODE_COUNT.load(Ordering::Acquire);
-    unsafe { 
-        core::slice::from_raw_parts(NODES.get().unwrap().as_ptr(), count)
-    }
+    unsafe { core::slice::from_raw_parts(NODES.get().unwrap().as_ptr(), count) }
 }
 
 /// Relative access distance from `from` to `to`.
 /// Returns 10 for local, higher values for remote.
-/// 
+///
 /// # Panics
 /// Panics if called before `init()` has initialized the NUMA subsystem.
 pub fn distance(from: usize, to: usize) -> u8 {

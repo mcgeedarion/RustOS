@@ -357,11 +357,7 @@ unsafe extern "efiapi" fn uefi_start(
     let rsdp = RSDP_PHYS.load(Ordering::Relaxed);
     let boot_info = BootInfo {
         rsdp_phys: rsdp,
-        efi_memory_map: EfiMemoryMapInfo::new(
-            map_buf as usize,
-            map_size,
-            desc_size,
-        ),
+        efi_memory_map: EfiMemoryMapInfo::new(map_buf as usize, map_size, desc_size),
         initramfs,
         ..BootInfo::empty()
     };

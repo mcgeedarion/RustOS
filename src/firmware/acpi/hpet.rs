@@ -82,13 +82,13 @@ pub unsafe fn init() {
         None => {
             println!("acpi/hpet: HPET table not found");
             return;
-        }
+        },
     };
 
     // Validate table length
     let hpet_len = (*hpet_ptr).len as usize;
     let min_len = core::mem::size_of::<HpetTable>();
-    
+
     if hpet_len < min_len {
         println!(
             "acpi/hpet: HPET table too short ({} < {})",
@@ -136,19 +136,17 @@ pub unsafe fn init() {
     // Cache the values with Release ordering
     HPET_BASE.store(base_addr, Ordering::Release);
     HPET_NUMBER.store(hpet.hpet_number, Ordering::Release);
-    
+
     // Store minimum tick if non-zero
     if hpet.minimum_clock_tick != 0 {
         HPET_MIN_TICK.store(hpet.minimum_clock_tick as u64, Ordering::Release);
     }
-    
+
     HPET_INITIALIZED.store(true, Ordering::Release);
 
     println!(
         "acpi/hpet: initialized @ {:#x} (timer {}, min_tick={} fs)",
-        base_addr,
-        hpet.hpet_number,
-        hpet.minimum_clock_tick
+        base_addr, hpet.hpet_number, hpet.minimum_clock_tick
     );
 }
 
@@ -256,7 +254,7 @@ mod tests {
         assert_eq!(capabilities::COUNTER_SIZE, 1);
         assert_eq!(capabilities::LEGACY_REPLACEMENT, 2);
         assert_eq!(capabilities::VENDOR_ID_PRESENT, 1 << 15);
-        
+
         // Test mask and shift
         assert_eq!(capabilities::NUM_TIMERS_MASK, 0xFF00);
         assert_eq!(capabilities::NUM_TIMERS_SHIFT, 8);

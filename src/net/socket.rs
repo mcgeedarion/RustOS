@@ -3,8 +3,10 @@
 //!
 //! Provides BSD-style socket interface for TCP/UDP communications.
 
-use crate::net::tcp::state_machine::{TcpControlBlock, TcpState, TcpFlags, TcpAction, TcpError as TcpStackError};
 use crate::net::ipv4::Ipv4Addr;
+use crate::net::tcp::state_machine::{
+    TcpAction, TcpControlBlock, TcpError as TcpStackError, TcpFlags, TcpState,
+};
 use crate::sync::SpinLock;
 use alloc::vec::Vec;
 use core::ffi::c_int;
@@ -13,14 +15,14 @@ use core::ffi::c_int;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SocketDomain {
     Unix,
-    Inet, // IPv4
+    Inet,  // IPv4
     Inet6, // IPv6
 }
 
 /// Socket type
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SocketType {
-    Stream,  // TCP
+    Stream,   // TCP
     Datagram, // UDP
     Raw,
 }
@@ -77,7 +79,12 @@ pub trait SocketOps {
     fn recv(&mut self, buf: &mut [u8]) -> Result<usize, SocketError>;
     fn close(&mut self) -> Result<(), SocketError>;
     fn getsockopt(&self, level: c_int, optname: c_int) -> Result<Vec<u8>, SocketError>;
-    fn setsockopt(&mut self, level: c_int, optname: c_int, optval: &[u8]) -> Result<(), SocketError>;
+    fn setsockopt(
+        &mut self,
+        level: c_int,
+        optname: c_int,
+        optval: &[u8],
+    ) -> Result<(), SocketError>;
 }
 
 /// TCP Socket implementation
@@ -127,7 +134,11 @@ impl Default for SocketOptions {
 }
 
 impl TcpSocket {
-    pub fn new(domain: SocketDomain, socket_type: SocketType, protocol: SocketProtocol) -> Result<Self, SocketError> {
+    pub fn new(
+        domain: SocketDomain,
+        socket_type: SocketType,
+        protocol: SocketProtocol,
+    ) -> Result<Self, SocketError> {
         if domain != SocketDomain::Inet {
             return Err(SocketError::InvalidDomain);
         }
@@ -157,10 +168,10 @@ impl SocketOps for TcpSocket {
         if self.state != SocketState::Closed {
             return Err(SocketError::InvalidState);
         }
-        
+
         // Check if address already in use (simplified check)
         // In real implementation, would check global socket table
-        
+
         self.local_addr = Some(addr);
         self.state = SocketState::Bound;
         Ok(())
@@ -170,7 +181,7 @@ impl SocketOps for TcpSocket {
         if self.state != SocketState::Bound {
             return Err(SocketError::NotListening);
         }
-        
+
         // Initialize TCB for listening
         let local = self.local_addr.ok_or(SocketError::AddressNotAvailable)?;
         self.tcb = Some(TcpControlBlock::new(
@@ -179,7 +190,7 @@ impl SocketOps for TcpSocket {
             local.port,
             0, // Remote port not known
         ));
-        
+
         self.state = SocketState::Listening;
         Ok(())
     }
@@ -198,13 +209,13 @@ impl SocketOps for TcpSocket {
 
         let accepted_tcb = queue.remove(0);
         let remote_addr = SocketAddrIn::new(accepted_tcb.remote_addr, accepted_tcb.remote_port);
-        
+
         let mut new_socket = TcpSocket::new(self.domain, self.socket_type, self.protocol)?;
         new_socket.state = SocketState::Connected;
         new_socket.local_addr = self.local_addr;
         new_socket.remote_addr = Some(remote_addr);
         new_socket.tcb = Some(accepted_tcb);
-        
+
         Ok(Box::new(new_socket))
     }
 
@@ -213,19 +224,21 @@ impl SocketOps for TcpSocket {
             return Err(SocketError::AlreadyConnected);
         }
 
-        let local = self.local_addr.unwrap_or(SocketAddrIn::new(Ipv4Addr::ANY, 0));
-        
+        let local = self
+            .local_addr
+            .unwrap_or(SocketAddrIn::new(Ipv4Addr::ANY, 0));
+
         // Create TCB and initiate connection
         let mut tcb = TcpControlBlock::new(local.addr, addr.addr, local.port, addr.port);
-        
+
         // Send SYN (state transition handled by TCP stack)
         tcb.state = TcpState::SynSent;
         tcb.snd_nxt = 1; // Initial sequence number
-        
+
         self.tcb = Some(tcb);
         self.remote_addr = Some(addr);
         self.state = SocketState::Connecting;
-        
+
         // In real implementation, would wait for SYN-ACK
         // For now, assume immediate success for loopback
         if addr.addr.is_loopback() {
@@ -234,7 +247,7 @@ impl SocketOps for TcpSocket {
                 tcb.state = TcpState::Established;
             }
         }
-        
+
         Ok(())
     }
 
@@ -244,7 +257,7 @@ impl SocketOps for TcpSocket {
         }
 
         let tcb = self.tcb.as_mut().ok_or(SocketError::NotConnected)?;
-        
+
         // Check window size
         let available_window = tcb.snd_wnd - (tcb.snd_nxt - tcb.snd_una);
         if available_window == 0 {
@@ -252,14 +265,14 @@ impl SocketOps for TcpSocket {
         }
 
         let to_send = core::cmp::min(buf.len(), available_window as usize);
-        
+
         // Copy to send buffer
         let mut send_buf = tcb.send_buffer.lock();
         send_buf.extend_from_slice(&buf[..to_send]);
-        
+
         // Update sequence number
         tcb.snd_nxt += to_send as u32;
-        
+
         Ok(to_send)
     }
 
@@ -269,7 +282,7 @@ impl SocketOps for TcpSocket {
         }
 
         let tcb = self.tcb.as_mut().ok_or(SocketError::NotConnected)?;
-        
+
         let mut recv_buf = tcb.recv_buffer.lock();
         if recv_buf.is_empty() {
             return Err(SocketError::BufferEmpty);
@@ -278,10 +291,10 @@ impl SocketOps for TcpSocket {
         let to_read = core::cmp::min(buf.len(), recv_buf.len());
         buf[..to_read].copy_from_slice(&recv_buf[..to_read]);
         recv_buf.drain(..to_read);
-        
+
         // Update window
         tcb.rcv_wnd = tcb.options.receive_buffer_size as u32 - recv_buf.len() as u32;
-        
+
         Ok(to_read)
     }
 
@@ -292,7 +305,7 @@ impl SocketOps for TcpSocket {
         }
 
         let tcb = self.tcb.as_mut().ok_or(SocketError::NotConnected)?;
-        
+
         match tcb.initiate_close() {
             Ok(TcpAction::SendFin) => {
                 tcb.snd_nxt += 1; // FIN consumes one sequence number
@@ -313,17 +326,24 @@ impl SocketOps for TcpSocket {
         }
     }
 
-    fn setsockopt(&mut self, _level: c_int, optname: c_int, optval: &[u8]) -> Result<(), SocketError> {
+    fn setsockopt(
+        &mut self,
+        _level: c_int,
+        optname: c_int,
+        optval: &[u8],
+    ) -> Result<(), SocketError> {
         if optval.is_empty() {
             return Err(SocketError::InvalidState);
         }
-        
+
         match optname {
-            0x0002 => { // SO_REUSEADDR
+            0x0002 => {
+                // SO_REUSEADDR
                 self.options.reuse_addr = optval[0] != 0;
                 Ok(())
             },
-            0x0009 => { // SO_KEEPALIVE
+            0x0009 => {
+                // SO_KEEPALIVE
                 self.options.keep_alive = optval[0] != 0;
                 Ok(())
             },
@@ -333,10 +353,14 @@ impl SocketOps for TcpSocket {
 }
 
 // Socket creation factory
-pub fn socket(domain: SocketDomain, socket_type: SocketType, protocol: SocketProtocol) -> Result<Box<dyn SocketOps>, SocketError> {
+pub fn socket(
+    domain: SocketDomain,
+    socket_type: SocketType,
+    protocol: SocketProtocol,
+) -> Result<Box<dyn SocketOps>, SocketError> {
     match (domain, socket_type, protocol) {
-        (SocketDomain::Inet, SocketType::Stream, SocketProtocol::Tcp) |
-        (SocketDomain::Inet, SocketType::Stream, SocketProtocol::Ip) => {
+        (SocketDomain::Inet, SocketType::Stream, SocketProtocol::Tcp)
+        | (SocketDomain::Inet, SocketType::Stream, SocketProtocol::Ip) => {
             Ok(Box::new(TcpSocket::new(domain, socket_type, protocol)?))
         },
         _ => Err(SocketError::InvalidType),
@@ -355,8 +379,9 @@ mod tests {
 
     #[test]
     fn test_bind_and_listen() {
-        let mut sock = TcpSocket::new(SocketDomain::Inet, SocketType::Stream, SocketProtocol::Tcp).unwrap();
-        
+        let mut sock =
+            TcpSocket::new(SocketDomain::Inet, SocketType::Stream, SocketProtocol::Tcp).unwrap();
+
         let addr = SocketAddrIn::new(Ipv4Addr::new(127, 0, 0, 1), 8080);
         assert!(sock.bind(addr).is_ok());
         assert!(sock.listen(10).is_ok());

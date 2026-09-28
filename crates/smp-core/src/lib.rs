@@ -432,9 +432,7 @@ impl CpuRegistry {
 
     /// Check if a CPU is online
     pub fn is_cpu_online(&self, id: usize) -> bool {
-        self.get_cpu(id)
-            .map(|cpu| cpu.is_online())
-            .unwrap_or(false)
+        self.get_cpu(id).map(|cpu| cpu.is_online()).unwrap_or(false)
     }
 
     /// Architecture-specific CPU bringup (x86_64 stub)

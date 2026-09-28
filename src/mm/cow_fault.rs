@@ -40,7 +40,7 @@ pub fn handle_cow_fault(faulting_va: usize, current_pa: usize) -> bool {
         None => {
             send_sigsegv(pid, faulting_va);
             return false;
-        }
+        },
     };
 
     if vma.prot & PROT_WRITE == 0 {
@@ -75,7 +75,7 @@ pub fn handle_cow_fault(faulting_va: usize, current_pa: usize) -> bool {
             // OOM — kill the process.
             crate::proc::signal::send_signal(pid, 9 /* SIGKILL */);
             return false;
-        }
+        },
     };
 
     // Copy the old page content into the new page via the kernel direct map.
@@ -83,11 +83,7 @@ pub fn handle_cow_fault(faulting_va: usize, current_pa: usize) -> bool {
     let dst_va = phys_to_virt(new_pa);
     // SAFETY: both pointers are valid kernel-owned pages of exactly PAGE_SIZE.
     unsafe {
-        core::ptr::copy_nonoverlapping(
-            src_va as *const u8,
-            dst_va as *mut u8,
-            PAGE_SIZE,
-        );
+        core::ptr::copy_nonoverlapping(src_va as *const u8, dst_va as *mut u8, PAGE_SIZE);
     }
 
     // Map the new private page with full permissions.

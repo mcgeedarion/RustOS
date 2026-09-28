@@ -4,14 +4,14 @@
 //! Implements ticket locks, reader-writer locks, and RCU (Read-Copy-Update)
 //! for high-performance concurrent access patterns.
 
-use core::sync::atomic::{AtomicU32, AtomicUsize, AtomicBool, Ordering};
+use alloc::boxed::Box;
 use core::cell::UnsafeCell;
 use core::marker::PhantomData;
 use core::ptr::NonNull;
-use alloc::boxed::Box;
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
 /// Ticket Lock Implementation
-/// 
+///
 /// Provides fair FIFO ordering for lock acquisition, preventing starvation.
 /// Useful in high-contention scenarios where spinlock fairness matters.
 pub struct TicketLock {
@@ -30,12 +30,12 @@ impl TicketLock {
     /// Acquire the lock, returns the ticket number
     pub fn lock(&self) -> u32 {
         let ticket = self.next_ticket.fetch_add(1, Ordering::Relaxed);
-        
+
         // Spin until our ticket is served
         while self.now_serving.load(Ordering::Acquire) != ticket {
             core::hint::spin_loop();
         }
-        
+
         ticket
     }
 
@@ -48,15 +48,14 @@ impl TicketLock {
     pub fn try_lock(&self) -> Option<u32> {
         let current = self.now_serving.load(Ordering::Acquire);
         let expected = self.next_ticket.load(Ordering::Relaxed);
-        
+
         if current == expected {
             // We can acquire if we're the next ticket
-            if self.next_ticket.compare_exchange(
-                expected,
-                expected + 1,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ).is_ok() {
+            if self
+                .next_ticket
+                .compare_exchange(expected, expected + 1, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
                 return Some(current);
             }
         }
@@ -91,7 +90,7 @@ impl<'a> Drop for TicketLockGuard<'a> {
 }
 
 /// Reader-Writer Lock (Multiple Readers, Single Writer)
-/// 
+///
 /// Allows multiple concurrent readers or a single exclusive writer.
 /// Writers have priority to prevent starvation.
 pub struct RwLock<T: ?Sized> {
@@ -117,14 +116,13 @@ impl<T> RwLock<T> {
     /// Acquire read lock
     pub fn read(&self) -> RwLockReadGuard<'_, T> {
         // If there are waiting writers, block new readers to prevent starvation
-        while self.write_waiters.load(Ordering::Acquire) > 0 
-            || self.writer.load(Ordering::Acquire) 
+        while self.write_waiters.load(Ordering::Acquire) > 0 || self.writer.load(Ordering::Acquire)
         {
             core::hint::spin_loop();
         }
-        
+
         self.readers.fetch_add(1, Ordering::Acquire);
-        
+
         RwLockReadGuard {
             data: unsafe { &*self.data.get() },
             readers: &self.readers,
@@ -134,17 +132,15 @@ impl<T> RwLock<T> {
     /// Acquire write lock
     pub fn write(&self) -> RwLockWriteGuard<'_, T> {
         self.write_waiters.fetch_add(1, Ordering::Relaxed);
-        
+
         // Wait until no readers and no other writer
-        while self.readers.load(Ordering::Acquire) > 0 
-            || self.writer.load(Ordering::Acquire) 
-        {
+        while self.readers.load(Ordering::Acquire) > 0 || self.writer.load(Ordering::Acquire) {
             core::hint::spin_loop();
         }
-        
+
         self.write_waiters.fetch_sub(1, Ordering::Relaxed);
         self.writer.store(true, Ordering::Release);
-        
+
         RwLockWriteGuard {
             data: unsafe { &mut *self.data.get() },
             writer: &self.writer,
@@ -153,14 +149,12 @@ impl<T> RwLock<T> {
 
     /// Try to acquire read lock
     pub fn try_read(&self) -> Option<RwLockReadGuard<'_, T>> {
-        if self.write_waiters.load(Ordering::Acquire) > 0 
-            || self.writer.load(Ordering::Acquire) 
-        {
+        if self.write_waiters.load(Ordering::Acquire) > 0 || self.writer.load(Ordering::Acquire) {
             return None;
         }
-        
+
         self.readers.fetch_add(1, Ordering::Acquire);
-        
+
         Some(RwLockReadGuard {
             data: unsafe { &*self.data.get() },
             readers: &self.readers,
@@ -169,20 +163,18 @@ impl<T> RwLock<T> {
 
     /// Try to acquire write lock
     pub fn try_write(&self) -> Option<RwLockWriteGuard<'_, T>> {
-        if self.readers.load(Ordering::Acquire) > 0 
-            || self.writer.load(Ordering::Acquire) 
+        if self.readers.load(Ordering::Acquire) > 0 || self.writer.load(Ordering::Acquire) {
+            return None;
+        }
+
+        if self
+            .writer
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
         {
             return None;
         }
-        
-        if self.writer.compare_exchange(
-            false, true,
-            Ordering::Acquire,
-            Ordering::Relaxed,
-        ).is_err() {
-            return None;
-        }
-        
+
         Some(RwLockWriteGuard {
             data: unsafe { &mut *self.data.get() },
             writer: &self.writer,
@@ -245,11 +237,11 @@ impl<'a, T: ?Sized> Drop for RwLockWriteGuard<'a, T> {
 }
 
 /// RCU (Read-Copy-Update) Pointer
-/// 
+///
 /// Lock-free data structure for read-heavy workloads.
 /// Readers access data without synchronization.
 /// Writers create a copy, update it, then atomically swap the pointer.
-/// 
+///
 /// Note: This is a simplified RCU implementation. Production use would need
 /// proper grace period tracking and memory reclamation.
 pub struct RcuPointer<T> {
@@ -265,7 +257,7 @@ impl<T> RcuPointer<T> {
     pub fn new(data: T) -> Self {
         let boxed = Box::new(data);
         let ptr = Box::into_raw(boxed) as usize;
-        
+
         Self {
             ptr: AtomicUsize::new(ptr),
             _marker: PhantomData,
@@ -273,7 +265,7 @@ impl<T> RcuPointer<T> {
     }
 
     /// Get a reference to the current data (read-side critical section)
-    /// 
+    ///
     /// Safety: Caller must ensure the data isn't freed while reference is held.
     /// In proper RCU, this requires being in an RCU read-side critical section.
     pub fn read(&self) -> Option<&T> {
@@ -285,7 +277,7 @@ impl<T> RcuPointer<T> {
     }
 
     /// Update the data by creating a copy, modifying it, and swapping
-    /// 
+    ///
     /// Returns the old value which should be freed after a grace period.
     pub fn update<F>(&self, f: F) -> Option<*mut T>
     where
@@ -296,12 +288,12 @@ impl<T> RcuPointer<T> {
             if current_ptr == 0 {
                 return None;
             }
-            
+
             let current_ref = unsafe { &*(current_ptr as *const T) };
             let new_data = f(current_ref);
             let new_box = Box::new(new_data);
             let new_ptr = Box::into_raw(new_box) as usize;
-            
+
             // Try to swap
             match self.ptr.compare_exchange(
                 current_ptr,
@@ -315,9 +307,11 @@ impl<T> RcuPointer<T> {
                 },
                 Err(_) => {
                     // Another thread updated, free our allocation and retry
-                    unsafe { drop(Box::from_raw(new_ptr as *mut T)); }
+                    unsafe {
+                        drop(Box::from_raw(new_ptr as *mut T));
+                    }
                     // Loop and retry
-                }
+                },
             }
         }
     }
@@ -326,9 +320,9 @@ impl<T> RcuPointer<T> {
     pub fn replace(&self, new_data: T) -> Option<*mut T> {
         let new_box = Box::new(new_data);
         let new_ptr = Box::into_raw(new_box) as usize;
-        
+
         let old_ptr = self.ptr.swap(new_ptr, Ordering::AcqRel);
-        
+
         if old_ptr == 0 {
             None
         } else {
@@ -346,13 +340,15 @@ impl<T> Drop for RcuPointer<T> {
     fn drop(&mut self) {
         let ptr = self.ptr.load(Ordering::Relaxed);
         if ptr != 0 {
-            unsafe { drop(Box::from_raw(ptr as *mut T)); }
+            unsafe {
+                drop(Box::from_raw(ptr as *mut T));
+            }
         }
     }
 }
 
 /// RCU Read-Side Critical Section Guard
-/// 
+///
 /// Marks the beginning and end of an RCU read-side critical section.
 /// In a full implementation, this would track grace periods.
 pub struct RcuReadGuard<'a, T> {
@@ -368,7 +364,7 @@ impl<'a, T> core::ops::Deref for RcuReadGuard<'a, T> {
 }
 
 /// Simplified grace period tracker
-/// 
+///
 /// In production, this would wait for all pre-existing readers to complete.
 pub struct GracePeriod {
     counter: AtomicUsize,
@@ -417,7 +413,7 @@ mod tests {
     #[test]
     fn test_ticket_lock_basic() {
         let lock = TicketLock::new();
-        
+
         let ticket = lock.lock();
         assert!(lock.is_locked());
         lock.unlock(ticket);
@@ -427,10 +423,10 @@ mod tests {
     #[test]
     fn test_ticket_lock_try_lock() {
         let lock = TicketLock::new();
-        
+
         assert!(lock.try_lock().is_some());
         assert!(lock.try_lock().is_none()); // Should fail
-        
+
         let ticket = lock.lock();
         lock.unlock(ticket);
     }
@@ -438,10 +434,10 @@ mod tests {
     #[test]
     fn test_rwlock_read_multiple() {
         let rwlock = RwLock::new(42);
-        
+
         let r1 = rwlock.read();
         let r2 = rwlock.read();
-        
+
         assert_eq!(*r1, 42);
         assert_eq!(*r2, 42);
         // Both reads should succeed simultaneously
@@ -450,11 +446,11 @@ mod tests {
     #[test]
     fn test_rwlock_write_exclusive() {
         let rwlock = RwLock::new(42);
-        
+
         let mut w = rwlock.write();
         *w = 100;
         drop(w);
-        
+
         let r = rwlock.read();
         assert_eq!(*r, 100);
     }
@@ -462,14 +458,14 @@ mod tests {
     #[test]
     fn test_rcu_pointer() {
         let rcu = RcuPointer::new(42);
-        
+
         let val = rcu.read().unwrap();
         assert_eq!(*val, 42);
-        
+
         // Update
         let old = rcu.update(|x| x + 10);
         assert!(old.is_some());
-        
+
         let val = rcu.read().unwrap();
         assert_eq!(*val, 52);
     }

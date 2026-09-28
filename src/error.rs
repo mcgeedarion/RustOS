@@ -3,8 +3,6 @@
 //! This module provides standardized error types with automatic errno conversion
 //! and syscall wrapper macros for consistent error handling across the kernel.
 
-#![no_std]
-
 extern crate alloc;
 
 use core::fmt;
@@ -113,7 +111,7 @@ macro_rules! syscall_wrapper {
             Err(e) => {
                 let errno: $crate::error::KernelError = e.into();
                 -(errno as isize)
-            }
+            },
         }
     }};
 }
@@ -127,7 +125,7 @@ macro_rules! into_syscall {
             Err(e) => {
                 use $crate::error::IntoKernelError;
                 -(e.into_errno() as isize)
-            }
+            },
         }
     }};
 }
@@ -189,20 +187,20 @@ pub const fn syscall_errno(result: isize) -> KernelError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_error_conversion() {
         let err = KernelError::NotFound;
         assert_eq!(isize::from(err), -2);
         assert_eq!(i32::from(err), 2);
     }
-    
+
     #[test]
     fn test_syscall_result() {
         let ok_result: KernelResult<i32> = Ok(42);
         let syscall_ok = to_syscall_result(ok_result);
         assert_eq!(syscall_ok, Ok(42));
-        
+
         let err_result: KernelResult<i32> = Err(KernelError::NotFound);
         let syscall_err = to_syscall_result(err_result);
         assert_eq!(syscall_err, Err(-2));

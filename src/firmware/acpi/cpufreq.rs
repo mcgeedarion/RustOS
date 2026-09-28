@@ -52,20 +52,24 @@ static CURRENT_PSTATE: AtomicU8 = AtomicU8::new(0);
 static MAX_ALLOWED: AtomicU8 = AtomicU8::new(0); // from _PPC
 
 /// Get mutable reference to PSTATE_TABLE during initialization.
-/// 
+///
 /// # Safety
 /// - Must only be called during single-threaded boot before SMP
 /// - PSTATE_TABLE must not have been initialized yet
 unsafe fn get_pstate_table_mut() -> &'static mut [Pstate; MAX_PSTATES] {
-    PSTATE_TABLE.get_or_try_init(|| {
-        Ok::<[Pstate; MAX_PSTATES], ()>([Pstate {
-            freq_mhz: 0,
-            power_mw: 0,
-            latency_us: 0,
-            control: 0,
-            status: 0,
-        }; MAX_PSTATES])
-    }).unwrap()
+    PSTATE_TABLE
+        .get_or_try_init(|| {
+            Ok::<[Pstate; MAX_PSTATES], ()>(
+                [Pstate {
+                    freq_mhz: 0,
+                    power_mw: 0,
+                    latency_us: 0,
+                    control: 0,
+                    status: 0,
+                }; MAX_PSTATES],
+            )
+        })
+        .unwrap()
 }
 
 const IA32_PERF_CTL: u32 = 0x199;
@@ -108,14 +112,16 @@ unsafe fn read_aml_dword(aml: &[u8], i: usize) -> Option<u32> {
     if *aml.get(i)? != 0x0C {
         return None;
     }
-    
+
     // Check bounds for the 4-byte payload
     let payload = aml.get(i + 1..i + 5)?;
     if payload.len() != 4 {
         return None;
     }
-    
-    Some(u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]))
+
+    Some(u32::from_le_bytes([
+        payload[0], payload[1], payload[2], payload[3],
+    ]))
 }
 
 /// Scan the DSDT AML for `_PSS` package entries.
@@ -307,7 +313,12 @@ pub fn set_pstate(index: usize) -> Result<(), &'static str> {
         return Err("P-state exceeds _PPC limit");
     }
 
-    let ctrl = unsafe { PSTATE_TABLE.get(index).ok_or("P-state index out of bounds")?.control } as u64;
+    let ctrl = unsafe {
+        PSTATE_TABLE
+            .get(index)
+            .ok_or("P-state index out of bounds")?
+            .control
+    } as u64;
     unsafe {
         wrmsr(IA32_PERF_CTL, ctrl);
     }

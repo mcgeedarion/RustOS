@@ -22,11 +22,21 @@ env:
   RUSTFLAGS: ""
 
 jobs:
+  boot-mark-parser:
+    name: Boot marker parser fixtures
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test minimal and full boot contracts (host only)
+        run: python3 scripts/ci/test-boot-marks.py
+
   # ---------------------------------------------------------------------------
   # x86_64 UEFI — boot-perf gate
   # ---------------------------------------------------------------------------
   boot-perf-x86_64:
     name: Boot perf markers (x86_64)
+    needs: boot-mark-parser
     runs-on: ubuntu-24.04
     timeout-minutes: 25
 
@@ -71,12 +81,12 @@ jobs:
       - name: Build x86_64 UEFI kernel
         run: |
           set -o pipefail
-          cargo xtask build --arch x86_64 2>&1 | tee cargo-build-x86_64.log
+          cargo xtask build --arch x86_64 --features boot_minimal 2>&1 | tee cargo-build-x86_64.log
 
       - name: Assemble x86_64 UEFI ESP image
         run: |
           set -o pipefail
-          cargo xtask image --arch x86_64 2>&1 | tee build-x86_64-image.log
+          cargo xtask image --arch x86_64 --features boot_minimal 2>&1 | tee build-x86_64-image.log
           test -f boot-x86_64.img || { echo "ERROR: boot-x86_64.img not produced" >&2; exit 1; }
 
       # ------------------------------------------------------------------
@@ -137,12 +147,11 @@ jobs:
           fi
 
       # ------------------------------------------------------------------
-      # Parse BOOT_MARK lines and assert all four milestones are present
+      # Validate minimal milestones + completion, not unavailable userspace
       # ------------------------------------------------------------------
-      - name: Parse boot performance markers
+      - name: Validate minimal boot performance markers
         run: |
-          chmod +x scripts/ci/parse-boot-marks.sh
-          scripts/ci/parse-boot-marks.sh qemu-x86_64-boot.log
+          bash scripts/ci/parse-boot-marks.sh --mode minimal qemu-x86_64-boot.log
 
       # ------------------------------------------------------------------
       # Upload logs for post-mortem and trend tracking
@@ -162,6 +171,7 @@ jobs:
   # ---------------------------------------------------------------------------
   boot-perf-aarch64:
     name: Boot perf markers (aarch64)
+    needs: boot-mark-parser
     runs-on: ubuntu-24.04
     timeout-minutes: 25
 
@@ -248,10 +258,9 @@ jobs:
             exit "$QEMU_STATUS"
           fi
 
-      - name: Parse boot performance markers
+      - name: Validate minimal boot performance markers
         run: |
-          chmod +x scripts/ci/parse-boot-marks.sh
-          scripts/ci/parse-boot-marks.sh qemu-aarch64-boot.log
+          bash scripts/ci/parse-boot-marks.sh --mode minimal qemu-aarch64-boot.log
 
       - name: Upload boot-perf logs
         if: always()

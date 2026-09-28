@@ -1,160 +1,76 @@
-# Panic format CI validator
-#
-# Builds RustOS with --features debug,kmtest for all supported target
-# architectures and validates that the kernel panic / oops output
-# contains every mandatory structured field.
-#
-# Grep anchors checked per-field:
-#   KERNEL PANIC:          — primary panic prefix
-#   PANIC_LOC:             — source location
-#   PANIC_ARCH:            — architecture tag
-#   PANIC_FAULT_ADDR:      — faulting address (0x0 for bare panics)
-#   --- REGISTER DUMP ---  — register section boundary
-#   --- BACKTRACE ---      — backtrace section boundary
-#   --- END PANIC ---      — terminal marker (CI stop-condition)
-#
-# OOM fields:
-#   OOM:                   — OOM prefix
-#   OOM_SIZE:              — allocation size
-#   OOM_ARCH:              — architecture tag
-#   --- END OOM ---        — terminal marker
-
 name: panic-format
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
-on:
-  push:
-    branches: [ main, 'phase3/**' ]
-    paths:
-      - 'src/kernel/panic.rs'
-      - 'src/debug/oops.rs'
-      - 'src/kmtest/panic_format_tests.rs'
-      - '.github/workflows/panic-format.yml'
-  pull_request:
-    branches: [ main ]
-    paths:
-      - 'src/kernel/panic.rs'
-      - 'src/debug/oops.rs'
-      - 'src/kmtest/panic_format_tests.rs'
-
 jobs:
-  # -----------------------------------------------------------------------
-  # Build check — verify all supported targets compile cleanly
-  # -----------------------------------------------------------------------
-  build-check:
-    name: build (${{ matrix.target }})
+  validate-panic-output:
+    name: Panic output (${{ matrix.arch }})
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        target:
-          - x86_64-unknown-none
-          - aarch64-unknown-none
+        arch: [x86_64, aarch64]
+    env:
+      ARCH: ${{ matrix.arch }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@nightly
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
+          rustflags: ""
           components: rust-src
-          targets: ${{ matrix.target }}
-
-      - name: Build with debug+kmtest features
+      - name: Install QEMU and firmware
         run: |
-          cargo build \
-            --target ${{ matrix.target }} \
-            --features debug,kmtest \
-            -Z build-std=core,alloc \
-            2>&1 | tee build-${{ matrix.target }}.log
-        env:
-          RUSTFLAGS: "-C force-frame-pointers=yes"
-
-      - name: Upload build log
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-log-${{ matrix.target }}
-          path: build-${{ matrix.target }}.log
-
-  # -----------------------------------------------------------------------
-  # QEMU serial log validation — x86_64 only (fastest to spin up)
-  # -----------------------------------------------------------------------
-  validate-panic-output:
-    name: validate panic serial output (x86_64)
-    runs-on: ubuntu-latest
-    needs: build-check
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install dependencies
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-x86 qemu-system-arm ovmf qemu-efi-aarch64
+      - name: Build the supported diagnostic profile without an initramfs
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y qemu-system-x86 ovmf
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@nightly
-        with:
-          components: rust-src
-          targets: x86_64-unknown-none
-
-      - name: Build kernel (x86_64, debug+kmtest)
+          echo "CARGO_TARGET_DIR=$RUNNER_TEMP/panic-target" >> "$GITHUB_ENV"
+          CARGO_TARGET_DIR="$RUNNER_TEMP/panic-target" \
+            cargo build --locked --target "${ARCH}-unknown-uefi"
+      - name: Capture an intentional missing-initramfs panic
         run: |
-          cargo xtask build \
-            --target x86_64 \
-            --features debug,kmtest \
-            --trigger-panic
-        env:
-          RUSTFLAGS: "-C force-frame-pointers=yes"
-
-      - name: Boot in QEMU and capture serial log
-        run: |
-          timeout 60 qemu-system-x86_64 \
-            -bios /usr/share/ovmf/OVMF.fd \
-            -drive format=raw,file=target/rustos.img \
-            -serial file:serial.log \
-            -display none \
-            -m 256M \
-            -no-reboot \
-            || true   # QEMU exits non-zero on kernel halt; that is expected
-
-      - name: Show serial log (for debugging)
-        if: always()
-        run: cat serial.log || echo '(no log)'
-
-      - name: Validate KERNEL PANIC prefix
-        run: grep -q 'KERNEL PANIC:' serial.log
-
-      - name: Validate PANIC_LOC field
-        run: grep -q 'PANIC_LOC:' serial.log
-
-      - name: Validate PANIC_ARCH field
-        run: grep -q 'PANIC_ARCH: x86_64' serial.log
-
-      - name: Validate PANIC_FAULT_ADDR field
-        run: grep -q 'PANIC_FAULT_ADDR:' serial.log
-
-      - name: Validate REGISTER DUMP section
-        run: grep -q '--- REGISTER DUMP ---' serial.log
-
-      - name: Validate BACKTRACE section
-        run: grep -q '--- BACKTRACE ---' serial.log
-
-      - name: Validate END PANIC marker
-        run: grep -q '--- END PANIC ---' serial.log
-
-      - name: Fail if unexpected extra KERNEL PANIC lines (double panic guard)
-        run: |
-          count=$(grep -c 'KERNEL PANIC:' serial.log || true)
-          if [ "$count" -gt 2 ]; then
-            echo "ERROR: too many KERNEL PANIC lines ($count) — possible panic loop"
-            exit 1
+          esp="$RUNNER_TEMP/panic-esp"
+          mkdir -p "$esp/EFI/BOOT"
+          if [ "$ARCH" = x86_64 ]; then
+            cp "$CARGO_TARGET_DIR/$ARCH-unknown-uefi/debug/rustos.efi" "$esp/EFI/BOOT/BOOTX64.EFI"
+            code=/usr/share/OVMF/OVMF_CODE_4M.fd
+            cp /usr/share/OVMF/OVMF_VARS_4M.fd "$RUNNER_TEMP/panic-vars.fd"
+            qemu=(qemu-system-x86_64 -machine q35 -cpu qemu64,+xsave,+avx
+              -drive "if=virtio,format=raw,file=fat:rw:$esp")
+          else
+            cp "$CARGO_TARGET_DIR/$ARCH-unknown-uefi/debug/rustos.efi" "$esp/EFI/BOOT/BOOTAA64.EFI"
+            code=/usr/share/AAVMF/AAVMF_CODE.fd
+            cp /usr/share/AAVMF/AAVMF_VARS.fd "$RUNNER_TEMP/panic-vars.fd"
+            qemu=(qemu-system-aarch64 -machine virt -cpu cortex-a57
+              -drive "if=none,id=esp,format=raw,file=fat:rw:$esp"
+              -device virtio-blk-device,drive=esp)
           fi
-
-      - name: Upload serial log on failure
-        if: failure()
+          set +e
+          timeout 30 "${qemu[@]}" -accel tcg -m 256M \
+            -drive "if=pflash,format=raw,readonly=on,file=$code" \
+            -drive "if=pflash,format=raw,file=$RUNNER_TEMP/panic-vars.fd" \
+            -serial file:serial.log -display none -no-reboot -no-shutdown
+          status=$?
+          set -e
+          cat serial.log
+          if [ "$status" -ne 0 ] && [ "$status" -ne 124 ]; then
+            exit "$status"
+          fi
+      - name: Validate the real structured panic
+        run: python3 scripts/ci/panic_output.py serial.log --arch "$ARCH"
+      - name: Save serial output
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: serial-log-panic-format
+          name: panic-output-${{ matrix.arch }}
           path: serial.log

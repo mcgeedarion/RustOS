@@ -24,9 +24,9 @@ pub mod msg;
 pub mod pipe_scheme;
 // Compatibility alias: pipe fd helpers live in fs::pipe.
 pub use crate::fs::pipe;
+pub mod completeness;
 pub mod sem;
 pub mod shm;
-pub mod completeness;
 
 // ====================================================================
 // Userspace driver IPC entry points.

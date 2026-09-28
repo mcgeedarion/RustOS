@@ -72,14 +72,16 @@ unsafe fn read_dword(aml: &[u8], i: usize) -> Option<u32> {
     if *aml.get(i)? != 0x0C {
         return None;
     }
-    
+
     // Check bounds for the 4-byte payload
     let payload = aml.get(i + 1..i + 5)?;
     if payload.len() != 4 {
         return None;
     }
-    
-    Some(u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]))
+
+    Some(u32::from_le_bytes([
+        payload[0], payload[1], payload[2], payload[3],
+    ]))
 }
 
 /// Scan AML for `_BIF` and populate the BIF atomics.
@@ -203,7 +205,7 @@ pub unsafe fn init() {
         Some(a) => a,
         None => return,
     };
-    
+
     scan_bif(aml);
     scan_bst(aml);
 }
@@ -219,7 +221,7 @@ pub unsafe fn update() {
         Some(a) => a,
         None => return,
     };
-    
+
     scan_bst(aml);
 }
 

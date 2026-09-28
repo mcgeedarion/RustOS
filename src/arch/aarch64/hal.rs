@@ -142,7 +142,13 @@ impl Paging for ArchImpl {
     }
     fn flush_all() {
         unsafe {
-            asm!("dsb ishst", "tlbi vmalle1", "dsb ish", "isb", options(nostack));
+            asm!(
+                "dsb ishst",
+                "tlbi vmalle1",
+                "dsb ish",
+                "isb",
+                options(nostack)
+            );
         }
     }
     fn clone_address_space(src_cr3: usize) -> Option<usize> {
@@ -174,7 +180,13 @@ impl Tlb for ArchImpl {
     }
     fn flush_all() {
         unsafe {
-            asm!("dsb ishst", "tlbi vmalle1", "dsb ish", "isb", options(nostack));
+            asm!(
+                "dsb ishst",
+                "tlbi vmalle1",
+                "dsb ish",
+                "isb",
+                options(nostack)
+            );
         }
     }
     fn flush_asid(_asid: u16) {
@@ -203,12 +215,12 @@ impl ContextSwitch for ArchImpl {
             f = in(reg) frame as *mut TrapFrame,
             options(nostack)
         );
-        
+
         // Switch address space if needed
         if next_cr3 != Self::kernel_cr3() {
             Self::load_cr3(next_cr3);
         }
-        
+
         // Restore callee-saved registers from next_frame
         let nf = &*next_frame;
         asm!(

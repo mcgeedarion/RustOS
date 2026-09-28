@@ -17,7 +17,8 @@ impl ArchInit for ArchImpl {
     fn early_init() {
         // Disable interrupts during initialization
         unsafe {
-            asm!("csrc sstatus, {bit}", bit = const 1 << 1); // Clear SIE (Supervisor Interrupt Enable)
+            asm!("csrc sstatus, {bit}", bit = const 1 << 1); // Clear SIE (Supervisor Interrupt
+                                                             // Enable)
         }
         serial::init();
     }
@@ -213,12 +214,12 @@ impl ContextSwitch for ArchImpl {
             f = in(reg) frame as *mut TrapFrame,
             options(nostack)
         );
-        
+
         // Switch address space if needed
         if next_cr3 != Self::kernel_cr3() {
             Self::load_cr3(next_cr3);
         }
-        
+
         // Restore callee-saved registers from next_frame
         let nf = &*next_frame;
         asm!(
@@ -401,22 +402,24 @@ pub fn init(boot_info: &'static crate::init::boot_info::BootInfo) -> ! {
     // Print boot information
     log!("RustOS riscv64 HAL initialized");
     log!("ACPI RSDP at: 0x{:X}", boot_info.rsdp_phys);
-    
+
     if !boot_info.initramfs.is_empty() {
-        log!("Initramfs: 0x{:X} - 0x{:X}", 
-             boot_info.initramfs.start(),
-             boot_info.initramfs.end());
+        log!(
+            "Initramfs: 0x{:X} - 0x{:X}",
+            boot_info.initramfs.start(),
+            boot_info.initramfs.end()
+        );
     }
-    
+
     // Late init (enables interrupts)
     <ArchImpl as ArchInit>::late_init();
-    
+
     // Hand off to the scheduler
     #[cfg(not(feature = "userspace_boot"))]
     {
         crate::proc::scheduler::run_scheduler();
     }
-    
+
     #[cfg(feature = "userspace_boot")]
     {
         crate::userspace_boot::init(boot_info);

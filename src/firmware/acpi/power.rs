@@ -148,7 +148,7 @@ pub unsafe fn parse_fadt() -> Result<(), &'static str> {
 unsafe fn scan_s5(aml: &[u8]) {
     let name = *b"_S5_";
     let mut i = 0;
-    
+
     // Use .get() for bounds-safe iteration
     while i + 10 < aml.len() {
         // Bounds-safe slice comparison
@@ -174,7 +174,7 @@ pub unsafe fn parse_dsdt() -> Result<(), &'static str> {
         Some(a) => a,
         None => return Err("DSDT not found or invalid"),
     };
-    
+
     scan_s5(aml);
     Ok(())
 }

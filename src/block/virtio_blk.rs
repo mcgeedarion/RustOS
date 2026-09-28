@@ -227,7 +227,7 @@ pub fn write_sector(lba: u64, buf: &[u8; SECTOR_SIZE]) -> bool {
 pub fn flush_cache() -> bool {
     // virtio-blk uses VIRTIO_BLK_T_FLUSH (value 4) for cache flush
     const VIRTIO_BLK_T_FLUSH: u32 = 4;
-    
+
     let _guard = LOCK.lock();
     unsafe {
         REQ_HDR.write(BlkReqHeader {

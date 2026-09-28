@@ -45,10 +45,10 @@ fn oom_detection_threshold() -> KmTestResult {
 fn oom_allocation_failure() -> KmTestResult {
     // Attempt to allocate more memory than available
     // In real kernel this would trigger OOM killer or return ENOMEM
-    
+
     // Try to mmap a very large region
     let huge_size = 1024 * 1024 * 1024 * 100; // 100GB - should fail on most systems
-    
+
     let addr = sys_mmap(
         0,
         huge_size,
@@ -57,14 +57,14 @@ fn oom_allocation_failure() -> KmTestResult {
         usize::MAX,
         0,
     );
-    
+
     // Either it fails (expected) or succeeds (on systems with enough memory)
     // We just verify the syscall returns a valid response
     if addr == 0 || addr == MAP_FAILED {
         // Expected failure case
         return Ok(());
     }
-    
+
     // If it succeeded, clean up
     let _ = sys_munmap(addr as usize, huge_size);
     Ok(())
@@ -78,13 +78,13 @@ fn oom_allocation_failure() -> KmTestResult {
 fn memory_pressure_page_cache_drop() -> KmTestResult {
     // Simulate memory pressure scenario where page cache should be dropped
     let total_before = 100 * 1024 * 1024; // 100MB cached
-    let target_after = 10 * 1024 * 1024;  // Target 10MB after drop
-    
+    let target_after = 10 * 1024 * 1024; // Target 10MB after drop
+
     // Verify we can calculate reclamation target
     let reclaim_target = total_before - target_after;
     assert!(reclaim_target > 0);
     assert!(reclaim_target < total_before);
-    
+
     Ok(())
 }
 
@@ -93,7 +93,7 @@ fn anonymous_page_reclaim() -> KmTestResult {
     // Test swapping out anonymous pages under memory pressure
     let num_pages = 100;
     let mut addresses = Vec::new();
-    
+
     // Allocate multiple pages
     for _ in 0..num_pages {
         let addr = sys_mmap(
@@ -104,19 +104,19 @@ fn anonymous_page_reclaim() -> KmTestResult {
             usize::MAX,
             0,
         );
-        
+
         if addr == 0 || addr == MAP_FAILED {
             break; // Out of memory - expected under pressure
         }
-        
+
         addresses.push(addr);
     }
-    
+
     // Clean up allocations
     for addr in addresses {
         let _ = sys_munmap(addr as usize, PAGE_SIZE);
     }
-    
+
     Ok(())
 }
 
@@ -130,33 +130,48 @@ fn oom_process_selection() -> KmTestResult {
     // - Memory usage (higher = more likely victim)
     // - Process priority (lower priority = more likely victim)
     // - OOM score adjustment
-    
+
     struct ProcessInfo {
         pid: u32,
         memory_usage: usize,
         priority: u32,
         oom_score_adj: i32,
     }
-    
+
     let processes = vec![
-        ProcessInfo { pid: 1, memory_usage: 10000, priority: 0, oom_score_adj: -1000 }, // init
-        ProcessInfo { pid: 100, memory_usage: 500000, priority: 10, oom_score_adj: 0 }, // heavy user
-        ProcessInfo { pid: 200, memory_usage: 50000, priority: 5, oom_score_adj: 100 }, // medium
+        ProcessInfo {
+            pid: 1,
+            memory_usage: 10000,
+            priority: 0,
+            oom_score_adj: -1000,
+        }, // init
+        ProcessInfo {
+            pid: 100,
+            memory_usage: 500000,
+            priority: 10,
+            oom_score_adj: 0,
+        }, // heavy user
+        ProcessInfo {
+            pid: 200,
+            memory_usage: 50000,
+            priority: 5,
+            oom_score_adj: 100,
+        }, // medium
     ];
-    
+
     // Find victim (highest memory usage among non-init processes)
     let mut max_usage = 0;
     let mut victim_pid = 0;
-    
+
     for proc in &processes {
         if proc.pid != 1 && proc.memory_usage > max_usage {
             max_usage = proc.memory_usage;
             victim_pid = proc.pid;
         }
     }
-    
+
     assert_eq!(victim_pid, 100); // Should select the heavy user
-    
+
     Ok(())
 }
 
@@ -164,14 +179,14 @@ fn oom_process_selection() -> KmTestResult {
 fn graceful_degradation() -> KmTestResult {
     // System should degrade gracefully rather than panic
     // Test that error paths are taken instead of unwrap()
-    
+
     let mut allocation_failures = 0;
     let mut successful_allocations = 0;
-    
+
     // Simulate series of allocations under increasing pressure
     for i in 0..100 {
         let requested_size = PAGE_SIZE * (i + 1);
-        
+
         let addr = sys_mmap(
             0,
             requested_size,
@@ -180,7 +195,7 @@ fn graceful_degradation() -> KmTestResult {
             usize::MAX,
             0,
         );
-        
+
         if addr == 0 || addr == MAP_FAILED {
             allocation_failures += 1;
         } else {
@@ -188,10 +203,10 @@ fn graceful_degradation() -> KmTestResult {
             let _ = sys_munmap(addr as usize, requested_size);
         }
     }
-    
+
     // Verify some allocations succeeded (graceful degradation)
     assert!(successful_allocations > 0 || allocation_failures > 0);
-    
+
     Ok(())
 }
 
@@ -204,8 +219,8 @@ fn fragmentation_detection() -> KmTestResult {
     // Simulate memory fragmentation measurement
     let total_pages = 1000;
     let free_pages = vec![
-        true, false, false, true, false, true, true, false, false, false,
-        true, true, false, false, true, false, false, false, true, true,
+        true, false, false, true, false, true, true, false, false, false, true, true, false, false,
+        true, false, false, false, true, true,
     ];
 
     // Count contiguous free regions (higher = more fragmented)
@@ -226,7 +241,7 @@ fn fragmentation_detection() -> KmTestResult {
 
     assert!(regions > 0);
     assert!(fragmentation_ratio > 0.0);
-    
+
     Ok(())
 }
 
@@ -252,10 +267,10 @@ fn compaction_benefit_analysis() -> KmTestResult {
 fn long_running_allocation_cycles() -> KmTestResult {
     let iterations = 1000;
     let page_count = 10;
-    
+
     for i in 0..iterations {
         let mut addresses = Vec::new();
-        
+
         // Allocate pages
         for _ in 0..page_count {
             let addr = sys_mmap(
@@ -266,14 +281,14 @@ fn long_running_allocation_cycles() -> KmTestResult {
                 usize::MAX,
                 0,
             );
-            
+
             if addr == 0 || addr == MAP_FAILED {
                 break;
             }
-            
+
             addresses.push(addr);
         }
-        
+
         // Touch pages to ensure they're materialized
         for &addr in &addresses {
             unsafe {
@@ -281,7 +296,7 @@ fn long_running_allocation_cycles() -> KmTestResult {
                 ptr.write_volatile((i % 256) as u8);
             }
         }
-        
+
         // Deallocate all
         for addr in addresses {
             let ret = sys_munmap(addr as usize, PAGE_SIZE);
@@ -290,7 +305,7 @@ fn long_running_allocation_cycles() -> KmTestResult {
             }
         }
     }
-    
+
     Ok(())
 }
 
@@ -299,7 +314,7 @@ fn memory_leak_detection_simulation() -> KmTestResult {
     // Track allocations that should be freed
     let mut allocated = Vec::new();
     let mut leaked = 0;
-    
+
     // Simulate allocation pattern with intentional "leaks"
     for i in 0..100 {
         let addr = sys_mmap(
@@ -310,29 +325,29 @@ fn memory_leak_detection_simulation() -> KmTestResult {
             usize::MAX,
             0,
         );
-        
+
         if addr != 0 && addr != MAP_FAILED {
             allocated.push(addr);
         }
-        
+
         // Free most but not all (simulating potential leaks)
         if i % 10 != 0 && !allocated.is_empty() {
             let addr_to_free = allocated.remove(0);
             let _ = sys_munmap(addr_to_free as usize, PAGE_SIZE);
         }
     }
-    
+
     // Count remaining (leaked) allocations
     leaked = allocated.len();
-    
+
     // Clean up remaining
     for addr in allocated {
         let _ = sys_munmap(addr as usize, PAGE_SIZE);
     }
-    
+
     // Verify we detected some potential leaks
     assert!(leaked > 0);
-    
+
     Ok(())
 }
 
@@ -344,20 +359,29 @@ pub fn register() {
     // OOM Detection Tests
     register!("oom_detection_threshold", oom_detection_threshold);
     register!("oom_allocation_failure", oom_allocation_failure);
-    
+
     // Memory Reclamation Tests
-    register!("memory_pressure_page_cache_drop", memory_pressure_page_cache_drop);
+    register!(
+        "memory_pressure_page_cache_drop",
+        memory_pressure_page_cache_drop
+    );
     register!("anonymous_page_reclaim", anonymous_page_reclaim);
-    
+
     // OOM Killer Tests
     register!("oom_process_selection", oom_process_selection);
     register!("graceful_degradation", graceful_degradation);
-    
+
     // Memory Compaction Tests
     register!("fragmentation_detection", fragmentation_detection);
     register!("compaction_benefit_analysis", compaction_benefit_analysis);
-    
+
     // Long-Running Stability Tests
-    register!("long_running_allocation_cycles", long_running_allocation_cycles);
-    register!("memory_leak_detection_simulation", memory_leak_detection_simulation);
+    register!(
+        "long_running_allocation_cycles",
+        long_running_allocation_cycles
+    );
+    register!(
+        "memory_leak_detection_simulation",
+        memory_leak_detection_simulation
+    );
 }

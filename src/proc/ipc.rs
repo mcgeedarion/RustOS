@@ -550,11 +550,13 @@ pub fn sys_mq_open(name_va: usize, oflag: u32, _mode: u32, attr_va: usize) -> is
         let maxmsg = i64::from_le_bytes(match buf[8..16].try_into() {
             Ok(arr) => arr,
             Err(_) => return -22,
-        }).max(1) as usize;
+        })
+        .max(1) as usize;
         let msgsize = i64::from_le_bytes(match buf[16..24].try_into() {
             Ok(arr) => arr,
             Err(_) => return -22,
-        }).max(1) as usize;
+        })
+        .max(1) as usize;
         (maxmsg.min(1024), msgsize.min(65536))
     } else {
         (10, 8192)

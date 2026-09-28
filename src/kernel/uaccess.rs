@@ -150,7 +150,7 @@ where
         sctlr = out(reg) sctlr,
         options(nostack, preserves_flags),
     );
-    
+
     // Clear PAN bit (bit 22 = 0x40000) to allow user access
     let sctlr_no_pan = sctlr & !0x40000u64;
     if sctlr_no_pan != sctlr {
@@ -161,9 +161,9 @@ where
             options(nostack, preserves_flags),
         );
     }
-    
+
     let result = f();
-    
+
     // Restore original SCTLR_EL1 (re-enable PAN if it was set)
     core::arch::asm!(
         "msr sctlr_el1, {sctlr}",
@@ -171,7 +171,7 @@ where
         sctlr = in(reg) sctlr,
         options(nostack, preserves_flags),
     );
-    
+
     Ok(result)
 }
 
@@ -264,11 +264,7 @@ pub fn copy_from_user(dst: *mut u8, src: usize, len: usize) -> UaccessResult {
                 // Copy in 8-byte chunks for better performance
                 let mut i = 0;
                 while i + 8 <= len {
-                    ptr::copy_nonoverlapping(
-                        (src + i) as *const u64,
-                        (dst.add(i)) as *mut u64,
-                        1,
-                    );
+                    ptr::copy_nonoverlapping((src + i) as *const u64, (dst.add(i)) as *mut u64, 1);
                     i += 8;
                 }
                 // Handle remainder bytes
@@ -304,11 +300,7 @@ pub fn copy_to_user(dst: usize, src: *const u8, len: usize) -> UaccessResult {
                 // Copy in 8-byte chunks for better performance
                 let mut i = 0;
                 while i + 8 <= len {
-                    ptr::copy_nonoverlapping(
-                        (src.add(i)) as *const u64,
-                        (dst + i) as *mut u64,
-                        1,
-                    );
+                    ptr::copy_nonoverlapping((src.add(i)) as *const u64, (dst + i) as *mut u64, 1);
                     i += 8;
                 }
                 // Handle remainder bytes

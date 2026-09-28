@@ -106,6 +106,12 @@ pub trait Tlb {
 }
 
 pub trait ContextSwitch {
+    /// Switch between initialized task contexts.
+    ///
+    /// # Safety
+    /// The frames must be valid, correctly aligned, and exclusively accessible
+    /// during the switch. The next page table and stack must remain mapped,
+    /// and the caller must hold the architecture's scheduler/interrupt guards.
     unsafe fn switch_to(
         current_frame: *mut TrapFrame,
         next_frame: *const TrapFrame,
@@ -117,6 +123,12 @@ pub trait ContextSwitch {
 
 pub trait Syscall {
     fn syscall_setup();
+    /// Return to a validated userspace context.
+    ///
+    /// # Safety
+    /// `frame` must reference a live architecture-compatible frame whose
+    /// instruction pointer, stack, flags, and address space are safe for user
+    /// mode. The caller must establish the required interrupt and stack state.
     unsafe fn syscall_return(frame: *const TrapFrame) -> !;
 }
 
@@ -128,7 +140,19 @@ pub trait Serial {
 
 pub trait FpState {
     fn fp_init();
+    /// Save the current task's floating-point state.
+    ///
+    /// # Safety
+    /// `dst` must be writable for `fp_area_size()` bytes with the alignment
+    /// required by this architecture. CPU FP support must be initialized and
+    /// the caller must prevent concurrent access or migration during the save.
     unsafe fn fp_save(dst: *mut u8);
+    /// Restore a previously saved task floating-point state.
+    ///
+    /// # Safety
+    /// `src` must reference an aligned, initialized save area of at least
+    /// `fp_area_size()` bytes for this CPU. The caller must prevent concurrent
+    /// modification or migration and restore only validated control state.
     unsafe fn fp_restore(src: *const u8);
     fn fp_area_size() -> usize;
 }

@@ -69,7 +69,7 @@ impl CapabilitySet {
         if !self.has_permitted(cap) {
             return Err(CapabilityError::NotPermitted);
         }
-        
+
         let mask = 1u64 << (cap as u64);
         self.effective.fetch_or(mask, Ordering::Relaxed);
         Ok(())
@@ -87,7 +87,7 @@ impl CapabilitySet {
         if !self.has_bounding(cap) {
             return Err(CapabilityError::NotInBounding);
         }
-        
+
         let mask = 1u64 << (cap as u64);
         self.permitted.fetch_or(mask, Ordering::Relaxed);
         Ok(())
@@ -106,7 +106,7 @@ impl CapabilitySet {
         if !self.has_bounding(cap) {
             return Err(CapabilityError::NotInBounding);
         }
-        
+
         let mask = 1u64 << (cap as u64);
         self.inheritable.fetch_or(mask, Ordering::Relaxed);
         Ok(())
@@ -123,11 +123,11 @@ impl CapabilitySet {
     pub fn drop_bounding(&self, cap: Capability) -> Result<(), CapabilityError> {
         let mask = !(1u64 << (cap as u64));
         self.bounding.fetch_and(mask, Ordering::Relaxed);
-        
+
         // Also remove from other sets
         self.remove_permitted(cap).ok();
         self.remove_inheritable(cap).ok();
-        
+
         Ok(())
     }
 
@@ -158,18 +158,18 @@ impl CapabilitySet {
         for cap in caps {
             new_mask |= 1u64 << (*cap as u64);
         }
-        
+
         // Verify all requested caps are in bounding set
         let bounding = self.bounding.load(Ordering::Relaxed);
         if (new_mask & !bounding) != 0 {
             return Err(CapabilityError::NotInBounding);
         }
-        
+
         // Update sets
         self.permitted.store(new_mask, Ordering::Relaxed);
         self.effective.store(new_mask, Ordering::Relaxed);
         self.inheritable.store(new_mask, Ordering::Relaxed);
-        
+
         Ok(())
     }
 
@@ -188,46 +188,46 @@ impl CapabilitySet {
 #[repr(u64)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Capability {
-    CapChown = 0,           // Change file ownership
-    CapDacOverride = 1,     // Bypass DAC checks
-    CapDacReadSearch = 2,   // Bypass DAC read/search
-    CapFowner = 3,          // Bypass permission checks on operations requiring file owner
-    CapFsetid = 4,          // Allow setting setuid/setgid bits
-    CapKill = 5,            // Send signals to any process
-    CapSetgid = 6,          // Set GID
-    CapSetuid = 7,          // Set UID
-    CapSetpcap = 8,         // Set process capabilities
-    CapLinuxImmutable = 9,  // Modify immutable files
-    CapNetBindService = 10, // Bind to privileged ports (<1024)
-    CapNetBroadcast = 11,   // Network broadcast
-    CapNetAdmin = 12,       // Network administration
-    CapNetRaw = 13,         // Use RAW sockets
-    CapIpcLock = 14,        // Lock memory
-    CapIpcOwner = 15,       // Bypass IPC permission checks
-    CapSysModule = 16,      // Load/unload kernel modules
-    CapSysRawio = 17,       // Raw I/O access
-    CapSysChroot = 18,      // Use chroot
-    CapSysPtrace = 19,      // Trace any process
-    CapSysPacct = 20,       // Process accounting
-    CapSysAdmin = 21,       // System administration (catch-all)
-    CapSysBoot = 22,        // Reboot system
-    CapSysNice = 23,        // Set nice value for any process
-    CapSysResource = 24,    // Override resource limits
-    CapSysTime = 25,        // Set system clock
-    CapSysTtyConfig = 26,   // TTY configuration
-    CapMknod = 27,          // Create special files
-    CapLease = 28,          // File leases
-    CapAuditWrite = 29,     // Write audit log
-    CapAuditControl = 30,   // Configure audit subsystem
-    CapSetfcap = 31,        // Set file capabilities
-    CapMacOverride = 32,    // Override MAC settings
-    CapMacAdmin = 33,       // MAC administration
-    CapSyslog = 34,         // Syslog operations
-    CapWakeAlarm = 35,      // Trigger wake alarms
-    CapBlockSuspend = 36,   // Block system suspend
-    CapAuditRead = 37,      // Read audit log
-    CapPerfmon = 38,        // Performance monitoring
-    CapBpf = 39,            // BPF operations
+    CapChown = 0,              // Change file ownership
+    CapDacOverride = 1,        // Bypass DAC checks
+    CapDacReadSearch = 2,      // Bypass DAC read/search
+    CapFowner = 3,             // Bypass permission checks on operations requiring file owner
+    CapFsetid = 4,             // Allow setting setuid/setgid bits
+    CapKill = 5,               // Send signals to any process
+    CapSetgid = 6,             // Set GID
+    CapSetuid = 7,             // Set UID
+    CapSetpcap = 8,            // Set process capabilities
+    CapLinuxImmutable = 9,     // Modify immutable files
+    CapNetBindService = 10,    // Bind to privileged ports (<1024)
+    CapNetBroadcast = 11,      // Network broadcast
+    CapNetAdmin = 12,          // Network administration
+    CapNetRaw = 13,            // Use RAW sockets
+    CapIpcLock = 14,           // Lock memory
+    CapIpcOwner = 15,          // Bypass IPC permission checks
+    CapSysModule = 16,         // Load/unload kernel modules
+    CapSysRawio = 17,          // Raw I/O access
+    CapSysChroot = 18,         // Use chroot
+    CapSysPtrace = 19,         // Trace any process
+    CapSysPacct = 20,          // Process accounting
+    CapSysAdmin = 21,          // System administration (catch-all)
+    CapSysBoot = 22,           // Reboot system
+    CapSysNice = 23,           // Set nice value for any process
+    CapSysResource = 24,       // Override resource limits
+    CapSysTime = 25,           // Set system clock
+    CapSysTtyConfig = 26,      // TTY configuration
+    CapMknod = 27,             // Create special files
+    CapLease = 28,             // File leases
+    CapAuditWrite = 29,        // Write audit log
+    CapAuditControl = 30,      // Configure audit subsystem
+    CapSetfcap = 31,           // Set file capabilities
+    CapMacOverride = 32,       // Override MAC settings
+    CapMacAdmin = 33,          // MAC administration
+    CapSyslog = 34,            // Syslog operations
+    CapWakeAlarm = 35,         // Trigger wake alarms
+    CapBlockSuspend = 36,      // Block system suspend
+    CapAuditRead = 37,         // Read audit log
+    CapPerfmon = 38,           // Performance monitoring
+    CapBpf = 39,               // BPF operations
     CapCheckpointRestore = 40, // Checkpoint/restore
 }
 
@@ -349,7 +349,7 @@ mod tests {
     fn test_capability_set_creation() {
         let empty = CapabilitySet::empty();
         assert!(!empty.has_effective(Capability::CapSysAdmin));
-        
+
         let full = CapabilitySet::full();
         assert!(full.has_effective(Capability::CapSysAdmin));
     }
@@ -357,16 +357,16 @@ mod tests {
     #[test]
     fn test_add_remove_capability() {
         let caps = CapabilitySet::empty();
-        
+
         // Can't add to effective without being in permitted
         assert!(caps.add_effective(Capability::CapSysAdmin).is_err());
-        
+
         // Add to permitted first
         caps.add_permitted(Capability::CapSysAdmin).unwrap();
         caps.add_effective(Capability::CapSysAdmin).unwrap();
-        
+
         assert!(caps.has_effective(Capability::CapSysAdmin));
-        
+
         // Remove from effective
         caps.remove_effective(Capability::CapSysAdmin).unwrap();
         assert!(!caps.has_effective(Capability::CapSysAdmin));
@@ -376,10 +376,10 @@ mod tests {
     #[test]
     fn test_drop_bounding() {
         let caps = CapabilitySet::full();
-        
+
         // Drop CAP_SYS_MODULE from bounding set
         caps.drop_bounding(Capability::CapSysModule).unwrap();
-        
+
         // Should not be able to add it back
         assert!(caps.add_permitted(Capability::CapSysModule).is_err());
     }
@@ -387,13 +387,13 @@ mod tests {
     #[test]
     fn test_drop_to_specific_caps() {
         let caps = CapabilitySet::full();
-        
+
         // Drop to only network capabilities
         caps.drop_to(presets::NETWORK_CAPS).unwrap();
-        
+
         // Should have network caps
         assert!(caps.has_effective(Capability::CapNetBindService));
-        
+
         // Should not have admin caps
         assert!(!caps.has_effective(Capability::CapSysAdmin));
     }

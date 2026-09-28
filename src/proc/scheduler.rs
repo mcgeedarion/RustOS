@@ -570,8 +570,8 @@ impl RunQueue {
                     self.nr_running = self.nr_running.saturating_sub(1);
                     self.load_weight = self.load_weight.saturating_sub(t.sched.weight);
                     return true;
-                }
-                None => {} // Task was removed concurrently; fall through
+                },
+                None => {}, // Task was removed concurrently; fall through
             }
         }
 

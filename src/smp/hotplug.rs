@@ -67,7 +67,10 @@ impl CpuState {
     /// Check if the CPU is in any active state
     #[inline]
     pub fn is_active(self) -> bool {
-        matches!(self, CpuState::Starting | CpuState::Online | CpuState::Dying)
+        matches!(
+            self,
+            CpuState::Starting | CpuState::Online | CpuState::Dying
+        )
     }
 
     /// Convert from raw u8 value
@@ -128,10 +131,10 @@ impl fmt::Display for HotplugError {
             HotplugError::InvalidCpu(id) => write!(f, "Invalid CPU ID: {}", id),
             HotplugError::AlreadyInState(id, state) => {
                 write!(f, "CPU {} already in state: {}", id, state)
-            }
+            },
             HotplugError::CannotOfflineBsp(id) => {
                 write!(f, "Cannot offline boot processor: CPU {}", id)
-            }
+            },
             HotplugError::CpuNotPresent(id) => write!(f, "CPU {} not present", id),
             HotplugError::Timeout => write!(f, "Hotplug operation timed out"),
             HotplugError::NoMemory => write!(f, "Out of memory for hotplug operation"),
@@ -168,8 +171,7 @@ impl CpuHotplugState {
 
     #[inline]
     fn get_state(&self) -> CpuState {
-        CpuState::from_u8(self.state.load(Ordering::Acquire))
-            .unwrap_or(CpuState::Offline)
+        CpuState::from_u8(self.state.load(Ordering::Acquire)).unwrap_or(CpuState::Offline)
     }
 
     #[inline]
@@ -265,7 +267,10 @@ impl HotplugManager {
     /// Register a state transition callback
     fn register_callback(&mut self, callback: StateCallback) -> HotplugResult<CallbackId> {
         let id = CallbackId(self.next_callback_id);
-        self.next_callback_id = self.next_callback_id.checked_add(1).ok_or(HotplugError::CallbackFailed)?;
+        self.next_callback_id = self
+            .next_callback_id
+            .checked_add(1)
+            .ok_or(HotplugError::CallbackFailed)?;
         self.callbacks.push((id, callback));
         Ok(id)
     }
@@ -347,10 +352,10 @@ pub unsafe fn cpu_up(cpu_id: u32) -> HotplugResult<()> {
     #[cfg(target_arch = "x86_64")]
     {
         use crate::arch::x86_64::apic;
-        
+
         // Get hardware APIC ID
         let hw_id = cpu_state.hw_id;
-        
+
         // Send INIT-SIPI sequence to start the AP
         if let Some(info) = crate::smp::cpu_info(cpu_id) {
             apic::wakeup_ap(info.hw_id, cpu_id);
@@ -400,7 +405,7 @@ pub unsafe fn cpu_down(cpu_id: u32) -> HotplugResult<()> {
     let cpu_state = mgr.get_cpu_state(cpu_id)?;
 
     let current_state = cpu_state.get_state();
-    
+
     // Check if CPU can be offlined
     if !cpu_state.can_offline.load(Ordering::Acquire) {
         return Err(HotplugError::CannotOfflineBsp(cpu_id));
@@ -412,8 +417,11 @@ pub unsafe fn cpu_down(cpu_id: u32) -> HotplugResult<()> {
 
     // Check reference count
     if cpu_state.get_refcount() > 0 {
-        log::warn!("CPU {} has active references (refcount={}), deferring offline", 
-                   cpu_id, cpu_state.get_refcount());
+        log::warn!(
+            "CPU {} has active references (refcount={}), deferring offline",
+            cpu_id,
+            cpu_state.get_refcount()
+        );
         return Err(HotplugError::Timeout);
     }
 
@@ -425,10 +433,10 @@ pub unsafe fn cpu_down(cpu_id: u32) -> HotplugResult<()> {
     #[cfg(target_arch = "x86_64")]
     {
         use crate::arch::x86_64::apic;
-        
+
         // Disable local APIC to prevent further interrupts
         apic::disable_local();
-        
+
         // Flush TLB entries for this CPU
         crate::arch::x86_64::paging::flush_tlb_local();
     }
@@ -452,7 +460,7 @@ pub unsafe fn cpu_down(cpu_id: u32) -> HotplugResult<()> {
 pub fn cpu_online(cpu_id: u32) -> bool {
     let manager = HOTPLUG_MANAGER.lock();
     let mgr = manager.borrow();
-    
+
     mgr.get_cpu_state(cpu_id)
         .map(|s| s.get_state().is_schedulable())
         .unwrap_or(false)
@@ -462,10 +470,8 @@ pub fn cpu_online(cpu_id: u32) -> bool {
 pub fn cpu_get_state(cpu_id: u32) -> Option<CpuState> {
     let manager = HOTPLUG_MANAGER.lock();
     let mgr = manager.borrow();
-    
-    mgr.get_cpu_state(cpu_id)
-        .map(|s| s.get_state())
-        .ok()
+
+    mgr.get_cpu_state(cpu_id).map(|s| s.get_state()).ok()
 }
 
 /// Register a callback for CPU state transitions
@@ -518,7 +524,7 @@ pub fn num_online_cpus() -> u32 {
 pub fn get_online_cpus() -> Vec<u32> {
     let manager = HOTPLUG_MANAGER.lock();
     let mgr = manager.borrow();
-    
+
     let mut online = Vec::new();
     for (id, cpu_opt) in mgr.cpus.iter().enumerate() {
         if let Some(cpu) = cpu_opt {
@@ -566,7 +572,7 @@ mod tests {
     fn test_hotplug_error_display() {
         let err = HotplugError::InvalidCpu(999);
         assert!(err.to_string().contains("999"));
-        
+
         let err = HotplugError::CannotOfflineBsp(0);
         assert!(err.to_string().contains("boot processor"));
     }
