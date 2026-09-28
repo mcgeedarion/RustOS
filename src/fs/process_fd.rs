@@ -504,7 +504,9 @@ pub fn proc_fd_install(
     if !lock.contains_key(&pid) {
         lock.insert(pid, ProcFdTable::default());
     }
-    let table = lock.get_mut(&pid).unwrap_or_else(|| panic!("proc fd table inserted"));
+    let table = lock
+        .get_mut(&pid)
+        .unwrap_or_else(|| panic!("proc fd table inserted"));
     let fd = match preferred {
         Some(n) => n,
         None => table.alloc_fd(3),

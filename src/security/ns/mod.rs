@@ -19,12 +19,12 @@
 //!   setns(2)   — attach to an existing ns via fd
 //!   /proc/self/ns/{pid,mnt,net,uts,user} — nsfs inodes
 
+pub mod isolation;
 pub mod mnt_ns;
 pub mod net_ns;
 pub mod pid_ns;
 pub mod user_ns;
 pub mod uts_ns;
-pub mod isolation;
 
 extern crate alloc;
 use alloc::sync::Arc;

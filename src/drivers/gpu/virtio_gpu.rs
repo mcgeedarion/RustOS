@@ -305,7 +305,8 @@ unsafe fn _init(base: usize) {
     // CREATE resource 1
     let res_id = 1u32;
     let fb_size = (w * h * 4) as usize;
-    let fb_phys = alloc_dma(fb_size, 4096).expect("virtio-gpu: DMA allocation failed for framebuffer");
+    let fb_phys =
+        alloc_dma(fb_size, 4096).expect("virtio-gpu: DMA allocation failed for framebuffer");
     create_resource(base, &ctrlq, res_id, w, h);
     attach_backing(base, &ctrlq, res_id, fb_phys, fb_size as u32);
     set_scanout(base, &ctrlq, res_id, w, h);

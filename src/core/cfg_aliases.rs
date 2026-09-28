@@ -247,7 +247,10 @@ mod tests {
             .iter()
             .filter(|&&x| x)
             .count();
-        assert_eq!(profile_count, 1, "Exactly one build profile should be active");
+        assert_eq!(
+            profile_count, 1,
+            "Exactly one build profile should be active"
+        );
     }
 
     #[test]

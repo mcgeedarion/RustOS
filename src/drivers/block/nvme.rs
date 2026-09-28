@@ -313,10 +313,14 @@ unsafe fn _init(bar0: u64) {
     }
 
     // Allocate queues and DMA scratch regions.
-    let asq = alloc_dma(ADMIN_DEPTH * 64, 4096).expect("nvme: DMA allocation failed for admin submission queue");
-    let acq = alloc_dma(ADMIN_DEPTH * 16, 4096).expect("nvme: DMA allocation failed for admin completion queue");
-    let iosq = alloc_dma(IO_DEPTH * 64, 4096).expect("nvme: DMA allocation failed for IO submission queue");
-    let iocq = alloc_dma(IO_DEPTH * 16, 4096).expect("nvme: DMA allocation failed for IO completion queue");
+    let asq = alloc_dma(ADMIN_DEPTH * 64, 4096)
+        .expect("nvme: DMA allocation failed for admin submission queue");
+    let acq = alloc_dma(ADMIN_DEPTH * 16, 4096)
+        .expect("nvme: DMA allocation failed for admin completion queue");
+    let iosq = alloc_dma(IO_DEPTH * 64, 4096)
+        .expect("nvme: DMA allocation failed for IO submission queue");
+    let iocq = alloc_dma(IO_DEPTH * 16, 4096)
+        .expect("nvme: DMA allocation failed for IO completion queue");
     let dma = alloc_dma(4096, 4096).expect("nvme: DMA allocation failed for scratch buffer");
     // Dedicated 4 KiB page for PRP lists.
     let prp_list = alloc_dma(4096, 4096).expect("nvme: DMA allocation failed for PRP list");
@@ -377,8 +381,11 @@ unsafe fn _init(bar0: u64) {
     }
 
     // CREATE IO CQ.
-    let iocq_pa = CTRL.lock().as_ref()
-        .expect("nvme: controller not initialized").iocq_phys;
+    let iocq_pa = CTRL
+        .lock()
+        .as_ref()
+        .expect("nvme: controller not initialized")
+        .iocq_phys;
     let mut cmd = SqEntry::default();
     cmd.cdw0 = (ADM_CREATE_IOCQ as u32) | (next_cid() << 16);
     cmd.prp1 = iocq_pa;
@@ -390,8 +397,11 @@ unsafe fn _init(bar0: u64) {
     }
 
     // CREATE IO SQ.
-    let iosq_pa = CTRL.lock().as_ref()
-        .expect("nvme: controller not initialized").iosq_phys;
+    let iosq_pa = CTRL
+        .lock()
+        .as_ref()
+        .expect("nvme: controller not initialized")
+        .iosq_phys;
     let mut cmd = SqEntry::default();
     cmd.cdw0 = (ADM_CREATE_IOSQ as u32) | (next_cid() << 16);
     cmd.prp1 = iosq_pa;
@@ -403,8 +413,11 @@ unsafe fn _init(bar0: u64) {
     }
 
     // IDENTIFY NAMESPACE 1.
-    let dma_pa = CTRL.lock().as_ref()
-        .expect("nvme: controller not initialized").dma_phys;
+    let dma_pa = CTRL
+        .lock()
+        .as_ref()
+        .expect("nvme: controller not initialized")
+        .dma_phys;
     core::ptr::write_bytes(dma_pa as *mut u8, 0, 4096);
     let mut cmd = SqEntry::default();
     cmd.cdw0 = (ADM_IDENTIFY as u32) | (next_cid() << 16);
@@ -532,7 +545,9 @@ fn io_rw(nsid: u32, lba: u64, count: u32, buf_phys: u64, write: bool) -> Result<
 
 fn admin_submit(cmd: SqEntry) {
     let mut ctrl = CTRL.lock();
-    let c = ctrl.as_mut().expect("nvme: controller not initialized in admin_submit");
+    let c = ctrl
+        .as_mut()
+        .expect("nvme: controller not initialized in admin_submit");
     let entry = (c.asq_phys as usize + c.asq_tail * 64) as *mut SqEntry;
     unsafe {
         entry.write_volatile(cmd);
@@ -546,7 +561,9 @@ fn admin_submit(cmd: SqEntry) {
 
 fn admin_complete() -> Result<(), &'static str> {
     let mut ctrl = CTRL.lock();
-    let c = ctrl.as_mut().expect("nvme: controller not initialized in admin_complete");
+    let c = ctrl
+        .as_mut()
+        .expect("nvme: controller not initialized in admin_complete");
 
     // Clear stale flag before entering the wait loop.
     NVME_COMPLETION_FLAG.store(false, Ordering::Release);
@@ -585,7 +602,9 @@ fn admin_complete() -> Result<(), &'static str> {
 
 fn next_cid() -> u32 {
     let mut ctrl = CTRL.lock();
-    let c = ctrl.as_mut().expect("nvme: controller not initialized in next_cid");
+    let c = ctrl
+        .as_mut()
+        .expect("nvme: controller not initialized in next_cid");
     let cid = c.next_cid;
     c.next_cid = c.next_cid.wrapping_add(1);
     cid as u32

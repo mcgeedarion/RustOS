@@ -273,20 +273,20 @@ pub fn sys_waitid(idtype: i32, id: i32, infop: usize, options: i32) -> isize {
                     found_state = Some(state);
                     found_exit_code = exit_code;
                     break;
-                }
+                },
                 State::Stopped if (options & WSTOPPED) != 0 => {
                     found_cpid = Some(cpid);
                     found_state = Some(state);
                     found_exit_code = exit_code;
                     break;
-                }
+                },
                 State::Continued if (options & WCONTINUED) != 0 => {
                     found_cpid = Some(cpid);
                     found_state = Some(state);
                     found_exit_code = exit_code;
                     break;
-                }
-                _ => {}
+                },
+                _ => {},
             }
         }
 
@@ -307,16 +307,16 @@ pub fn sys_waitid(idtype: i32, id: i32, infop: usize, options: i32) -> isize {
                             CLD_KILLED
                         };
                         info.si_status = exit_code;
-                    }
+                    },
                     State::Stopped => {
                         info.si_code = CLD_STOPPED;
                         info.si_status = (exit_code >> 8) & 0xff;
-                    }
+                    },
                     State::Continued => {
                         info.si_code = CLD_CONTINUED;
                         info.si_status = 0;
-                    }
-                    _ => {}
+                    },
+                    _ => {},
                 }
 
                 if copy_to_user(infop, unsafe {

@@ -12,10 +12,10 @@
 
 extern crate alloc;
 
-use core::sync::atomic::{AtomicBool, AtomicUsize, AtomicU32, AtomicU64, Ordering};
 use core::cell::UnsafeCell;
-use core::ptr;
 use core::marker::PhantomData;
+use core::ptr;
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
 /// Queued spinlock node for fair locking
 #[repr(C)]
@@ -52,16 +52,20 @@ impl Qspinlock {
             tail: AtomicUsize::new(0),
         }
     }
-    
+
     /// Acquire the lock with a local node
     pub fn lock(&self, node: &QspinlockNode) {
         let node_ptr = node as *const QspinlockNode as usize;
-        
+
         // Try to acquire immediately
-        if self.tail.compare_exchange(0, node_ptr, Ordering::Acquire, Ordering::Relaxed).is_ok() {
+        if self
+            .tail
+            .compare_exchange(0, node_ptr, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
+        {
             return;
         }
-        
+
         // Set predecessor's next pointer
         let prev_tail = self.tail.swap(node_ptr, Ordering::AcqRel);
         unsafe {
@@ -70,18 +74,18 @@ impl Qspinlock {
                 (*prev_node).next = node_ptr as *mut QspinlockNode;
             }
         }
-        
+
         // Wait for our turn
         while !node.locked.load(Ordering::Acquire) {
             core::hint::spin_loop();
         }
     }
-    
+
     /// Release the lock
     pub fn unlock(&self, node: &QspinlockNode) {
         // Clear our node
         node.locked.store(false, Ordering::Release);
-        
+
         // If we're not the tail, successor will handle cleanup
         // Otherwise, try to reset tail to 0
         let _ = self.tail.compare_exchange(
@@ -121,33 +125,35 @@ impl<T> RcuProtected<T> {
             version: AtomicUsize::new(0),
         }
     }
-    
+
     /// Start an RCU read-side critical section
     pub fn read(&self) -> RcuReadGuard {
         rcu_read_lock();
-        RcuReadGuard { _marker: PhantomData }
+        RcuReadGuard {
+            _marker: PhantomData,
+        }
     }
-    
+
     /// Get immutable reference during read-side critical section
     /// SAFETY: Must be called within RCU read-side critical section
     pub unsafe fn get_ref<'a>(&'a self, _guard: &'a RcuReadGuard) -> Option<&'a T> {
         (*self.data.get()).as_ref()
     }
-    
+
     /// Update data (writer side)
-    pub fn update<F>(&self, updater: F) 
+    pub fn update<F>(&self, updater: F)
     where
-        F: FnOnce(&mut T)
+        F: FnOnce(&mut T),
     {
         // Increment version
         self.version.fetch_add(1, Ordering::SeqCst);
-        
+
         unsafe {
             if let Some(ref mut data) = *self.data.get() {
                 updater(data);
             }
         }
-        
+
         // Synchronize (wait for readers to finish)
         rcu_synchronize();
     }
@@ -168,12 +174,12 @@ fn rcu_read_unlock() {
 fn rcu_synchronize() {
     RCU_UPDATING.store(true, Ordering::SeqCst);
     core::hint::spin_loop();
-    
+
     // Wait for all readers to finish
     while RCU_ACTIVE_READERS.load(Ordering::SeqCst) > 0 {
         core::hint::spin_loop();
     }
-    
+
     RCU_UPDATING.store(false, Ordering::SeqCst);
 }
 
@@ -193,14 +199,14 @@ impl TicketSpinlock {
             now_serving: AtomicU32::new(0),
         }
     }
-    
+
     pub fn lock(&self) -> TicketGuard {
         let ticket = self.next_ticket.fetch_add(1, Ordering::Relaxed);
-        
+
         while self.now_serving.load(Ordering::Acquire) != ticket {
             core::hint::spin_loop();
         }
-        
+
         TicketGuard { lock: self }
     }
 }
@@ -235,7 +241,7 @@ impl<T> PerCpuData<T> {
         const INIT: UnsafeCell<Option<()>> = UnsafeCell::new(None);
         #[cfg(not(target_arch = "x86_64"))]
         const INIT: UnsafeCell<Option<()>> = UnsafeCell::new(None);
-        
+
         Self {
             #[cfg(target_arch = "x86_64")]
             data: unsafe { core::mem::zeroed() },
@@ -243,11 +249,11 @@ impl<T> PerCpuData<T> {
             data: unsafe { core::mem::zeroed() },
         }
     }
-    
+
     pub fn get(&self, cpu_id: usize) -> Option<&T> {
         unsafe { (*self.data[cpu_id].get()).as_ref() }
     }
-    
+
     pub fn set(&self, cpu_id: usize, data: T) {
         unsafe {
             *self.data[cpu_id].get() = Some(data);
@@ -277,12 +283,12 @@ impl RwSpinlock {
             write_waiters: AtomicUsize::new(0),
         }
     }
-    
+
     /// Acquire read lock
     pub fn read_lock(&self) -> ReadGuard {
         loop {
             let current_readers = self.readers.fetch_add(1, Ordering::Acquire);
-            
+
             // Check if a writer is active
             if self.writer.load(Ordering::Acquire) {
                 // Rollback and retry
@@ -290,15 +296,15 @@ impl RwSpinlock {
                 core::hint::spin_loop();
                 continue;
             }
-            
+
             return ReadGuard { lock: self };
         }
     }
-    
+
     /// Acquire write lock
     pub fn write_lock(&self) -> WriteGuard {
         self.write_waiters.fetch_add(1, Ordering::Relaxed);
-        
+
         loop {
             // Check if we can acquire the write lock
             if !self.writer.swap(true, Ordering::Acquire) {
@@ -306,45 +312,45 @@ impl RwSpinlock {
                 while self.readers.load(Ordering::Acquire) > 0 {
                     core::hint::spin_loop();
                 }
-                
+
                 // Successfully acquired write lock
                 self.write_waiters.fetch_sub(1, Ordering::Relaxed);
                 return WriteGuard { lock: self };
             }
-            
+
             // Release writer flag and wait
             self.writer.store(false, Ordering::Release);
             core::hint::spin_loop();
         }
     }
-    
+
     /// Try to acquire read lock without blocking
     pub fn try_read_lock(&self) -> Option<ReadGuard> {
         if self.writer.load(Ordering::Acquire) {
             return None;
         }
-        
+
         let current_readers = self.readers.fetch_add(1, Ordering::Acquire);
         if self.writer.load(Ordering::Acquire) {
             // Writer became active during our attempt
             self.readers.fetch_sub(1, Ordering::Release);
             return None;
         }
-        
+
         Some(ReadGuard { lock: self })
     }
-    
+
     /// Try to acquire write lock without blocking
     pub fn try_write_lock(&self) -> Option<WriteGuard> {
         if self.writer.swap(true, Ordering::Acquire) {
             return None;
         }
-        
+
         if self.readers.load(Ordering::Acquire) > 0 {
             self.writer.store(false, Ordering::Release);
             return None;
         }
-        
+
         Some(WriteGuard { lock: self })
     }
 }
@@ -394,38 +400,38 @@ impl TicketRwLock {
             active_readers: AtomicU64::new(0),
         }
     }
-    
+
     /// Acquire read lock
     pub fn read_lock(&self) -> TicketReadGuard {
         let ticket = self.read_ticket.fetch_add(1, Ordering::Relaxed);
-        
+
         // Wait for our turn (readers can proceed if no exclusive writer)
         while self.write_serving.load(Ordering::Acquire) != ticket {
             core::hint::spin_loop();
         }
-        
+
         self.active_readers.fetch_add(1, Ordering::Relaxed);
-        
+
         // Allow next reader to start
         self.read_serving.fetch_add(1, Ordering::Release);
-        
+
         TicketReadGuard { lock: self }
     }
-    
+
     /// Acquire write lock
     pub fn write_lock(&self) -> TicketWriteGuard {
         let ticket = self.write_ticket.fetch_add(1, Ordering::Relaxed);
-        
+
         // Wait for our turn
         while self.write_serving.load(Ordering::Acquire) != ticket {
             core::hint::spin_loop();
         }
-        
+
         // Wait for all readers to finish
         while self.active_readers.load(Ordering::Acquire) > 0 {
             core::hint::spin_loop();
         }
-        
+
         TicketWriteGuard { lock: self }
     }
 }
@@ -455,21 +461,21 @@ impl<'a> Drop for TicketWriteGuard<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_qspinlock() {
         let lock = Qspinlock::new();
         let node = QspinlockNode::new();
-        
+
         lock.lock(&node);
         // Critical section
         lock.unlock(&node);
     }
-    
+
     #[test]
     fn test_rcu() {
         let rcu_data = RcuProtected::new(42);
-        
+
         {
             let guard = rcu_data.read();
             unsafe {
@@ -477,9 +483,9 @@ mod tests {
                 assert_eq!(val, Some(&42));
             }
         }
-        
+
         rcu_data.update(|v| *v += 1);
-        
+
         {
             let guard = rcu_data.read();
             unsafe {
@@ -488,7 +494,7 @@ mod tests {
             }
         }
     }
-    
+
     #[test]
     fn test_ticket_spinlock() {
         let lock = TicketSpinlock::new();
@@ -496,51 +502,51 @@ mod tests {
         // Critical section - lock is held
         // Guard drops automatically, releasing lock
     }
-    
+
     #[test]
     fn test_rw_spinlock() {
         let lock = RwSpinlock::new();
-        
+
         // Multiple readers
         let r1 = lock.read_lock();
         let r2 = lock.read_lock();
         drop(r1);
         drop(r2);
-        
+
         // Single writer
         let w = lock.write_lock();
         // Writer has exclusive access
         drop(w);
     }
-    
+
     #[test]
     fn test_try_locks() {
         let lock = RwSpinlock::new();
-        
+
         // Try read should succeed
         assert!(lock.try_read_lock().is_some());
-        
+
         // Try write should fail (reader active)
         assert!(lock.try_write_lock().is_none());
-        
+
         let lock2 = RwSpinlock::new();
-        
+
         // Acquire write lock
         let _w = lock2.write_lock();
-        
+
         // Try read should fail (writer active)
         assert!(lock2.try_read_lock().is_none());
         assert!(lock2.try_write_lock().is_none());
     }
-    
+
     #[test]
     fn test_ticket_rwlock() {
         let lock = TicketRwLock::new();
-        
+
         // Acquire and release read lock
         let r1 = lock.read_lock();
         drop(r1);
-        
+
         // Acquire and release write lock
         let w = lock.write_lock();
         drop(w);

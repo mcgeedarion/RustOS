@@ -11,9 +11,9 @@
 
 extern crate alloc;
 
+use alloc::vec::Vec;
 use core::fmt;
 use core::ptr::NonNull;
-use alloc::vec::Vec;
 
 pub use bitflags::bitflags;
 
@@ -59,11 +59,11 @@ impl Pfn {
     pub const fn new(num: usize) -> Self {
         Self(num)
     }
-    
+
     pub const fn to_phys(self, page_size: usize) -> usize {
         self.0 * page_size
     }
-    
+
     pub const fn from_phys(addr: usize, page_size: usize) -> Self {
         Self(addr / page_size)
     }
@@ -123,19 +123,19 @@ bitflags! {
 pub trait PhysicalMemoryManager: Send + Sync {
     /// Allocate a single physical page
     fn alloc_page(&self) -> Result<Pfn, MmError>;
-    
+
     /// Allocate multiple contiguous physical pages
     fn alloc_pages(&self, count: usize) -> Result<Pfn, MmError>;
-    
+
     /// Free a physical page
     fn free_page(&self, pfn: Pfn) -> Result<(), MmError>;
-    
+
     /// Free multiple physical pages
     fn free_pages(&self, pfn: Pfn, count: usize) -> Result<(), MmError>;
-    
+
     /// Get total physical memory in bytes
     fn total_memory(&self) -> usize;
-    
+
     /// Get available physical memory in bytes
     fn available_memory(&self) -> usize;
 }
@@ -144,19 +144,19 @@ pub trait PhysicalMemoryManager: Send + Sync {
 pub trait VirtualMemoryManager: Send + Sync {
     /// Map a virtual address to a physical frame
     fn map(&self, vpn: Vpn, pfn: Pfn, flags: PageFlags) -> Result<(), MmError>;
-    
+
     /// Unmap a virtual address
     fn unmap(&self, vpn: Vpn) -> Result<(), MmError>;
-    
+
     /// Update page flags
     fn protect(&self, vpn: Vpn, flags: PageFlags) -> Result<(), MmError>;
-    
+
     /// Translate virtual address to physical
     fn translate(&self, vpn: Vpn) -> Option<Pfn>;
-    
+
     /// Flush TLB for a specific address
     fn flush_tlb_one(&self, vpn: Vpn);
-    
+
     /// Flush entire TLB
     fn flush_tlb_all(&self);
 }
@@ -202,29 +202,29 @@ impl MemoryPolicyManager {
             numa_nodes: spin::Mutex::new(Vec::new()),
         }
     }
-    
+
     /// Set the default memory policy
     pub fn set_default_policy(&self, policy: MemoryPolicy) {
         *self.default_policy.lock() = policy;
     }
-    
+
     /// Get the current default policy
     pub fn get_default_policy(&self) -> MemoryPolicy {
         self.default_policy.lock().clone()
     }
-    
+
     /// Register a NUMA node
     pub fn register_numa_node(&self, node: NumaNode) {
         let mut nodes = self.numa_nodes.lock();
         nodes.push(node);
     }
-    
+
     /// Get NUMA node by ID
     pub fn get_numa_node(&self, id: usize) -> Option<NumaNode> {
         let nodes = self.numa_nodes.lock();
         nodes.iter().find(|n| n.id == id).cloned()
     }
-    
+
     /// Select a node based on policy
     pub fn select_node(&self, policy: &MemoryPolicy) -> Option<usize> {
         match policy {
@@ -237,7 +237,7 @@ impl MemoryPolicyManager {
                     // Simple round-robin simulation
                     Some(nodes[0])
                 }
-            }
+            },
             MemoryPolicy::Preferred { node_id } => Some(*node_id),
         }
     }

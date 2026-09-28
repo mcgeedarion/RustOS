@@ -251,9 +251,7 @@ pub fn capture_start(width: u32, height: u32) -> Result<(), &'static str> {
     let buf_size = stride * height;
 
     // Allocate a contiguous DMA ring using the PMM.
-    let total_size = NUM_BUFS
-        .checked_mul(buf_size)
-        .ok_or(-12)?; // ENOMEM on overflow
+    let total_size = NUM_BUFS.checked_mul(buf_size).ok_or(-12)?; // ENOMEM on overflow
     let pages = (total_size + 0xFFF) / 0x1000;
     let ring_phys = crate::mm::pmm::alloc_pages_aligned(pages, 0x1000).ok_or(-12)?;
     let ring_paddr: u64 = ring_phys.as_ptr() as u64;

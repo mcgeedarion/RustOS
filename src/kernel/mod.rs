@@ -31,7 +31,7 @@ pub mod utils;
 
 // Re-export commonly used types at module level
 #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
-pub use uaccess::{UaccessError, UaccessResult, UserPtr, UserSlice};
+pub use architecture::{KernelArchitecture, HYBRID_KERNEL_CONTRACT, KERNEL_ARCHITECTURE};
 pub use panic::set_fault_addr;
 #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
-pub use architecture::{KernelArchitecture, HYBRID_KERNEL_CONTRACT, KERNEL_ARCHITECTURE};
+pub use uaccess::{UaccessError, UaccessResult, UserPtr, UserSlice};

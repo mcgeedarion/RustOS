@@ -92,7 +92,11 @@ pub fn read_hw_counter() -> u64 {
     }
 
     // Fallback for host-side unit-test builds (std target).
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "riscv64")))]
+    #[cfg(not(any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        target_arch = "riscv64"
+    )))]
     {
         0
     }

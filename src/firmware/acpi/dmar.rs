@@ -134,7 +134,7 @@ struct DeviceScopeEntry {
     _reserved: [u8; 2],
     /// Enumeration ID (for PCI: bus, device, function)
     enumeration_id: [u8; 2],
-    /// PCI Path (variable length)
+    // PCI Path (variable length)
     // pci_path: [u8; variable],
 }
 
@@ -155,13 +155,13 @@ pub unsafe fn init() {
         None => {
             println!("acpi/dmar: DMAR table not found (IOMMU may not be available)");
             return;
-        }
+        },
     };
 
     // Validate table length
     let dmar_len = (*dmar_ptr).len as usize;
     let min_len = core::mem::size_of::<DmarTable>();
-    
+
     if dmar_len < min_len {
         println!(
             "acpi/dmar: DMAR table too short ({} < {})",
@@ -175,12 +175,9 @@ pub unsafe fn init() {
     // Extract and validate host address width
     // Encoded as N-1, so add 1 to get actual width
     let host_addr_width = dmar.host_address_width.wrapping_add(1);
-    
+
     if host_addr_width < 30 || host_addr_width > 64 {
-        println!(
-            "acpi/dmar: invalid host address width {}",
-            host_addr_width
-        );
+        println!("acpi/dmar: invalid host address width {}", host_addr_width);
         return;
     }
 
@@ -191,8 +188,7 @@ pub unsafe fn init() {
 
     println!(
         "acpi/dmar: initialized (host_addr_width={}, flags={:#x})",
-        host_addr_width,
-        dmar.flags
+        host_addr_width, dmar.flags
     );
 
     // Parse sub-structures
@@ -212,7 +208,7 @@ unsafe fn parse_dmar_structures(dmar_ptr: *const u8, dmar_len: usize) {
 
     while offset + core::mem::size_of::<DmarStructureHeader>() <= dmar_len {
         let struct_hdr = &*((dmar_ptr.add(offset)) as *const DmarStructureHeader);
-        
+
         if struct_hdr.length == 0 || offset + struct_hdr.length as usize > dmar_len {
             println!("acpi/dmar: invalid structure at offset {}", offset);
             break;
@@ -222,24 +218,23 @@ unsafe fn parse_dmar_structures(dmar_ptr: *const u8, dmar_len: usize) {
             Ok(DmarStructureType::HardwareUnitDefinition) => {
                 parse_drhd(dmar_ptr.add(offset), struct_hdr.length as usize);
                 drhd_count += 1;
-            }
+            },
             Ok(DmarStructureType::ReservedMemoryRegion) => {
                 parse_rmrr(dmar_ptr.add(offset), struct_hdr.length as usize);
                 rmrr_count += 1;
-            }
+            },
             Ok(DmarStructureType::RootAtsCapability) => {
                 println!("acpi/dmar: ATSR structure found (not fully parsed)");
-            }
+            },
             Ok(DmarStructureType::Sasatc) => {
                 println!("acpi/dmar: SATC structure found (not fully parsed)");
-            }
+            },
             Err(_) => {
                 println!(
                     "acpi/dmar: unknown structure type {:#x} at offset {}",
-                    struct_hdr.structure_type,
-                    offset
+                    struct_hdr.structure_type, offset
                 );
-            }
+            },
         }
 
         offset += struct_hdr.length as usize;
@@ -267,9 +262,7 @@ unsafe fn parse_drhd(ptr: *const u8, length: usize) {
 
     println!(
         "acpi/dmar: DRHD @ {:#x}, segment {}, include_all={}",
-        drhd.register_base_addr,
-        drhd.pci_segment,
-        include_pci_all
+        drhd.register_base_addr, drhd.pci_segment, include_pci_all
     );
 
     // Validate register base address
@@ -289,18 +282,17 @@ unsafe fn parse_drhd(ptr: *const u8, length: usize) {
     // Parse device scope entries (if any)
     let device_scope_start = core::mem::size_of::<DrhdHeader>();
     let mut ds_offset = device_scope_start;
-    
+
     while ds_offset + core::mem::size_of::<DeviceScopeEntry>() <= length {
         let entry = &*((ptr.add(ds_offset)) as *const DeviceScopeEntry);
-        
+
         if entry.length == 0 || ds_offset + entry.length as usize > length {
             break;
         }
 
         println!(
             "acpi/dmar:   device scope type {}, len {}",
-            entry.entry_type,
-            entry.length
+            entry.entry_type, entry.length
         );
 
         ds_offset += entry.length as usize;
@@ -322,9 +314,7 @@ unsafe fn parse_rmrr(ptr: *const u8, length: usize) {
 
     println!(
         "acpi/dmar: RMRR segment {}, base {:#x}, limit {:#x}",
-        rmrr.pci_segment,
-        rmrr.rmrr_base_addr,
-        rmrr.rmrr_limit_addr
+        rmrr.pci_segment, rmrr.rmrr_base_addr, rmrr.rmrr_limit_addr
     );
 
     // Validate addresses

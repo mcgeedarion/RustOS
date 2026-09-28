@@ -329,7 +329,9 @@ pub fn sys_setpgid(pid: u32, pgid: u32) -> isize {
         // pgid must exist in the same session or equal target_pid.
         if target_pgid as usize != target_pid {
             let pgid_exists = crate::proc::scheduler::with_procs_ro(|procs| {
-                procs.iter().any(|p| p.pgid == target_pgid as usize && p.sid == caller_sid)
+                procs
+                    .iter()
+                    .any(|p| p.pgid == target_pgid as usize && p.sid == caller_sid)
             });
             if !pgid_exists {
                 return -1isize; // EPERM

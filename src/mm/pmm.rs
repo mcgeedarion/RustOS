@@ -392,12 +392,20 @@ extern "C" {
 fn kernel_phys_range() -> (usize, usize) {
     use crate::mm::phys::PHYS_OFFSET;
     let start_va = unsafe { &_kernel_start as *const u8 as usize };
-    let end_va   = unsafe { &_end as *const u8 as usize };
+    let end_va = unsafe { &_end as *const u8 as usize };
     // If the linker symbols are virtual addresses in the direct map, convert;
     // if they are already physical (e.g. identity-mapped), subtraction yields
     // the same result because PHYS_OFFSET == 0 in that case.
-    let start_pa = if start_va >= PHYS_OFFSET { start_va - PHYS_OFFSET } else { start_va };
-    let end_pa   = if end_va   >= PHYS_OFFSET { end_va   - PHYS_OFFSET } else { end_va };
+    let start_pa = if start_va >= PHYS_OFFSET {
+        start_va - PHYS_OFFSET
+    } else {
+        start_va
+    };
+    let end_pa = if end_va >= PHYS_OFFSET {
+        end_va - PHYS_OFFSET
+    } else {
+        end_va
+    };
     (start_pa, end_pa)
 }
 
@@ -511,7 +519,7 @@ unsafe fn buddy_free_page(pa: usize) {
                 // Should not happen, but push the buddy back rather than leaking.
                 buddy_push(node, bpa, current_order);
                 break;
-            }
+            },
         };
         if bpi.order.load(Ordering::Relaxed) as usize != current_order
             || bpi.numa_node.load(Ordering::Relaxed) != node

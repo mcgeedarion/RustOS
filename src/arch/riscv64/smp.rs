@@ -31,7 +31,7 @@ pub fn bring_up_secondaries() {
                     hart_id
                 );
                 continue;
-            }
+            },
         };
 
         SECONDARY_STACK_TOP.store(stack_top, Ordering::Release);
@@ -54,10 +54,7 @@ pub fn bring_up_secondaries() {
         let start = super::hal::read_time();
         while SECONDARY_STARTED.load(Ordering::Acquire) == 0 {
             if super::hal::read_time().wrapping_sub(start) > timeout {
-                crate::serial_println!(
-                    "riscv64: timeout waiting for secondary hart={}",
-                    hart_id
-                );
+                crate::serial_println!("riscv64: timeout waiting for secondary hart={}", hart_id);
                 break;
             }
             core::hint::spin_loop();
@@ -77,7 +74,7 @@ extern "C" fn secondary_entry() -> ! {
     unsafe {
         // Enable FPU
         super::hal::fp_init();
-        
+
         // Set up interrupt handling
         super::interrupts::init_percpu();
     }

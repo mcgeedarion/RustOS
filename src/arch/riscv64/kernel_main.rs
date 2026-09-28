@@ -48,10 +48,7 @@ pub fn init(boot_info: &'static BootInfo) -> ! {
 
     // 4. Timer.
     crate::time::init();
-    crate::serial_println!(
-        "time: clocksource={:?}",
-        crate::time::clocksource()
-    );
+    crate::serial_println!("time: clocksource={:?}", crate::time::clocksource());
 
     // 5. Interrupt controller (PLIC/APLIC or SBI-based).
     crate::irq::riscv64::plic::init();
@@ -113,10 +110,10 @@ pub fn init(boot_info: &'static BootInfo) -> ! {
         super::hal::interrupts_enable();
     }
     crate::serial_println!("riscv64: kernel_main: idle");
-    
+
     // CI boot sentinel — printed exactly once, just before the idle loop.
     crate::serial_println!("RUSTOS_BOOT_OK v1");
-    
+
     loop {
         unsafe {
             core::arch::asm!("wfi", options(nostack, nomem));

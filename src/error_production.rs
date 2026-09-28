@@ -25,13 +25,13 @@
 
 extern crate alloc;
 
+use alloc::string::String;
 use core::fmt;
 use core::num::TryFromIntError;
-use alloc::string::String;
 
 /// Prelude module for convenient imports
 pub mod prelude {
-    pub use super::{KernelError, KernelResult, ErrorContext};
+    pub use super::{ErrorContext, KernelError, KernelResult};
 }
 
 /// Comprehensive kernel error types with errno mapping
@@ -225,7 +225,7 @@ pub trait ErrorContext<T> {
     fn context<C>(self, context: C) -> Result<T, KernelError>
     where
         C: Into<&'static str>;
-    
+
     fn with_context<C, F>(self, f: F) -> Result<T, KernelError>
     where
         C: Into<&'static str>,
@@ -244,7 +244,7 @@ where
         // In production, we could log the context here
         self.map_err(|e| e.into())
     }
-    
+
     #[inline]
     fn with_context<C, F>(self, _f: F) -> Result<T, KernelError>
     where
@@ -321,7 +321,7 @@ macro_rules! syscall_wrapper_safe {
             Err(e) => {
                 let errno: $crate::error::KernelError = e.into();
                 -(errno as isize)
-            }
+            },
         }
     }};
 }
@@ -364,7 +364,7 @@ impl From<TryFromIntError> for KernelError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_error_conversion() {
         let err = KernelError::NotFound;
@@ -372,18 +372,18 @@ mod tests {
         assert_eq!(i32::from(err), 2);
         assert_eq!(u32::from(err), 2);
     }
-    
+
     #[test]
     fn test_syscall_result() {
         let ok_result: KernelResult<i32> = Ok(42);
         let syscall_ok = to_syscall_result(ok_result);
         assert_eq!(syscall_ok, Ok(42));
-        
+
         let err_result: KernelResult<i32> = Err(KernelError::NotFound);
         let syscall_err = to_syscall_result(err_result);
         assert_eq!(syscall_err, Err(-2));
     }
-    
+
     #[test]
     fn test_is_syscall_error() {
         assert!(!is_syscall_error(42));
@@ -391,10 +391,13 @@ mod tests {
         assert!(is_syscall_error(-1));
         assert!(is_syscall_error(-2));
     }
-    
+
     #[test]
     fn test_error_display() {
-        assert_eq!(format!("{}", KernelError::NotFound), "No such file or directory");
+        assert_eq!(
+            format!("{}", KernelError::NotFound),
+            "No such file or directory"
+        );
         assert_eq!(format!("{}", KernelError::OutOfMemory), "Out of memory");
     }
 }

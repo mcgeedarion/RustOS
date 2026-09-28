@@ -200,7 +200,7 @@ pub fn create_cgroup(parent: CgroupId, name: &str) -> Result<CgroupId, isize> {
             // This should never happen as we checked parent exists earlier
             tbl.nodes.remove(&id);
             return Err(-2); // ENOENT
-        }
+        },
     }
     Ok(id)
 }
@@ -262,7 +262,7 @@ pub fn move_pid(pid: usize, target: CgroupId) -> isize {
         Some(node) => {
             node.pids.push(pid);
             node.stat.nr_pids += 1;
-        }
+        },
         None => return -2, // ENOENT - target disappeared (shouldn't happen)
     }
     0

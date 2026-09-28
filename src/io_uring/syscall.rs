@@ -130,7 +130,8 @@ pub fn sys_io_uring_setup(entries: u32, params_va: usize) -> isize {
         return cq_va;
     }
 
-    let filled = ring::with_ring(ring_idx, |r| r.build_params()).unwrap_or(IoUringParams::default());
+    let filled =
+        ring::with_ring(ring_idx, |r| r.build_params()).unwrap_or(IoUringParams::default());
     let params_bytes: &[u8] = unsafe {
         core::slice::from_raw_parts(
             &filled as *const IoUringParams as *const u8,

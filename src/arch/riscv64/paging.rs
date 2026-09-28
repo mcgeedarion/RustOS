@@ -44,15 +44,15 @@ pub const SATP_MODE_SV39: usize = 8 << 60;
 const PTE_PPN_MASK: u64 = 0x003F_FFFF_FFFF_FC00;
 
 // Public PTE flag constants (mirrors the x86_64 API surface).
-pub const PTE_VALID: u64 = 1 << 0;    // V
-pub const PTE_READ: u64 = 1 << 1;     // R
-pub const PTE_WRITE: u64 = 1 << 2;    // W
-pub const PTE_EXEC: u64 = 1 << 3;     // X
-pub const PTE_USER: u64 = 1 << 4;     // U
-pub const PTE_GLOBAL: u64 = 1 << 5;   // G
+pub const PTE_VALID: u64 = 1 << 0; // V
+pub const PTE_READ: u64 = 1 << 1; // R
+pub const PTE_WRITE: u64 = 1 << 2; // W
+pub const PTE_EXEC: u64 = 1 << 3; // X
+pub const PTE_USER: u64 = 1 << 4; // U
+pub const PTE_GLOBAL: u64 = 1 << 5; // G
 pub const PTE_ACCESSED: u64 = 1 << 6; // A
-pub const PTE_DIRTY: u64 = 1 << 7;    // D
-pub const PTE_COW: u64 = 1 << 8;      // software-defined CoW marker
+pub const PTE_DIRTY: u64 = 1 << 7; // D
+pub const PTE_COW: u64 = 1 << 8; // software-defined CoW marker
 
 // Internal shorthands.
 const VALID: u64 = PTE_VALID;
@@ -79,8 +79,7 @@ pub fn satp_to_root_pa(satp: usize) -> usize {
 
 /// Kernel satp — lazily captured from the live CSR on the first call.
 pub fn kernel_satp() -> usize {
-    static KERNEL_SATP: core::sync::atomic::AtomicUsize =
-        core::sync::atomic::AtomicUsize::new(0);
+    static KERNEL_SATP: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
     let cached = KERNEL_SATP.load(core::sync::atomic::Ordering::Relaxed);
     if cached != 0 {
         return cached;
@@ -164,11 +163,17 @@ unsafe fn pte_ptr(table_pa: usize, idx: usize) -> *mut u64 {
 // ── VA index extraction ───────────────────────────────────────────────────────
 
 #[inline]
-fn vpn2(va: usize) -> usize { (va >> 30) & 0x1FF }
+fn vpn2(va: usize) -> usize {
+    (va >> 30) & 0x1FF
+}
 #[inline]
-fn vpn1(va: usize) -> usize { (va >> 21) & 0x1FF }
+fn vpn1(va: usize) -> usize {
+    (va >> 21) & 0x1FF
+}
 #[inline]
-fn vpn0(va: usize) -> usize { (va >> PAGE_SHIFT) & 0x1FF }
+fn vpn0(va: usize) -> usize {
+    (va >> PAGE_SHIFT) & 0x1FF
+}
 
 // ── Table walk (mutable) ──────────────────────────────────────────────────────
 

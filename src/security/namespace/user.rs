@@ -15,25 +15,25 @@ static NEXT_NS_ID: AtomicU32 = AtomicU32::new(1);
 /// UID/GID mapping entry
 #[derive(Debug, Clone)]
 pub struct IdMapping {
-    pub ns_start: u32,      // Starting ID in the namespace
-    pub host_start: u32,    // Starting ID on the host
-    pub length: u32,        // Number of IDs to map
+    pub ns_start: u32,   // Starting ID in the namespace
+    pub host_start: u32, // Starting ID on the host
+    pub length: u32,     // Number of IDs to map
 }
 
 /// User namespace containing UID/GID mappings and capabilities
 pub struct UserNamespace {
     id: u32,
     parent: Option<&'static UserNamespace>,
-    
+
     // UID mappings: container_uid -> host_uid ranges
     uid_mappings: SpinLock<Vec<IdMapping>>,
-    
-    // GID mappings: container_gid -> host_gid ranges  
+
+    // GID mappings: container_gid -> host_gid ranges
     gid_mappings: SpinLock<Vec<IdMapping>>,
-    
+
     // Capabilities granted within this namespace
     capabilities: SpinLock<u64>,
-    
+
     // Root UIDs/GIDs in this namespace
     root_uid: AtomicU32,
     root_gid: AtomicU32,
@@ -43,7 +43,7 @@ impl UserNamespace {
     /// Create a new user namespace
     pub fn new(parent: Option<&'static UserNamespace>) -> Self {
         let id = NEXT_NS_ID.fetch_add(1, Ordering::Relaxed);
-        
+
         Self {
             id,
             parent,
@@ -66,73 +66,89 @@ impl UserNamespace {
     }
 
     /// Add a UID mapping
-    /// 
+    ///
     /// Maps [ns_start, ns_start + length) in the namespace to
     /// [host_start, host_start + length) on the host.
-    pub fn add_uid_mapping(&self, ns_start: u32, host_start: u32, length: u32) -> Result<(), NamespaceError> {
-        if length == 0 || ns_start.checked_add(length).is_none() || host_start.checked_add(length).is_none() {
+    pub fn add_uid_mapping(
+        &self,
+        ns_start: u32,
+        host_start: u32,
+        length: u32,
+    ) -> Result<(), NamespaceError> {
+        if length == 0
+            || ns_start.checked_add(length).is_none()
+            || host_start.checked_add(length).is_none()
+        {
             return Err(NamespaceError::InvalidMapping);
         }
 
         let mut mappings = self.uid_mappings.lock();
-        
+
         // Check for overlapping mappings
         for existing in mappings.iter() {
             let existing_end = existing.ns_start + existing.length;
             let new_end = ns_start + length;
-            
+
             if ns_start < existing_end && new_end > existing.ns_start {
                 return Err(NamespaceError::MappingOverlap);
             }
         }
-        
+
         mappings.push(IdMapping {
             ns_start,
             host_start,
             length,
         });
-        
+
         Ok(())
     }
 
     /// Add a GID mapping
-    pub fn add_gid_mapping(&self, ns_start: u32, host_start: u32, length: u32) -> Result<(), NamespaceError> {
-        if length == 0 || ns_start.checked_add(length).is_none() || host_start.checked_add(length).is_none() {
+    pub fn add_gid_mapping(
+        &self,
+        ns_start: u32,
+        host_start: u32,
+        length: u32,
+    ) -> Result<(), NamespaceError> {
+        if length == 0
+            || ns_start.checked_add(length).is_none()
+            || host_start.checked_add(length).is_none()
+        {
             return Err(NamespaceError::InvalidMapping);
         }
 
         let mut mappings = self.gid_mappings.lock();
-        
+
         // Check for overlapping mappings
         for existing in mappings.iter() {
             let existing_end = existing.ns_start + existing.length;
             let new_end = ns_start + length;
-            
+
             if ns_start < existing_end && new_end > existing.ns_start {
                 return Err(NamespaceError::MappingOverlap);
             }
         }
-        
+
         mappings.push(IdMapping {
             ns_start,
             host_start,
             length,
         });
-        
+
         Ok(())
     }
 
     /// Translate a UID from namespace to host
     pub fn map_uid_to_host(&self, ns_uid: u32) -> Result<u32, NamespaceError> {
         let mappings = self.uid_mappings.lock();
-        
+
         for mapping in mappings.iter() {
             if ns_uid >= mapping.ns_start && ns_uid < mapping.ns_start + mapping.length {
                 let offset = ns_uid - mapping.ns_start;
                 return Ok(mapping.host_start + offset);
             }
         }
-        
+
         // No mapping found - deny access
         Err(NamespaceError::NoMapping)
     }
@@ -140,14 +156,14 @@ impl UserNamespace {
     /// Translate a GID from namespace to host
     pub fn map_gid_to_host(&self, ns_gid: u32) -> Result<u32, NamespaceError> {
         let mappings = self.gid_mappings.lock();
-        
+
         for mapping in mappings.iter() {
             if ns_gid >= mapping.ns_start && ns_gid < mapping.ns_start + mapping.length {
                 let offset = ns_gid - mapping.ns_start;
                 return Ok(mapping.host_start + offset);
             }
         }
-        
+
         Err(NamespaceError::NoMapping)
     }
 
@@ -284,7 +300,7 @@ impl ProcessCredentials {
         if self.euid.load(Ordering::Relaxed) == self.user_ns.root_uid() {
             return self.user_ns.has_capability(cap);
         }
-        
+
         // Non-root has no capabilities by default
         false
     }
@@ -298,7 +314,7 @@ impl ProcessCredentials {
     pub fn set_euid(&self, new_euid: u32) -> Result<(), NamespaceError> {
         let current_uid = self.uid.load(Ordering::Relaxed);
         let current_euid = self.euid.load(Ordering::Relaxed);
-        
+
         // Allow if:
         // 1. Process is root in namespace
         // 2. Setting to current real UID
@@ -350,16 +366,16 @@ pub fn get_initial_user_ns() -> &'static UserNamespace {
         if INITIAL_USER_NS.is_none() {
             // Create root namespace with all capabilities
             let ns = UserNamespace::new(None);
-            
+
             // Map all UIDs/GIDs 1:1 in root namespace
             ns.add_uid_mapping(0, 0, u32::MAX).ok();
             ns.add_gid_mapping(0, 0, u32::MAX).ok();
-            
+
             // Grant all capabilities to root namespace
             for i in 0..=40u64 {
                 ns.grant_capability(core::mem::transmute(i)).ok();
             }
-            
+
             INITIAL_USER_NS = Some(ns);
         }
         INITIAL_USER_NS.as_ref().unwrap()
@@ -373,10 +389,10 @@ mod tests {
     #[test]
     fn test_uid_mapping() {
         let ns = UserNamespace::new(None);
-        
+
         // Map namespace UIDs 0-99 to host UIDs 1000-1099
         ns.add_uid_mapping(0, 1000, 100).unwrap();
-        
+
         assert_eq!(ns.map_uid_to_host(0).unwrap(), 1000);
         assert_eq!(ns.map_uid_to_host(50).unwrap(), 1050);
         assert_eq!(ns.map_uid_to_host(99).unwrap(), 1099);
@@ -386,12 +402,12 @@ mod tests {
     #[test]
     fn test_capability_grant() {
         let ns = UserNamespace::new(None);
-        
+
         assert!(!ns.has_capability(Capability::CapSysAdmin));
-        
+
         ns.grant_capability(Capability::CapSysAdmin).unwrap();
         assert!(ns.has_capability(Capability::CapSysAdmin));
-        
+
         ns.revoke_capability(Capability::CapSysAdmin).unwrap();
         assert!(!ns.has_capability(Capability::CapSysAdmin));
     }
@@ -401,13 +417,13 @@ mod tests {
         let ns = UserNamespace::new(None);
         ns.add_uid_mapping(0, 1000, 100).unwrap();
         ns.set_root_uid(0);
-        
+
         let creds = ProcessCredentials::new(&ns, 0, 0);
-        
+
         // Root should have capabilities
         ns.grant_capability(Capability::CapSetuid).unwrap();
         assert!(creds.has_capability(Capability::CapSetuid));
-        
+
         // Should be able to change EUID
         assert!(creds.set_euid(50).is_ok());
         assert_eq!(creds.euid.load(Ordering::Relaxed), 50);

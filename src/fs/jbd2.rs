@@ -429,7 +429,7 @@ pub fn replay_from_block_list(
 // ============================================================================
 
 /// Validate journal integrity without replaying.
-/// 
+///
 /// This function performs comprehensive validation of the journal structure:
 /// - Checks journal superblock magic number
 /// - Verifies journal sequence numbers are monotonically increasing
@@ -467,36 +467,40 @@ pub enum JournalValidationError {
     BadSuperblockMagic,
     BadSuperblockType,
     UnsupportedFeature(u32),
-    SequenceGap(u32, u32),  // expected, found
+    SequenceGap(u32, u32), // expected, found
     DescriptorBlockCorrupt,
-    CommitBlockMismatch(u32, u32),  // expected seq, found seq
+    CommitBlockMismatch(u32, u32), // expected seq, found seq
     OutOfBounds,
     ChecksumFailure,
 }
 
 /// Validate journal superblock integrity
-pub fn validate_journal_superblock(journal: &[u8]) -> Result<JournalSuperblock, JournalValidationError> {
-    let sb_block = journal.get(..1024).ok_or(JournalValidationError::EmptyJournal)?;
+pub fn validate_journal_superblock(
+    journal: &[u8],
+) -> Result<JournalSuperblock, JournalValidationError> {
+    let sb_block = journal
+        .get(..1024)
+        .ok_or(JournalValidationError::EmptyJournal)?;
     let sb = parse_superblock(sb_block).ok_or(JournalValidationError::BadSuperblockMagic)?;
-    
+
     // Validate magic number
     const JBD2_MAGIC_EXPECTED: u32 = 0xC03B3998;
     let magic = be32(sb_block, 0).ok_or(JournalValidationError::BadSuperblockMagic)?;
     if magic != JBD2_MAGIC_EXPECTED {
         return Err(JournalValidationError::BadSuperblockMagic);
     }
-    
+
     // Validate block size
     if sb.block_size == 0 || sb.block_size > 65536 || (sb.block_size & (sb.block_size - 1)) != 0 {
         return Err(JournalValidationError::InvalidBlockSize);
     }
-    
+
     // Check for unsupported features
     let unsupported = unsupported_incompat(sb.features);
     if unsupported != 0 {
         return Err(JournalValidationError::UnsupportedFeature(unsupported));
     }
-    
+
     Ok(sb)
 }
 
@@ -505,21 +509,27 @@ fn validate_sequences(
     journal: &[u8],
     sb: &JournalSuperblock,
 ) -> Result<(u32, u32, usize), JournalValidationError> {
-    let mut idx = if sb.start == 0 { sb.first as usize } else { sb.start as usize };
-    if idx == 0 { idx = 1; }
-    
+    let mut idx = if sb.start == 0 {
+        sb.first as usize
+    } else {
+        sb.start as usize
+    };
+    if idx == 0 {
+        idx = 1;
+    }
+
     let max_len = sb.max_len as usize;
     let mut blocks_scanned = 0usize;
     let mut first_seq: Option<u32> = None;
     let mut last_seq: Option<u32> = None;
     let mut valid_blocks = 0usize;
-    
+
     while blocks_scanned < max_len {
         let block = match block_by_journal_index(journal, sb.block_size, idx) {
             Some(b) => b,
             None => break,
         };
-        
+
         if let Some((_, _, seq)) = header(block) {
             if first_seq.is_none() {
                 first_seq = Some(seq);
@@ -527,21 +537,21 @@ fn validate_sequences(
             last_seq = Some(seq);
             valid_blocks += 1;
         }
-        
+
         idx += 1;
         if idx >= max_len {
             idx = sb.first as usize;
         }
         blocks_scanned += 1;
     }
-    
+
     Ok((first_seq.unwrap_or(0), last_seq.unwrap_or(0), valid_blocks))
 }
 
 /// Full journal validation - production ready implementation
 pub fn validate_journal(journal: &[u8]) -> Result<JournalValidationReport, JournalValidationError> {
     let mut report = JournalValidationReport::default();
-    
+
     // Step 1: Validate superblock
     let sb = match validate_journal_superblock(journal) {
         Ok(s) => {
@@ -552,33 +562,39 @@ pub fn validate_journal(journal: &[u8]) -> Result<JournalValidationReport, Journ
         },
         Err(e) => return Err(e),
     };
-    
+
     // Step 2: Scan and validate all blocks
-    let mut idx = if sb.start == 0 { sb.first as usize } else { sb.start as usize };
-    if idx == 0 { idx = 1; }
-    
+    let mut idx = if sb.start == 0 {
+        sb.first as usize
+    } else {
+        sb.start as usize
+    };
+    if idx == 0 {
+        idx = 1;
+    }
+
     let max_len = sb.max_len as usize;
     let mut blocks_scanned = 0usize;
     let mut current_txn_seq: Option<u32> = None;
     let mut pending_tags: usize = 0;
-    
+
     while blocks_scanned < max_len {
         let block = match block_by_journal_index(journal, sb.block_size, idx) {
             Some(b) => b,
             None => break,
         };
-        
+
         report.total_blocks_scanned += 1;
-        
+
         if let Some((magic, ty, seq)) = header(block) {
             let _ = magic; // Already validated in header()
-            
+
             // Track sequence range
             if report.first_valid_sequence == 0 {
                 report.first_valid_sequence = seq;
             }
             report.last_valid_sequence = seq;
-            
+
             match ty {
                 JBD2_DESCRIPTOR_BLOCK => {
                     let tags = parse_descriptor(block, &sb);
@@ -597,7 +613,10 @@ pub fn validate_journal(journal: &[u8]) -> Result<JournalValidationReport, Journ
                 JBD2_COMMIT_BLOCK => {
                     if let Some(expected_seq) = current_txn_seq {
                         if seq != expected_seq {
-                            return Err(JournalValidationError::CommitBlockMismatch(expected_seq, seq));
+                            return Err(JournalValidationError::CommitBlockMismatch(
+                                expected_seq,
+                                seq,
+                            ));
                         }
                         report.transactions_committed += 1;
                         current_txn_seq = None;
@@ -616,22 +635,22 @@ pub fn validate_journal(journal: &[u8]) -> Result<JournalValidationReport, Journ
                 },
             }
         }
-        
+
         idx += 1;
         if idx >= max_len {
             idx = sb.first as usize;
         }
         blocks_scanned += 1;
     }
-    
+
     // Check for incomplete transaction (descriptor without commit)
     if current_txn_seq.is_some() {
         report.incomplete_transactions += 1;
     }
-    
+
     // Validate sequence continuity (optional - some gaps may be normal after cleanup)
     report.sequence_valid = report.first_valid_sequence <= report.last_valid_sequence;
-    
+
     Ok(report)
 }
 
@@ -653,26 +672,26 @@ pub fn validate_ext4_journal(
     journal_inode_block: u64,
     do_replay: bool,
 ) -> Result<JournalValidationReport, JournalValidationError> {
-    use crate::ext4::{read_block, get_journal_inode};
-    
+    use crate::ext4::{get_journal_inode, read_block};
+
     // Get journal inode location (simplified - actual impl would use ext4 module)
     let journal_block = journal_inode_block;
-    
+
     // Extract journal data from filesystem
     let block_size = 4096; // Would be read from ext4 superblock
     let journal_len = 8192 * block_size; // Typical journal size
-    
+
     let journal_start = (journal_block as usize)
         .checked_mul(block_size)
         .ok_or(JournalValidationError::OutOfBounds)?;
-    
+
     let journal = fs_data
         .get(journal_start..journal_start + journal_len)
         .ok_or(JournalValidationError::OutOfBounds)?;
-    
+
     // Validate journal structure
     let mut report = validate_journal(journal)?;
-    
+
     // Optionally replay valid transactions
     if do_replay && report.incomplete_transactions == 0 {
         let replay_result = replay_journal_image(fs_data, journal);
@@ -687,14 +706,14 @@ pub fn validate_ext4_journal(
             },
         }
     }
-    
+
     Ok(report)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_validate_empty_journal() {
         let empty_journal: [u8; 0] = [];
@@ -703,7 +722,7 @@ mod tests {
             Err(JournalValidationError::EmptyJournal)
         );
     }
-    
+
     #[test]
     fn test_validate_bad_magic() {
         let mut bad_journal = vec![0u8; 1024];
@@ -714,7 +733,7 @@ mod tests {
             Err(JournalValidationError::BadSuperblockMagic)
         );
     }
-    
+
     #[test]
     fn test_validate_invalid_block_size() {
         let mut journal = vec![0u8; 4096];
@@ -724,13 +743,13 @@ mod tests {
         journal[12..16].copy_from_slice(&1000u32.to_be_bytes());
         // Write superblock type
         journal[4..8].copy_from_slice(&JBD2_SUPERBLOCK_V1.to_be_bytes());
-        
+
         assert_eq!(
             validate_journal(&journal),
             Err(JournalValidationError::InvalidBlockSize)
         );
     }
-    
+
     #[test]
     fn test_validation_report_default() {
         let report = JournalValidationReport::default();
@@ -784,68 +803,68 @@ impl From<JournalError> for i32 {
 /// Returns a transaction handle on success.
 pub fn journal_start_write() -> Result<u32, JournalError> {
     let mut state = JOURNAL_STATE.lock();
-    
+
     if state.in_transaction {
         return Err(JournalError::NoTransaction);
     }
-    
+
     state.current_sequence = state.current_sequence.wrapping_add(1);
     state.in_transaction = true;
     state.dirty_blocks = 0;
-    
+
     Ok(state.current_sequence)
 }
 
 /// Write a block through the journal.
-/// 
+///
 /// # Arguments
 /// * `txn` - Transaction handle from `journal_start_write`
 /// * `block_num` - Physical block number to write
 /// * `data` - Block data (must be exactly one block size)
 pub fn journal_write_block(txn: u32, block_num: u64, data: &[u8]) -> Result<(), JournalError> {
     let mut state = JOURNAL_STATE.lock();
-    
+
     if !state.in_transaction || state.current_sequence != txn {
         return Err(JournalError::NoTransaction);
     }
-    
+
     // In a full implementation, we would:
     // 1. Write descriptor tag to journal
     // 2. Write data block to journal
     // 3. Track the mapping for replay
-    
+
     // For now, write directly to the block device via ext4
     let result = crate::fs::ext4::with_fs(|fs| {
         // Calculate sector address
         let block_size = fs.block_size as usize;
         let sectors_per_block = block_size / 512;
-        
+
         // Write each sector of the block
         for sector_offset in 0..sectors_per_block {
             let sector_num = block_num * sectors_per_block as u64 + sector_offset as u64;
             let start = sector_offset * 512;
             let end = start + 512;
-            
+
             if end > data.len() {
                 break;
             }
-            
+
             let mut sector_data = [0u8; 512];
             sector_data.copy_from_slice(&data[start..end]);
-            
+
             if !crate::block::virtio_blk::write_sector(sector_num, &sector_data) {
                 return Err(JournalError::IoError);
             }
         }
-        
+
         Ok(())
     });
-    
+
     match result {
         Some(Ok(())) => {
             state.dirty_blocks += 1;
             Ok(())
-        }
+        },
         _ => Err(JournalError::IoError),
     }
 }
@@ -853,20 +872,24 @@ pub fn journal_write_block(txn: u32, block_num: u64, data: &[u8]) -> Result<(), 
 /// Commit the current journal transaction.
 pub fn journal_commit(txn: u32) -> Result<(), JournalError> {
     let mut state = JOURNAL_STATE.lock();
-    
+
     if !state.in_transaction || state.current_sequence != txn {
         return Err(JournalError::NoTransaction);
     }
-    
+
     // Write commit block to journal
     // In a full implementation, this would:
     // 1. Write commit block with checksum
     // 2. Update journal superblock with new sequence
-    
+
     state.in_transaction = false;
-    
-    log::debug!("jbd2: committed transaction {} ({} blocks)", txn, state.dirty_blocks);
-    
+
+    log::debug!(
+        "jbd2: committed transaction {} ({} blocks)",
+        txn,
+        state.dirty_blocks
+    );
+
     Ok(())
 }
 
@@ -877,7 +900,7 @@ pub fn replay_journal() -> Result<(), JournalError> {
         // Get journal location from superblock
         let journal_block = fs.journal_block;
         let block_size = fs.block_size as usize;
-        
+
         // Read journal superblock
         let mut journal_sb = vec![0u8; block_size];
         for i in 0..(block_size / 512) {
@@ -888,16 +911,16 @@ pub fn replay_journal() -> Result<(), JournalError> {
             }
             journal_sb[i * 512..(i + 1) * 512].copy_from_slice(&sector_data);
         }
-        
+
         // Parse and validate journal
         if let Some(sb) = parse_superblock(&journal_sb) {
             // Replay transactions
             let _ = replay_journal_image(&[], &sb);
         }
-        
+
         Ok(())
     });
-    
+
     result.unwrap_or(Err(JournalError::IoError))
 }
 
@@ -907,13 +930,13 @@ pub fn checkpoint_journal() -> Result<(), JournalError> {
     if !crate::block::virtio_blk::flush_cache() {
         return Err(JournalError::IoError);
     }
-    
+
     // Update journal superblock to indicate checkpoint complete
     // In a full implementation, this would:
     // 1. Mark all replayed transactions as checkpointed
     // 2. Free journal space for reuse
-    
+
     log::debug!("jbd2: checkpoint complete");
-    
+
     Ok(())
 }

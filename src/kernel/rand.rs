@@ -62,20 +62,20 @@ fn read_apic_id() -> u32 {
 
 pub fn seed_from_hw() {
     let raw = hw_seed_raw();
-    
+
     #[cfg(target_arch = "x86_64")]
     {
         // Combine multiple entropy sources for better seeding
         let (rdrand_val, rdrand_ok) = rdrand_asm!();
         let apic_id = read_apic_id() as u64;
-        
+
         let mut seed = raw ^ 0xDEAD_BEEF_CAFE_BABE_u64;
         if rdrand_ok {
             // Mix RDRAND output with golden ratio constant for better distribution
             seed = seed.wrapping_add(rdrand_val.wrapping_mul(0x9E37_79B9_7F4A_7C15));
         }
         seed ^= apic_id.wrapping_mul(0x7F4A_7C15_9E37_79B9);
-        
+
         let seed = if seed == 0 {
             0xDEAD_BEEF_CAFE_BABE_u64
         } else {
@@ -83,7 +83,7 @@ pub fn seed_from_hw() {
         };
         STATE.store(seed, Ordering::Release);
     }
-    
+
     #[cfg(target_arch = "aarch64")]
     {
         let seed = if raw == 0 {
@@ -151,12 +151,12 @@ pub fn next_u64() -> u64 {
         // Use Acquire ordering to ensure we see all prior writes to STATE
         let s = STATE.load(Ordering::Acquire);
         let mut z = s;
-        
+
         // Xorshift algorithm with better constants for improved statistical properties
         z ^= z << 13;
         z ^= z >> 7;
         z ^= z << 17;
-        
+
         // Use Release ordering to publish the new state
         match STATE.compare_exchange_weak(s, z, Ordering::Release, Ordering::Acquire) {
             Ok(_) => return z,
@@ -164,7 +164,7 @@ pub fn next_u64() -> u64 {
                 // On contention, use spin_loop hint to reduce power consumption
                 // and improve fairness with other CPUs
                 core::hint::spin_loop();
-            }
+            },
         }
     }
 }
@@ -173,27 +173,27 @@ pub fn next_u64() -> u64 {
 /// to refresh the PRNG state with fresh hardware entropy.
 pub fn reseed_from_hw() {
     let raw = hw_seed_raw();
-    
+
     #[cfg(target_arch = "x86_64")]
     {
         let (rdrand_val, rdrand_ok) = rdrand_asm!();
         let apic_id = read_apic_id() as u64;
-        
+
         let mut new_seed = raw ^ 0xDEAD_BEEF_CAFE_BABE_u64;
         if rdrand_ok {
             new_seed = new_seed.wrapping_add(rdrand_val.wrapping_mul(0x9E37_79B9_7F4A_7C15));
         }
         new_seed ^= apic_id.wrapping_mul(0x7F4A_7C15_9E37_79B9);
-        
+
         if new_seed == 0 {
             new_seed = 0xDEAD_BEEF_CAFE_BABE_u64;
         }
-        
+
         // Mix with existing state rather than replacing entirely
         let old_state = STATE.fetch_xor(new_seed, Ordering::AcqRel);
         let _ = old_state; // Suppress unused warning
     }
-    
+
     #[cfg(target_arch = "aarch64")]
     {
         let new_seed = if raw == 0 {
@@ -201,7 +201,7 @@ pub fn reseed_from_hw() {
         } else {
             raw ^ 0xDEAD_BEEF_CAFE_BABE_u64
         };
-        
+
         let old_state = STATE.fetch_xor(new_seed, Ordering::AcqRel);
         let _ = old_state;
     }

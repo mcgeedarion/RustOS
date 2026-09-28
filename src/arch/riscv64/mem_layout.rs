@@ -21,7 +21,7 @@ pub mod page {
 }
 
 /// Sv39 39-bit VA layout using 4 KiB translation granules (three table levels).
-/// 
+///
 /// RISC-V Sv39 uses a three-level page table:
 ///   - VPN[2] (bits 38:30) → L2 (root)
 ///   - VPN[1] (bits 29:21) → L1 (middle)
@@ -60,16 +60,16 @@ pub mod va39 {
 
 /// RISC-V Sv39 PTE flag bits (privileged spec §4.4).
 pub mod pte {
-    pub const VALID: u64 = 1 << 0;    // V - Valid
-    pub const READ: u64 = 1 << 1;     // R - Readable
-    pub const WRITE: u64 = 1 << 2;    // W - Writable
-    pub const EXEC: u64 = 1 << 3;     // X - Executable
-    pub const USER: u64 = 1 << 4;     // U - User accessible
-    pub const GLOBAL: u64 = 1 << 5;   // G - Global
+    pub const VALID: u64 = 1 << 0; // V - Valid
+    pub const READ: u64 = 1 << 1; // R - Readable
+    pub const WRITE: u64 = 1 << 2; // W - Writable
+    pub const EXEC: u64 = 1 << 3; // X - Executable
+    pub const USER: u64 = 1 << 4; // U - User accessible
+    pub const GLOBAL: u64 = 1 << 5; // G - Global
     pub const ACCESSED: u64 = 1 << 6; // A - Accessed
-    pub const DIRTY: u64 = 1 << 7;    // D - Dirty
-    pub const COW: u64 = 1 << 8;      // Software CoW marker
-    
+    pub const DIRTY: u64 = 1 << 7; // D - Dirty
+    pub const COW: u64 = 1 << 8; // Software CoW marker
+
     pub const ADDR_MASK: u64 = 0x003F_FFFF_FFFF_FC00;
 
     #[inline]
@@ -92,9 +92,9 @@ pub mod satp {
 
 /// Sstatus register bits.
 pub mod sstatus {
-    pub const SIE: usize = 1 << 1;    // Supervisor Interrupt Enable
-    pub const SPIE: usize = 1 << 5;   // Previous SIE
-    pub const SPP: usize = 1 << 8;    // Previous privilege mode
+    pub const SIE: usize = 1 << 1; // Supervisor Interrupt Enable
+    pub const SPIE: usize = 1 << 5; // Previous SIE
+    pub const SPP: usize = 1 << 8; // Previous privilege mode
 }
 
 /// QEMU virt machine defaults.

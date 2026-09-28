@@ -969,8 +969,7 @@ pub fn is_realtime_signal(sig: u32) -> bool {
 }
 
 /// Per-process real-time signal queue for sigqueue(2).
-static RT_SIGNAL_QUEUE: Mutex<BTreeMap<usize, VecDeque<SigInfo>>> =
-    Mutex::new(BTreeMap::new());
+static RT_SIGNAL_QUEUE: Mutex<BTreeMap<usize, VecDeque<SigInfo>>> = Mutex::new(BTreeMap::new());
 
 /// Clear RT signal queue for a process (called on exit).
 pub fn rt_signal_queue_clear(pid: usize) {

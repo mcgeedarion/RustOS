@@ -39,8 +39,8 @@ pub const KERNEL_ARCHITECTURE: KernelArchitecture = KernelArchitecture::Hybrid;
 /// Validates that the hybrid kernel contract is properly configured.
 /// Returns `true` only when the kernel is hybrid and has non-empty in-kernel services.
 const fn validate_hybrid_contract() -> bool {
-    KERNEL_ARCHITECTURE == KernelArchitecture::Hybrid 
-    && !HYBRID_KERNEL_CONTRACT.in_kernel_services.is_empty()
+    KERNEL_ARCHITECTURE == KernelArchitecture::Hybrid
+        && !HYBRID_KERNEL_CONTRACT.in_kernel_services.is_empty()
 }
 
 // Fail compilation if the declared architecture ever stops satisfying the
@@ -78,7 +78,7 @@ pub const fn is_hybrid_kernel() -> bool {
 pub fn log_kernel_architecture() {
     // Early boot logging without depending on log crate being initialized
     serial_write_early(b"RustOS Hybrid Kernel Initializing...\n");
-    
+
     log::info!(
         "kernel architecture: {} (core services in-kernel, drivers/services via schemes + IPC)",
         HYBRID_KERNEL_CONTRACT.name

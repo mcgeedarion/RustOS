@@ -7,8 +7,8 @@
 //!
 //! ## Security Properties Enforced
 //!
-//! - **PID Isolation**: Processes in child PID namespaces cannot see or signal
-//!   processes in parent namespaces
+//! - **PID Isolation**: Processes in child PID namespaces cannot see or signal processes in parent
+//!   namespaces
 //! - **Mount Isolation**: Mount operations are confined to the namespace
 //! - **Network Isolation**: Network sockets and interfaces are namespaced
 //! - **User Isolation**: UID/GID mappings prevent privilege escalation
@@ -105,7 +105,10 @@ impl NamespaceType {
 /// Check user namespace access with hierarchy awareness.
 /// Child user namespaces can access parent resources (with mapping),
 /// but not vice versa.
-fn check_user_ns_access(current: &Arc<super::ns::user_ns::UserNs>, target: &Arc<super::ns::user_ns::UserNs>) -> bool {
+fn check_user_ns_access(
+    current: &Arc<super::ns::user_ns::UserNs>,
+    target: &Arc<super::ns::user_ns::UserNs>,
+) -> bool {
     // Same namespace - always allow
     if Arc::ptr_eq(current, target) {
         return true;
@@ -125,7 +128,10 @@ fn check_user_ns_access(current: &Arc<super::ns::user_ns::UserNs>, target: &Arc<
 
 /// Validate PID namespace isolation for signal operations.
 /// Prevents processes in child PID namespaces from signaling parent namespace processes.
-pub fn validate_pid_signal(sender_ns: &Arc<super::ns::pid_ns::PidNs>, target_ns: &Arc<super::ns::pid_ns::PidNs>) -> Result<(), i32> {
+pub fn validate_pid_signal(
+    sender_ns: &Arc<super::ns::pid_ns::PidNs>,
+    target_ns: &Arc<super::ns::pid_ns::PidNs>,
+) -> Result<(), i32> {
     if !ISOLATION_ENFORCED.load(Ordering::Acquire) {
         return Ok(());
     }
@@ -151,7 +157,10 @@ pub fn validate_pid_signal(sender_ns: &Arc<super::ns::pid_ns::PidNs>, target_ns:
 
 /// Validate mount namespace isolation for mount operations.
 /// Ensures mounts only affect the current namespace.
-pub fn validate_mount_operation(ns: &Arc<super::ns::mnt_ns::MntNs>, target_mnt: Option<&Arc<super::ns::mnt_ns::MntNs>>) -> Result<(), i32> {
+pub fn validate_mount_operation(
+    ns: &Arc<super::ns::mnt_ns::MntNs>,
+    target_mnt: Option<&Arc<super::ns::mnt_ns::MntNs>>,
+) -> Result<(), i32> {
     if !ISOLATION_ENFORCED.load(Ordering::Acquire) {
         return Ok(());
     }
@@ -168,7 +177,10 @@ pub fn validate_mount_operation(ns: &Arc<super::ns::mnt_ns::MntNs>, target_mnt: 
 
 /// Validate network namespace isolation for socket operations.
 /// Prevents cross-namespace socket access.
-pub fn validate_net_socket_access(socket_ns: &Arc<super::ns::net_ns::NetNs>, process_ns: &Arc<super::ns::net_ns::NetNs>) -> Result<(), i32> {
+pub fn validate_net_socket_access(
+    socket_ns: &Arc<super::ns::net_ns::NetNs>,
+    process_ns: &Arc<super::ns::net_ns::NetNs>,
+) -> Result<(), i32> {
     if !ISOLATION_ENFORCED.load(Ordering::Acquire) {
         return Ok(());
     }

@@ -78,14 +78,14 @@ fn check_and_deliver_signals(frame: &mut TrapFrame) {
 fn setup_signal_frame(frame: &mut TrapFrame, signo: u32, handler: usize) {
     // Allocate space on user stack for signal frame
     let user_sp = frame.user_sp;
-    
+
     // Create signal frame (simplified - would need proper struct)
     // Signal frame contains: saved context, signal info, trampoline code
-    
+
     // Update frame to execute signal handler
     frame.pc = handler as u64;
     frame.regs[10] = signo as u64; // First arg = signal number
-    
+
     // Would also set up rt_sigreturn trampoline for returning from handler
 }
 
@@ -93,10 +93,10 @@ fn setup_signal_frame(frame: &mut TrapFrame, signo: u32, handler: usize) {
 /// This is called after syscall processing to return to user mode.
 pub unsafe fn syscall_return(frame: *const TrapFrame) -> ! {
     let f = &*frame;
-    
+
     core::arch::asm!(
         "mv a0, {ret}",       // Return value
-        "mv sp, {usp}",       // User stack pointer  
+        "mv sp, {usp}",       // User stack pointer
         "csrw sepc, {pc}",    // Exception return PC
         "csrw sstatus, {flags}", // Restore status (SPP=0 for user mode)
         "sret",               // Return to user mode

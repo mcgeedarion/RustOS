@@ -60,25 +60,25 @@ impl CState {
 /// ACPI Register addresses (simplified)
 #[repr(C)]
 pub struct AcpiRegisters {
-    pub pm1a_cnt: u16,    // Power Management 1a Control
-    pub pm1b_cnt: u16,    // Power Management 1b Control (optional)
-    pub pm1a_evt: u16,    // Power Management 1a Event
-    pub pm1b_evt: u16,    // Power Management 1b Event
-    pub pm_tmr: u32,      // Power Management Timer
+    pub pm1a_cnt: u16, // Power Management 1a Control
+    pub pm1b_cnt: u16, // Power Management 1b Control (optional)
+    pub pm1a_evt: u16, // Power Management 1a Event
+    pub pm1b_evt: u16, // Power Management 1b Event
+    pub pm_tmr: u32,   // Power Management Timer
 }
 
 /// ACPI sleep control values
 pub mod acpi_values {
-    pub const SLP_EN: u16 = 0x2000;      // Enable sleep
-    pub const SLP_TYP_S1: u16 = 0x0100;  // S1 sleep type
-    pub const SLP_TYP_S2: u16 = 0x0200;  // S2 sleep type
-    pub const SLP_TYP_S3: u16 = 0x0300;  // S3 sleep type
-    pub const SLP_TYP_S4: u16 = 0x0400;  // S4 sleep type
-    pub const SLP_TYP_S5: u16 = 0x0500;  // S5 sleep type
+    pub const SLP_EN: u16 = 0x2000; // Enable sleep
+    pub const SLP_TYP_S1: u16 = 0x0100; // S1 sleep type
+    pub const SLP_TYP_S2: u16 = 0x0200; // S2 sleep type
+    pub const SLP_TYP_S3: u16 = 0x0300; // S3 sleep type
+    pub const SLP_TYP_S4: u16 = 0x0400; // S4 sleep type
+    pub const SLP_TYP_S5: u16 = 0x0500; // S5 sleep type
 }
 
 /// Enter a system sleep state via ACPI
-/// 
+///
 /// # Safety
 /// This function may never return if entering S4/S5. Caller must ensure
 /// all devices are properly prepared for sleep.
@@ -104,28 +104,28 @@ pub unsafe fn enter_sleep_state(state: PowerState) -> Result<(), PowerError> {
 
     // Write sleep enable + type to PM control register
     let sleep_value = sleep_type | acpi_values::SLP_EN;
-    
+
     // In real implementation, would write to actual ACPI registers
     // outw(pm1a_cnt, sleep_value);
-    
+
     // Update global state
     *PM_STATE.lock() = state;
 
     // For S1-S3, we should wake up here after resume
     // For S4-S5, we reboot into the bootloader which resumes from hibernation
-    
+
     Ok(())
 }
 
 /// Enter CPU idle state (C-state)
-/// 
+///
 /// Called by the scheduler when a CPU has no work to do.
 pub fn enter_idle(cpu_id: usize) {
     static IDLE_STATES: [AtomicU32; 256] = [const { AtomicU32::new(0) }; 256];
-    
+
     // Determine deepest C-state allowed for this CPU
     let max_cstate = get_max_cstate(cpu_id);
-    
+
     if max_cstate == CState::C0 {
         // No idle states supported, just spin briefly
         for _ in 0..100 {
@@ -143,7 +143,7 @@ pub fn enter_idle(cpu_id: usize) {
             // HLT instruction for C1
             #[cfg(target_arch = "x86_64")]
             x86_64::instructions::hlt();
-            
+
             #[cfg(not(target_arch = "x86_64"))]
             core::hint::spin_loop();
         },
@@ -165,18 +165,18 @@ fn enter_deep_idle(state: CState) {
     // - Check MONITOR/MWAIT support via CPUID
     // - Set up monitor address
     // - Execute MWAIT with appropriate hints
-    
+
     #[cfg(target_arch = "x86_64")]
     {
         use core::arch::asm;
-        
+
         let hints = match state {
             CState::C2 => 0x10,
             CState::C3 => 0x20,
             CState::C4 => 0x30,
             _ => 0,
         };
-        
+
         unsafe {
             // MWAIT with EAX=hints, ECX=interrupts_flag (0 = break on interrupt)
             asm!(
@@ -188,7 +188,7 @@ fn enter_deep_idle(state: CState) {
             );
         }
     }
-    
+
     #[cfg(not(target_arch = "x86_64"))]
     {
         // Fallback to HLT
@@ -231,7 +231,11 @@ pub fn get_wake_reason() -> WakeReason {
 /// Register a wakeup device
 pub fn register_wakeup_device(device_id: u32, enabled: bool) -> Result<(), PowerError> {
     // In real implementation, would configure device-specific wakeup
-    log_debug!("Wakeup device {} {}", device_id, if enabled { "enabled" } else { "disabled" });
+    log_debug!(
+        "Wakeup device {} {}",
+        device_id,
+        if enabled { "enabled" } else { "disabled" }
+    );
     Ok(())
 }
 
@@ -264,7 +268,7 @@ pub fn set_cpu_frequency(cpu_id: usize, freq_mhz: u32) -> Result<(), PowerError>
     if freq_mhz < 400 || freq_mhz > 5000 {
         return Err(PowerError::InvalidFrequency);
     }
-    
+
     log_debug!("CPU{} frequency: {} MHz", cpu_id, freq_mhz);
     Ok(())
 }
@@ -272,7 +276,7 @@ pub fn set_cpu_frequency(cpu_id: usize, freq_mhz: u32) -> Result<(), PowerError>
 /// Thermal zone information
 pub struct ThermalZone {
     pub id: u32,
-    pub temperature: i32, // Celsius * 10
+    pub temperature: i32,      // Celsius * 10
     pub trip_points: [i32; 4], // Critical temperatures
     pub cooling_devices: Vec<u32>,
 }
@@ -297,16 +301,16 @@ pub enum PowerError {
 /// Initialize power management subsystem
 pub fn init() -> Result<(), PowerError> {
     log_info!("Initializing power management...");
-    
+
     if !is_acpi_available() {
         log_warn!("ACPI not available, limited power management");
         return Ok(());
     }
-    
+
     // Parse ACPI tables (FADT, DSDT, etc.)
     // Initialize thermal zones
     // Configure initial C-states
-    
+
     log_info!("Power management initialized");
     Ok(())
 }
@@ -320,7 +324,7 @@ pub fn suspend_to_ram() -> Result<(), PowerError> {
 pub fn hibernate() -> Result<(), PowerError> {
     // First, save memory contents to disk
     save_memory_image()?;
-    
+
     // Then enter S4
     unsafe { enter_sleep_state(PowerState::SleepS4) }
 }
@@ -337,7 +341,7 @@ fn save_memory_image() -> Result<(), PowerError> {
 }
 
 /// Resume from hibernation
-/// 
+///
 /// Called early in boot to check if we're resuming from hibernation
 pub fn resume_from_hibernation() -> bool {
     // Check for hibernation signature in reserved memory

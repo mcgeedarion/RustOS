@@ -10,8 +10,8 @@
 
 extern crate alloc;
 
-use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use crate::error::{KernelError, KernelResult};
 use crate::mm::pmm;
@@ -70,15 +70,15 @@ impl MemoryStats {
             swap_used: 0,
         }
     }
-    
+
     /// Calculate memory pressure level
     pub fn pressure(&self) -> MemoryPressure {
         if self.total_pages == 0 {
             return MemoryPressure::Critical;
         }
-        
+
         let free_ratio = self.free_pages as f32 / self.total_pages as f32;
-        
+
         if free_ratio < 0.02 {
             MemoryPressure::Critical
         } else if free_ratio < 0.05 {
@@ -111,15 +111,18 @@ pub fn handle_oom() -> KernelResult<()> {
     if OOM_ACTIVE.swap(true, Ordering::SeqCst) {
         return Err(KernelError::OutOfMemory);
     }
-    
+
     let stats = MemoryStats::current();
-    log::error!("OOM: free_pages={}/{} ({:.1}%)", 
-                stats.free_pages, stats.total_pages,
-                (stats.free_pages as f32 / stats.total_pages as f32) * 100.0);
-    
+    log::error!(
+        "OOM: free_pages={}/{} ({:.1}%)",
+        stats.free_pages,
+        stats.total_pages,
+        (stats.free_pages as f32 / stats.total_pages as f32) * 100.0
+    );
+
     // Step 1: Try to reclaim from slab caches
     reclaim_slab_memory();
-    
+
     // Step 2: Try to swap out anonymous pages
     #[cfg(feature = "swap")]
     {
@@ -127,14 +130,17 @@ pub fn handle_oom() -> KernelResult<()> {
             log::warn!("OOM: kswapd failed: {:?}", e);
         }
     }
-    
+
     // Check if we recovered
     if pmm::free_pages() > stats.free_pages + 16 {
-        log::info!("OOM: Recovered {} pages", pmm::free_pages() - stats.free_pages);
+        log::info!(
+            "OOM: Recovered {} pages",
+            pmm::free_pages() - stats.free_pages
+        );
         OOM_ACTIVE.store(false, Ordering::SeqCst);
         return Ok(());
     }
-    
+
     // Step 3: Invoke OOM killer
     let victim_pid = select_oom_victim(OomPolicy::LargestMemory);
     if victim_pid != 0 {
@@ -142,9 +148,9 @@ pub fn handle_oom() -> KernelResult<()> {
         kill_process(victim_pid);
         OOM_KILL_COUNT.fetch_add(1, Ordering::Relaxed);
     }
-    
+
     OOM_ACTIVE.store(false, Ordering::SeqCst);
-    
+
     if victim_pid != 0 {
         Ok(())
     } else {
@@ -155,7 +161,7 @@ pub fn handle_oom() -> KernelResult<()> {
 /// Attempt to reclaim slab memory
 fn reclaim_slab_memory() {
     use crate::mm::slab;
-    
+
     // Shrink slab caches aggressively
     let freed = slab::slab_shrink(usize::MAX);
     if freed > 0 {
@@ -176,7 +182,7 @@ fn select_oom_victim(policy: OomPolicy) -> usize {
 fn find_largest_memory_user() -> usize {
     let mut max_rss = 0;
     let mut victim_pid = 0;
-    
+
     scheduler::for_each_process(|pcb| {
         let rss = pcb.rss_pages();
         if rss > max_rss && pcb.pid != 1 {
@@ -184,7 +190,7 @@ fn find_largest_memory_user() -> usize {
             victim_pid = pcb.pid;
         }
     });
-    
+
     victim_pid
 }
 
@@ -202,8 +208,9 @@ fn find_highest_oom_score() -> usize {
 fn kill_process(pid: usize) {
     // Signal the process to terminate
     use crate::proc::signal;
-    
-    if let Err(e) = signal::send_signal(pid, 9) { // SIGKILL
+
+    if let Err(e) = signal::send_signal(pid, 9) {
+        // SIGKILL
         log::error!("OOM: Failed to send SIGKILL to {}: {:?}", pid, e);
     }
 }
@@ -228,7 +235,7 @@ pub fn alloc_pages_with_oom(count: usize) -> KernelResult<usize> {
             handle_oom()?;
             // Retry after OOM handling
             pmm::alloc_pages(count).ok_or(KernelError::OutOfMemory)
-        }
+        },
     }
 }
 
@@ -243,12 +250,12 @@ pub fn alloc_page_with_oom() -> KernelResult<usize> {
 /// virtual memory management.
 pub fn handle_vmm_fault(vaddr: usize, error_code: u64) -> KernelResult<()> {
     use crate::mm::page_fault;
-    
+
     // Validate the address first
     if !is_valid_user_address(vaddr) {
         return Err(KernelError::Fault);
     }
-    
+
     // Try to handle the fault
     match page_fault::handle_fault(vaddr, error_code) {
         Ok(()) => Ok(()),
@@ -257,7 +264,7 @@ pub fn handle_vmm_fault(vaddr: usize, error_code: u64) -> KernelResult<()> {
             handle_oom()?;
             // Retry the fault
             page_fault::handle_fault(vaddr, error_code)
-        }
+        },
     }
 }
 
@@ -283,15 +290,15 @@ fn is_valid_user_address(addr: usize) -> bool {
 /// Register a memory area for tracking
 pub fn register_vma(start: usize, end: usize, flags: u32) -> KernelResult<()> {
     use crate::mm::vma::VmaFlags;
-    
+
     if start >= end {
         return Err(KernelError::InvalidArg);
     }
-    
+
     if start % 4096 != 0 || end % 4096 != 0 {
         return Err(KernelError::InvalidArg);
     }
-    
+
     // TODO: Integrate with VMA tracking
     Ok(())
 }
@@ -305,14 +312,14 @@ pub fn unregister_vma(start: usize) -> KernelResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_memory_stats() {
         let stats = MemoryStats::current();
         assert!(stats.total_pages > 0);
         assert!(stats.free_pages <= stats.total_pages);
     }
-    
+
     #[test]
     fn test_pressure_calculation() {
         let mut stats = MemoryStats {
@@ -321,10 +328,10 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(stats.pressure(), MemoryPressure::Low);
-        
+
         stats.free_pages = 50;
         assert_eq!(stats.pressure(), MemoryPressure::High);
-        
+
         stats.free_pages = 10;
         assert_eq!(stats.pressure(), MemoryPressure::Critical);
     }

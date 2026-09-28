@@ -211,7 +211,9 @@ unsafe fn setup_queue(base: usize, q: u32) -> Vq {
 
     let mut bufs = Vec::with_capacity(qsz);
     for _ in 0..qsz {
-        bufs.push(alloc_dma(EVT_SIZE, 8).expect("virtio-input: DMA allocation failed for event buffer"));
+        bufs.push(
+            alloc_dma(EVT_SIZE, 8).expect("virtio-input: DMA allocation failed for event buffer"),
+        );
     }
 
     Vq {
