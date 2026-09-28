@@ -17,3 +17,6 @@ bitflags.workspace = true
 [features]
 default = []
 write_support = []
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kernel_impl)"] }

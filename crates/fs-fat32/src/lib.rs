@@ -4,20 +4,23 @@
 //! with VFS integration and proper error handling.
 
 #![no_std]
-#![feature(alloc_error_handler)]
 
 extern crate alloc;
 
 use alloc::string::String;
 use alloc::vec::Vec;
-use vfs_core::{
-    DirEntry, FileHandle, FileOps, FileSystem, FileType, OpenFlags, SeekWhence, Stat, VfsError,
-};
+use vfs_core::{DirEntry, FileHandle, FileOps, FileSystem, OpenFlags, SeekWhence, Stat, VfsError};
 
 /// FAT32 filesystem driver with complete VMM integration
 pub struct Fat32FileSystem {
     name: &'static str,
     mount_point: Option<&'static str>,
+}
+
+impl Default for Fat32FileSystem {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Fat32FileSystem {

@@ -3,8 +3,6 @@
 //! This module provides standardized error types with automatic errno conversion
 //! and syscall wrapper macros for consistent error handling across the kernel.
 
-#![no_std]
-
 extern crate alloc;
 
 use core::fmt;

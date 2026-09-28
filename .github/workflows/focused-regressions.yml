@@ -1,6 +1,7 @@
 name: Focused host regressions
 
 on:
+  workflow_call:
   push:
     branches: [main]
   pull_request:
@@ -20,9 +21,10 @@ jobs:
         with:
           rustflags: ""
           components: rust-src
-      - name: Test ext4 extension trait
+      - name: Test portable workspace crates
         run: |
-          cargo test --locked -p fs-ext4 --lib \
+          cargo test --locked -p fs-ext4 -p fs-fat32 -p fs-tmpfs \
+            -p vfs-core -p mm-core -p sync-primitives --lib \
             --target x86_64-unknown-linux-gnu -Z build-std=std,test
       - name: Test smoke assertion failure propagation
         run: |
@@ -34,6 +36,8 @@ jobs:
           cargo test --locked -p rustos-kernel --lib --no-default-features \
             --features userspace_boot --target x86_64-unknown-linux-gnu \
             -Z build-std=std,test
+      - name: Test CI log validators
+        run: python3 -m unittest discover -s scripts/ci/tests -p 'test_*.py'
 
   boot-profile-builds:
     name: Boot profile contracts (${{ matrix.arch }})

@@ -28,11 +28,18 @@ unsafe impl Send for QspinlockNode {}
 unsafe impl Sync for QspinlockNode {}
 
 impl QspinlockNode {
+    /// Create an unlinked node that is not waiting for a lock.
     pub const fn new() -> Self {
         Self {
             next: ptr::null_mut(),
             locked: AtomicBool::new(false),
         }
+    }
+}
+
+impl Default for QspinlockNode {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -47,6 +54,7 @@ unsafe impl Send for Qspinlock {}
 unsafe impl Sync for Qspinlock {}
 
 impl Qspinlock {
+    /// Create an unlocked queued spinlock.
     pub const fn new() -> Self {
         Self {
             tail: AtomicUsize::new(0),
@@ -97,6 +105,12 @@ impl Qspinlock {
     }
 }
 
+impl Default for Qspinlock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// RCU (Read-Copy-Update) read-side guard
 pub struct RcuReadGuard<'a> {
     _marker: PhantomData<&'a ()>,
@@ -119,6 +133,7 @@ unsafe impl<T: Send + Sync> Send for RcuProtected<T> {}
 unsafe impl<T: Send + Sync> Sync for RcuProtected<T> {}
 
 impl<T> RcuProtected<T> {
+    /// Wrap an initial value for RCU access.
     pub const fn new(data: T) -> Self {
         Self {
             data: UnsafeCell::new(Some(data)),
@@ -127,16 +142,21 @@ impl<T> RcuProtected<T> {
     }
 
     /// Start an RCU read-side critical section
-    pub fn read(&self) -> RcuReadGuard {
+    pub fn read(&self) -> RcuReadGuard<'_> {
         rcu_read_lock();
         RcuReadGuard {
             _marker: PhantomData,
         }
     }
 
-    /// Get immutable reference during read-side critical section
-    /// SAFETY: Must be called within RCU read-side critical section
-    pub unsafe fn get_ref<'a>(&'a self, _guard: &'a RcuReadGuard) -> Option<&'a T> {
+    /// Get an immutable reference during a read-side critical section.
+    ///
+    /// # Safety
+    ///
+    /// The guard must come from this wrapper's `read` method and remain active
+    /// while the returned reference is used. The caller must prevent updates
+    /// from mutating the value while that reference is alive.
+    pub unsafe fn get_ref<'a>(&'a self, _guard: &'a RcuReadGuard<'_>) -> Option<&'a T> {
         (*self.data.get()).as_ref()
     }
 
@@ -193,6 +213,7 @@ unsafe impl Send for TicketSpinlock {}
 unsafe impl Sync for TicketSpinlock {}
 
 impl TicketSpinlock {
+    /// Create an unlocked ticket spinlock.
     pub const fn new() -> Self {
         Self {
             next_ticket: AtomicU32::new(0),
@@ -200,7 +221,8 @@ impl TicketSpinlock {
         }
     }
 
-    pub fn lock(&self) -> TicketGuard {
+    /// Acquire the lock in ticket order, releasing it when the guard is dropped.
+    pub fn lock(&self) -> TicketGuard<'_> {
         let ticket = self.next_ticket.fetch_add(1, Ordering::Relaxed);
 
         while self.now_serving.load(Ordering::Acquire) != ticket {
@@ -211,6 +233,13 @@ impl TicketSpinlock {
     }
 }
 
+impl Default for TicketSpinlock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Guard that releases a ticket spinlock when dropped.
 pub struct TicketGuard<'a> {
     lock: &'a TicketSpinlock,
 }
@@ -227,6 +256,7 @@ pub struct PerCpuData<T> {
     data: [UnsafeCell<Option<T>>; 256], // Max CPUs
 }
 
+/// Per-CPU data structure
 #[cfg(not(target_arch = "x86_64"))]
 pub struct PerCpuData<T> {
     data: [UnsafeCell<Option<T>>; 64], // Default max CPUs
@@ -236,28 +266,40 @@ unsafe impl<T: Send> Send for PerCpuData<T> {}
 unsafe impl<T: Send + Sync> Sync for PerCpuData<T> {}
 
 impl<T> PerCpuData<T> {
+    /// Create per-CPU storage with every slot initialized to `None`.
     pub const fn new() -> Self {
-        #[cfg(target_arch = "x86_64")]
-        const INIT: UnsafeCell<Option<()>> = UnsafeCell::new(None);
-        #[cfg(not(target_arch = "x86_64"))]
-        const INIT: UnsafeCell<Option<()>> = UnsafeCell::new(None);
-
         Self {
             #[cfg(target_arch = "x86_64")]
-            data: unsafe { core::mem::zeroed() },
+            data: [const { UnsafeCell::new(None) }; 256],
             #[cfg(not(target_arch = "x86_64"))]
-            data: unsafe { core::mem::zeroed() },
+            data: [const { UnsafeCell::new(None) }; 64],
         }
     }
 
+    /// Return the value stored for the given CPU, if initialized.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `cpu_id` is outside the supported CPU range.
     pub fn get(&self, cpu_id: usize) -> Option<&T> {
         unsafe { (*self.data[cpu_id].get()).as_ref() }
     }
 
+    /// Store a value for the given CPU, replacing any previous value.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `cpu_id` is outside the supported CPU range.
     pub fn set(&self, cpu_id: usize, data: T) {
         unsafe {
             *self.data[cpu_id].get() = Some(data);
         }
+    }
+}
+
+impl<T> Default for PerCpuData<T> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -285,9 +327,9 @@ impl RwSpinlock {
     }
 
     /// Acquire read lock
-    pub fn read_lock(&self) -> ReadGuard {
+    pub fn read_lock(&self) -> ReadGuard<'_> {
         loop {
-            let current_readers = self.readers.fetch_add(1, Ordering::Acquire);
+            self.readers.fetch_add(1, Ordering::Acquire);
 
             // Check if a writer is active
             if self.writer.load(Ordering::Acquire) {
@@ -302,7 +344,7 @@ impl RwSpinlock {
     }
 
     /// Acquire write lock
-    pub fn write_lock(&self) -> WriteGuard {
+    pub fn write_lock(&self) -> WriteGuard<'_> {
         self.write_waiters.fetch_add(1, Ordering::Relaxed);
 
         loop {
@@ -325,12 +367,12 @@ impl RwSpinlock {
     }
 
     /// Try to acquire read lock without blocking
-    pub fn try_read_lock(&self) -> Option<ReadGuard> {
+    pub fn try_read_lock(&self) -> Option<ReadGuard<'_>> {
         if self.writer.load(Ordering::Acquire) {
             return None;
         }
 
-        let current_readers = self.readers.fetch_add(1, Ordering::Acquire);
+        self.readers.fetch_add(1, Ordering::Acquire);
         if self.writer.load(Ordering::Acquire) {
             // Writer became active during our attempt
             self.readers.fetch_sub(1, Ordering::Release);
@@ -341,7 +383,7 @@ impl RwSpinlock {
     }
 
     /// Try to acquire write lock without blocking
-    pub fn try_write_lock(&self) -> Option<WriteGuard> {
+    pub fn try_write_lock(&self) -> Option<WriteGuard<'_>> {
         if self.writer.swap(true, Ordering::Acquire) {
             return None;
         }
@@ -352,6 +394,12 @@ impl RwSpinlock {
         }
 
         Some(WriteGuard { lock: self })
+    }
+}
+
+impl Default for RwSpinlock {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -402,7 +450,7 @@ impl TicketRwLock {
     }
 
     /// Acquire read lock
-    pub fn read_lock(&self) -> TicketReadGuard {
+    pub fn read_lock(&self) -> TicketReadGuard<'_> {
         let ticket = self.read_ticket.fetch_add(1, Ordering::Relaxed);
 
         // Wait for our turn (readers can proceed if no exclusive writer)
@@ -419,7 +467,7 @@ impl TicketRwLock {
     }
 
     /// Acquire write lock
-    pub fn write_lock(&self) -> TicketWriteGuard {
+    pub fn write_lock(&self) -> TicketWriteGuard<'_> {
         let ticket = self.write_ticket.fetch_add(1, Ordering::Relaxed);
 
         // Wait for our turn
@@ -433,6 +481,12 @@ impl TicketRwLock {
         }
 
         TicketWriteGuard { lock: self }
+    }
+}
+
+impl Default for TicketRwLock {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -461,6 +515,28 @@ impl<'a> Drop for TicketWriteGuard<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_per_cpu_data_initially_empty() {
+        let values: PerCpuData<bool> = const { PerCpuData::new() };
+
+        for cpu_id in 0..values.data.len() {
+            assert_eq!(values.get(cpu_id), None);
+        }
+    }
+
+    #[test]
+    fn test_per_cpu_data_default_non_copy() {
+        let values = PerCpuData::<alloc::string::String>::default();
+
+        for cpu_id in 0..values.data.len() {
+            assert!(values.get(cpu_id).is_none());
+        }
+
+        values.set(0, alloc::string::String::from("cpu zero"));
+        assert_eq!(values.get(0).map(|value| value.as_str()), Some("cpu zero"));
+        assert!(values.get(1).is_none());
+    }
 
     #[test]
     fn test_qspinlock() {
@@ -524,10 +600,12 @@ mod tests {
         let lock = RwSpinlock::new();
 
         // Try read should succeed
-        assert!(lock.try_read_lock().is_some());
+        let reader = lock.try_read_lock().expect("read lock should be available");
 
         // Try write should fail (reader active)
         assert!(lock.try_write_lock().is_none());
+        drop(reader);
+        assert!(lock.try_write_lock().is_some());
 
         let lock2 = RwSpinlock::new();
 

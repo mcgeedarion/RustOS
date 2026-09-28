@@ -14,11 +14,6 @@
 //! - [`crate::arch`] for architecture-specific implementations
 //! - [`crate::mm`] for memory management
 
-// Internal macro to reduce feature flag repetition
-macro_rules! full_kernel_only {
-    ($($item:item)*) => { $($item)* };
-}
-
 #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
 pub mod architecture;
 pub mod panic;

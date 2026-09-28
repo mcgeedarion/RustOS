@@ -5,13 +5,11 @@
 //! these traits to integrate with the VFS.
 
 #![no_std]
-#![feature(alloc_error_handler)]
 
 extern crate alloc;
 
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::fmt;
 
 pub use bitflags::bitflags;
 pub use thiserror::Error;
@@ -113,8 +111,8 @@ impl Stat {
     }
 }
 
-/// Open flags for file operations
 bitflags! {
+    /// Open flags for file operations.
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
     pub struct OpenFlags: u32 {
         const O_RDONLY = 0x0000;
@@ -238,6 +236,12 @@ pub trait FileSystem: Send + Sync {
 /// VFS registration system for runtime filesystem driver registration
 pub struct VfsRegistry {
     filesystems: spin::Mutex<alloc::collections::BTreeMap<&'static str, &'static dyn FileSystem>>,
+}
+
+impl Default for VfsRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl VfsRegistry {

@@ -4,21 +4,25 @@
 //! implementing the vfs_core::FileSystem trait with full VMM integration.
 
 #![no_std]
-#![feature(alloc_error_handler)]
 
 extern crate alloc;
 
 use alloc::string::String;
 use alloc::vec::Vec;
 use vfs_core::{
-    DirEntry, FileHandle, FileOps, FileSystem, FileSystemExt, FileType, OpenFlags, SeekWhence,
-    Stat, VfsError,
+    DirEntry, FileHandle, FileOps, FileSystem, FileSystemExt, OpenFlags, SeekWhence, Stat, VfsError,
 };
 
 /// EXT4 filesystem driver with complete VMM integration
 pub struct Ext4FileSystem {
     name: &'static str,
     mount_point: Option<&'static str>,
+}
+
+impl Default for Ext4FileSystem {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Ext4FileSystem {

@@ -24,11 +24,6 @@
 // individual items where the suppression is intentional.
 #![allow(unused_imports)]
 #![cfg_attr(not(test), feature(alloc_error_handler))]
-// Enable target feature re-export for better SIMD auto-vectorization
-// This allows the optimizer to assume CPU features detected at boot are available
-#![cfg_attr(target_arch = "x86_64", feature(stdarch_x86_avx512))]
-#![cfg_attr(target_arch = "x86_64", feature(avx512_target_feature))]
-#![cfg_attr(target_arch = "x86_64", feature(sse4a_target_feature))]
 
 extern crate alloc;
 

@@ -1,0 +1,5 @@
+# Existing CI runs verify this hosted label; actionlint's bundled catalog lags.
+# This is only a validator allowlist and does not change runner selection.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04

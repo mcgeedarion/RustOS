@@ -1,7 +1,6 @@
 //! Tmpfs Filesystem Implementation for RustOS
 
 #![no_std]
-#![feature(alloc_error_handler)]
 
 extern crate alloc;
 
@@ -12,6 +11,12 @@ use vfs_core::{DirEntry, FileHandle, FileSystem, OpenFlags, Stat, VfsError};
 pub struct TmpfsFileSystem {
     name: &'static str,
     mount_point: Option<&'static str>,
+}
+
+impl Default for TmpfsFileSystem {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl TmpfsFileSystem {

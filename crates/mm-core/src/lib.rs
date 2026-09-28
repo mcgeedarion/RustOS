@@ -7,13 +7,11 @@
 //! - NUMA-aware allocation policies
 
 #![no_std]
-#![feature(alloc_error_handler)]
 
 extern crate alloc;
 
 use alloc::vec::Vec;
 use core::fmt;
-use core::ptr::NonNull;
 
 pub use bitflags::bitflags;
 
@@ -79,8 +77,8 @@ impl Vpn {
     }
 }
 
-/// Page table entry flags
 bitflags! {
+    /// Page table entry flags.
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
     pub struct PageFlags: u64 {
         const PRESENT = 1 << 0;
@@ -94,8 +92,8 @@ bitflags! {
     }
 }
 
-/// Memory protection flags
 bitflags! {
+    /// Memory protection flags.
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
     pub struct ProtFlags: u32 {
         const PROT_NONE = 0x0;
@@ -105,8 +103,8 @@ bitflags! {
     }
 }
 
-/// Memory mapping flags
 bitflags! {
+    /// Memory mapping flags.
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
     pub struct MapFlags: u32 {
         const MAP_SHARED = 0x01;
@@ -162,9 +160,10 @@ pub trait VirtualMemoryManager: Send + Sync {
 }
 
 /// Memory policy for NUMA-aware allocation
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum MemoryPolicy {
     /// Default policy - allocate on local node
+    #[default]
     Local,
     /// Bind to specific NUMA node
     Bind { node_id: usize },
@@ -172,12 +171,6 @@ pub enum MemoryPolicy {
     Interleave { nodes: Vec<usize> },
     /// Prefer specific node, fallback to others
     Preferred { node_id: usize },
-}
-
-impl Default for MemoryPolicy {
-    fn default() -> Self {
-        Self::Local
-    }
 }
 
 /// NUMA node information
@@ -193,6 +186,12 @@ pub struct NumaNode {
 pub struct MemoryPolicyManager {
     default_policy: spin::Mutex<MemoryPolicy>,
     numa_nodes: spin::Mutex<Vec<NumaNode>>,
+}
+
+impl Default for MemoryPolicyManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MemoryPolicyManager {
