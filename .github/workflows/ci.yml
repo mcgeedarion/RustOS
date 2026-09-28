@@ -77,4 +77,4 @@ jobs:
       - name: Run x86_64 UEFI smoke
         run: cargo xtask smoke --arch x86_64 --boot uefi
       - name: Recheck x86_64 minimal boot (not kernel test coverage)
-        run: ARCH=x86_64 ./scripts/ci/run_qemu.sh --boot uefi --smoke --timeout 90
+        run: ARCH=x86_64 bash scripts/ci/run_qemu.sh --boot uefi --smoke --timeout 90
