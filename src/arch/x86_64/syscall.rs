@@ -89,10 +89,13 @@ pub struct SyscallFrame {
 global_asm!(
     ".global syscall_asm_entry",
     "syscall_asm_entry:",
-    //  We use a simple model: no stack-switch (the kernel stack is already
-    //  active for ring-0 SYSCALL in this bare-metal environment because we
-    //  don't use the syscall IST/TSS stack pointer.  If/when a proper per-CPU
-    //  kernel stack is added, swap RSP from GS here).
+    // SYSCALL does not switch RSP in hardware. Save user RSP in GS scratch,
+    // switch to the current CPU's guarded kernel stack, then build the frame.
+    // swapgs is paired on exit. The GS bases are initialized by gdt_init().
+    "swapgs",
+    "mov gs:[8], rsp",
+    "mov rsp, gs:[0]",
+    "push QWORD PTR gs:[8]", // user RSP must occupy SyscallFrame offset 120
     "push r11", // push user RFLAGS (r11 after SYSCALL)
     "push rcx", // push user RIP    (rcx after SYSCALL)
     "push r9",
@@ -124,8 +127,6 @@ global_asm!(
     //    user_rsp = current_rsp + 15*8  ... but wait, that's the kernel
     //  stack top.  In a single-stack model RSP on SYSCALL entry IS the user
     //  RSP.  We pushed 15 values, so user_rsp = rsp + 120.
-    "lea rax, [rsp + 120]", // rax = user RSP
-    "mov [rsp + 120], rax", // store into SyscallFrame.rsp slot
     //  NOTE: rax will be overwritten by rust_syscall_handler's return value;
     //  that's fine — we load rax from frame.rax on exit.
     "sti",
@@ -150,7 +151,8 @@ global_asm!(
     "pop r9",
     "add rsp, 16", // skip rcx/r11 slots (already loaded above)
     // user RSP was stored at [rsp] now; restore it.
-    "pop rsp", // CAUTION: this changes rsp to user stack
+    "pop rsp", // restores the user stack pointer from SyscallFrame.rsp
+    "swapgs",
     "sysretq",
 );
 
