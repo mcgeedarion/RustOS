@@ -180,7 +180,7 @@ jobs:
       # ------------------------------------------------------------------
       - name: Assert boot sentinel
         run: |
-          SMOKE_MARKER_RE='BOOT_MINIMAL_OK|FULL_OS_USERSPACE_OK|entering cpu_idle'
+          SMOKE_MARKER_RE='(^|[[:space:]])(RustOS: )?BOOT_MINIMAL_OK([[:space:]]|$)'
           if ! grep -Eq "$SMOKE_MARKER_RE" qemu-x86_64-boot-release-boot.log; then
             echo "FAIL: no boot sentinel matching '$SMOKE_MARKER_RE' found in serial output (release-boot)." >&2
             echo "      Boot did not reach the expected checkpoint within 60 s." >&2
