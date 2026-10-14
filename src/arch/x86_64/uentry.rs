@@ -121,7 +121,10 @@ pub unsafe fn sysret_to_user_context(
         "mov cr3, rdi",
         "mov r11, rsi",
         "mov rcx, [r11 + 256]",
-        "mov r10, [r11 + 264]",
+        // Keep the syscall return stack separate from the user r10 register.
+        // regs[8] stores the caller's r10 value, while the stack pointer lives
+        // in UserContext.sp at byte offset 264.
+        "mov r10, [r11 + 64]",
         "mov rax, [r11 + 0]",
         "mov rbx, [r11 + 8]",
         "mov rdx, [r11 + 16]",
@@ -134,7 +137,8 @@ pub unsafe fn sysret_to_user_context(
         "mov r14, [r11 + 88]",
         "mov r15, [r11 + 96]",
         "mov rsi, [r11 + 24]",
-        "mov rsp, r10",
+        // Load SP directly from the saved frame so r10 remains restored.
+        "mov rsp, [r11 + 264]",
         "mov r11, 0x202",
         "sysretq",
         in("rdi") cr3,
