@@ -623,6 +623,59 @@ fn run_exec_smoke_child() {
     write_all(STDOUT, b" exit=0\n");
 }
 
+/// Run the fixed-iteration syscall benchmark as a separate userspace child.
+/// Its JSON record and completion marker are written to the inherited console;
+/// PID 1 still verifies that the specific benchmark child exited normally.
+fn run_exec_benchmark_child() {
+    const STDOUT: usize = 1;
+    const STDERR: usize = 2;
+    let child = unsafe { sys_fork() };
+
+    if child == 0 {
+        let path = c"/bench";
+        let argv = [path.as_ptr() as usize, 0usize];
+        let envp = [0usize];
+        let result = unsafe {
+            sys_execve(path.as_ptr() as *const u8, argv.as_ptr(), envp.as_ptr())
+        };
+        write_all(STDERR, b"RUSTOS_EXEC marker=bench_execve_failed errno=");
+        write_usize_inline(STDERR, result.wrapping_neg() as usize);
+        write_all(STDERR, b"\n");
+        unsafe { sys_exit_group(127) };
+    }
+
+    if child < 0 {
+        write_all(STDERR, b"RUSTOS_EXEC marker=bench_fork_failed errno=");
+        write_usize_inline(STDERR, child.wrapping_neg() as usize);
+        write_all(STDERR, b"\n");
+        unsafe { sys_exit_group(1) };
+    }
+
+    let mut status = 0i32;
+    let waited = unsafe { sys_wait4(child, &mut status as *mut i32, 0, 0) };
+    if waited != child {
+        write_all(STDERR, b"RUSTOS_EXEC marker=bench_wait_failed\n");
+        unsafe { sys_exit_group(1) };
+    }
+
+    let exited_normally = (status & 0x7f) == 0;
+    let exit_code = (status >> 8) & 0xff;
+    if !exited_normally || exit_code != 0 {
+        write_all(STDERR, b"RUSTOS_EXEC marker=bench_child_failed pid=");
+        write_usize_inline(STDERR, child as usize);
+        write_all(STDERR, b" status=");
+        write_usize_inline(STDERR, status as usize);
+        write_all(STDERR, b" exit=");
+        write_usize_inline(STDERR, exit_code as usize);
+        write_all(STDERR, b"\n");
+        unsafe { sys_exit_group(1) };
+    }
+
+    write_all(STDOUT, b"RUSTOS_EXEC marker=bench_child_reaped pid=");
+    write_usize_inline(STDOUT, child as usize);
+    write_all(STDOUT, b" exit=0\n");
+}
+
 // ── Entry point ────────────────────────────────────────────────────────────
 
 /// Rust entry point called from `_start` below.
@@ -654,9 +707,10 @@ fn init_main() -> ! {
     run_syscall_tests();
     write_all(STDOUT, b"RUSTOS_EXEC marker=init_started\n");
     run_exec_smoke_child();
+    run_exec_benchmark_child();
 
-    // Completion is emitted only after successful execve, exact-PID wait/reap,
-    // normal termination, and child exit status zero.
+    // Completion is emitted only after successful smoke/benchmark execve,
+    // exact-PID wait/reap, normal termination, and exit status zero.
     write_all(STDOUT, b"RUSTOS_EXEC marker=init_complete exit=0\n");
     write_all(STDOUT, b"SMOKE OK: userspace_init\n");
     write_all(STDOUT, b"[init] TEST PASS: userspace_init\n");
