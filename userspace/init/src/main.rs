@@ -17,6 +17,8 @@
 
 #![no_std]
 #![no_main]
+
+extern crate raw_syscall;
 #![allow(clippy::missing_safety_doc)]
 
 use core::arch::{asm, naked_asm};
@@ -40,6 +42,8 @@ const SYS_EXECVE: usize = 59;
 const SYS_WAIT4: usize = 61;
 #[cfg(target_arch = "x86_64")]
 const SYS_EXIT_GROUP: usize = 231;
+#[cfg(target_arch = "x86_64")]
+const EINTR: isize = -4;
 
 #[cfg(target_arch = "aarch64")]
 const SYS_READ: usize = 63;
@@ -59,6 +63,8 @@ const SYS_EXECVE: usize = 221;
 const SYS_WAIT4: usize = 260;
 #[cfg(target_arch = "aarch64")]
 const SYS_EXIT_GROUP: usize = 94;
+#[cfg(target_arch = "aarch64")]
+const EINTR: isize = -4;
 
 #[cfg(target_arch = "riscv64")]
 const SYS_READ: usize = 63;
@@ -78,6 +84,8 @@ const SYS_EXECVE: usize = 221;
 const SYS_WAIT4: usize = 260;
 #[cfg(target_arch = "riscv64")]
 const SYS_EXIT_GROUP: usize = 94;
+#[cfg(target_arch = "riscv64")]
+const EINTR: isize = -4;
 
 // ── Raw syscall wrappers ───────────────────────────────────────────────────
 
@@ -289,119 +297,13 @@ unsafe fn sys_brk(addr: usize) -> usize {
 }
 
 #[inline(always)]
-unsafe fn sys_fork() -> isize {
-    #[cfg(target_arch = "x86_64")]
-    {
-        let ret: isize;
-        asm!(
-            "syscall",
-            in("rax") SYS_FORK,
-            out("rcx") _,
-            out("r11") _,
-            lateout("rax") ret,
-            options(nostack),
-        );
-        ret
-    }
-    #[cfg(target_arch = "aarch64")]
-    {
-        let ret: isize;
-        asm!("svc #0", in("x8") SYS_FORK, lateout("x0") ret, options(nostack));
-        ret
-    }
-    #[cfg(target_arch = "riscv64")]
-    {
-        let ret: isize;
-        asm!("ecall", in("a7") SYS_FORK, lateout("a0") ret, options(nostack));
-        ret
-    }
-}
+unsafe fn sys_fork() -> isize { raw_syscall::syscall1(SYS_FORK, 0) }
 
 #[inline(always)]
-unsafe fn sys_wait4(pid: isize, status: *mut i32, options: usize, rusage: usize) -> isize {
-    #[cfg(target_arch = "x86_64")]
-    {
-        let ret: isize;
-        asm!(
-            "syscall",
-            in("rax") SYS_WAIT4,
-            in("rdi") pid,
-            in("rsi") status,
-            in("rdx") options,
-            in("r10") rusage,
-            out("rcx") _,
-            out("r11") _,
-            lateout("rax") ret,
-            options(nostack),
-        );
-        ret
-    }
-    #[cfg(target_arch = "aarch64")]
-    {
-        let ret: isize;
-        asm!(
-            "svc #0",
-            in("x8") SYS_WAIT4,
-            in("x0") pid,
-            in("x1") status,
-            in("x2") options,
-            in("x3") rusage,
-            lateout("x0") ret,
-            options(nostack),
-        );
-        ret
-    }
-    #[cfg(target_arch = "riscv64")]
-    {
-        let ret: isize;
-        asm!("ecall", in("a7") SYS_WAIT4, in("a0") pid, in("a1") status, in("a2") options,
-             in("a3") rusage, lateout("a0") ret, options(nostack));
-        ret
-    }
-
-}
+unsafe fn sys_wait4(pid: isize, status: *mut i32, options: usize, rusage: usize) -> isize { raw_syscall::syscall4(SYS_WAIT4, pid as usize, status as usize, options, rusage) }
 
 #[inline(always)]
-unsafe fn sys_execve(path: *const u8, argv: *const usize, envp: *const usize) -> isize {
-    #[cfg(target_arch = "x86_64")]
-    {
-        let ret: isize;
-        asm!(
-            "syscall",
-            in("rax") SYS_EXECVE,
-            in("rdi") path,
-            in("rsi") argv,
-            in("rdx") envp,
-            out("rcx") _,
-            out("r11") _,
-            lateout("rax") ret,
-            options(nostack),
-        );
-        ret
-    }
-    #[cfg(target_arch = "aarch64")]
-    {
-        let ret: isize;
-        asm!(
-            "svc #0",
-            in("x8") SYS_EXECVE,
-            in("x0") path,
-            in("x1") argv,
-            in("x2") envp,
-            lateout("x0") ret,
-            options(nostack),
-        );
-        ret
-    }
-    #[cfg(target_arch = "riscv64")]
-    {
-        let ret: isize;
-        asm!("ecall", in("a7") SYS_EXECVE, in("a0") path, in("a1") argv, in("a2") envp,
-             lateout("a0") ret, options(nostack));
-        ret
-    }
-
-}
+unsafe fn sys_execve(path: *const u8, argv: *const usize, envp: *const usize) -> isize { raw_syscall::syscall3(SYS_EXECVE, path as usize, argv as usize, envp as usize) }
 
 /// `exit_group(status)` — terminates every thread in the thread group.
 /// Never returns; used as the clean PID-1 exit path.
@@ -579,7 +481,7 @@ fn run_exec_smoke_child() {
     let child = unsafe { sys_fork() };
 
     if child == 0 {
-        let path = c"/smoke";
+        let path = c"/bin/smoke";
         let argv = [path.as_ptr() as usize, 0usize];
         let envp = [0usize];
         let result = unsafe {
@@ -599,7 +501,11 @@ fn run_exec_smoke_child() {
     }
 
     let mut status = 0i32;
-    let waited = unsafe { sys_wait4(child, &mut status as *mut i32, 0, 0) };
+    let mut waited;
+    loop {
+        waited = unsafe { sys_wait4(child, &mut status as *mut i32, 0, 0) };
+        if waited != EINTR { break; }
+    }
     if waited != child {
         write_all(STDERR, b"RUSTOS_EXEC marker=smoke_wait_failed\n");
         unsafe { sys_exit_group(1) };
@@ -690,6 +596,7 @@ fn init_main() -> ! {
     const STDERR: usize = 2;
 
     // ── 1. Boot banner ────────────────────────────────────────────────────
+    write_all(STDOUT, b"BOOT_INIT_EXEC\n");
     write_all(STDOUT, b"[init] Hello from userspace!\n");
     write_all(STDOUT, b"[init] rustos PID 1 running (no-libc Rust init)\n");
 
