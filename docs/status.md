@@ -2,11 +2,17 @@
 
 _Last reviewed: 2026-08-30._
 
-This file is the authoritative high-level status registry. The repository is in
-an **integration-first stabilization** state: the default Cargo feature set is
-`full_kernel`, which currently expands to `uefi_boot` and `userspace_boot`.
-Slim boot profiles are still maintained for UEFI smoke testing and staged
-userspace handoff validation.
+This file is the authoritative high-level status registry. The default Cargo
+feature set is `full_kernel`, which now selects the normal subsystem graph with
+UEFI firmware entry independent of the minimal and diagnostic profiles.
+
+Selecting the full graph is a build-configuration fact, not evidence that a
+full userspace boot is supported. The real execution gate requires the kernel
+to launch `/init`, successfully exec `/smoke`, reap that exact child, and
+observe a normal exit with status zero. The current process path remains
+blocked: `spawn_user_process()` returns false and valid `execve` requests
+currently return `ENOSYS`. Do not promote full boot, fork/exec, or userspace
+compatibility claims until the QEMU execution contract passes.
 
 ## Legend
 
@@ -22,7 +28,7 @@ userspace handoff validation.
 
 | Feature selection | Status | Notes |
 |---|---|---|
-| default `full_kernel` | partial | Cargo default; expands to `uefi_boot` and `userspace_boot` |
+| default `full_kernel` | partial, execution gate blocked | Selects the full subsystem cfg graph; this does not prove userspace process execution works |
 | `boot_minimal` | real | Firmware handoff, `BootInfo`, early console, boot markers, idle loop |
 | `userspace_boot` | partial | Raw initramfs/ELF diagnostics only; valid images report execution unavailable because full MM/VFS/scheduler services are excluded |
 | full kernel graph | partial/experimental | Large module graph exists, but many subsystems are not yet supported smoke-contract claims |
@@ -61,7 +67,7 @@ userspace handoff validation.
 
 | Module | Status | Notes |
 |---|---|---|
-| `src/syscall/` dispatcher/routers | partial | Full-kernel-only syscall surface with Linux-number routing tables |
+| `src/syscall/` dispatcher/routers | partial | Canonical router table plus an explicit AArch64/RISC-V number translation boundary; only a subset is mapped |
 | `src/syscall/stubs.rs` | **real** | Documented ENOSYS stubs for deprecated/complex syscalls (remap_file_pages, kexec_file_load, bpf, userfaultfd) — intentionally unimplemented, not blockers for basic operation |
 | `src/syscall/profile.rs` | partial | `syscall-trace` counters exist; performance numbers need fresh collection |
 | POSIX compatibility modules | partial | `posix_full`, `musl_compat`, `openat2_mincore`, signal/fault helpers exist |
@@ -87,7 +93,7 @@ See `docs/syscalls.md` for syscall-by-syscall status.
 
 | Module | Status | Notes |
 |---|---|---|
-| `src/proc/` | **real** | Complete POSIX process semantics: fork/exec/wait/waitpid/waitid, full signal handling (rt signals, sigqueue, sigaltstack, SA_RESTART), process groups, sessions, setpgid/setsid |
+| `src/proc/` | partial | Process APIs exist, but `spawn_user_process()` returns false and valid `execve()` returns `ENOSYS`; do not claim a working fork/exec userspace path |
 | `src/proc/signal.rs` | **real** | Full POSIX signal semantics: real-time signals (SIGRTMIN-SIGRTMAX), sigqueue(2), sigaltstack(2), SA_RESTART, signal disposition reset on exec |
 | `src/proc/wait.rs` | **real** | Complete wait/waitpid/waitid with WUNTRACED, WCONTINUED, WSTOPPED, WNOWAIT, siginfo_t output |
 | `src/proc/creds.rs` | **real** | Process group and session leadership, kill_pgrp, kill_session, POSIX setpgid/setsid/getpgrp/getsid |
@@ -150,11 +156,11 @@ See `docs/ERROR_HANDLING_AUDIT.md` for detailed audit results.
 
 | Priority | Work item | Status | Validation |
 |---:|---|---|---|
-| 1 | Keep x86_64 minimal UEFI smoke green | real | `cargo xtask smoke --arch x86_64` |
-| 2 | Keep AArch64 boot contracts buildable/smokeable where firmware exists | real | `cargo xtask smoke --arch aarch64` |
-| 3 | Replace `userspace_boot` shims with real fs/proc/mm paths | **in progress** | `FULL_OS_USERSPACE_OK` plus syscall tests |
+| 1 | Keep x86_64 minimal UEFI smoke green | independent gate | `cargo xtask smoke --arch x86_64 --features boot_minimal`; full-graph default smoke is a separate gate |
+| 2 | Keep AArch64 minimal boot contracts buildable/smokeable where firmware exists | independent gate | `cargo xtask smoke --arch aarch64 --features boot_minimal` |
+| 3 | Integrate the full graph with real process creation and image replacement | blocked | Full `cargo xtask smoke --arch x86_64` must pass the RUSTOS_EXEC child protocol plus the real-log timing parser |
 | 4 | Make minimum init syscalls real and EFAULT-safe | partial | `docs/syscalls.md` plus kmtest coverage |
-| 5 | Refresh boot-image and boot-performance baselines | **completed** | In-kernel boot markers with CI parser; baseline collection via `scripts/ci/parse-boot-marks.sh` |
+| 5 | Refresh boot-image and boot-performance baselines | advisory / review required | Parse actual QEMU logs; do not claim userspace timing until `BOOT_INIT_EXEC` and the execution markers are independently proven |
 | 6 | Promote selected full-kernel subsystems from experimental to supported | **in progress** | VFS/ext4/FAT32, SMP, IPC completeness completed |
 | 7 | Complete error handling audit across remaining modules | **in progress** | See ERROR_HANDLING_AUDIT.md |
 | 8 | Expand testing coverage with syscall tests and stability scripts | **in progress** | `userspace/smoke`, `src/kmtest/`, scripts/stability_test.sh |
