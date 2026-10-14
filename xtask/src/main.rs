@@ -1239,48 +1239,160 @@ fn launch_qemu_riscv64(
     run(&mut cmd)
 }
 
-fn smoke_marker_regex() -> &'static str {
-    "BOOT_MINIMAL_OK|FULL_OS_USERSPACE_OK|entering cpu_idle"
-}
-
-fn serial_has_smoke_marker(log_path: &Path) -> Result<bool> {
-    match fs::read_to_string(log_path) {
-        Ok(serial) => Ok(serial.contains("BOOT_MINIMAL_OK")
-            || serial.contains("FULL_OS_USERSPACE_OK")
-            || serial.contains("entering cpu_idle")),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(err) => Err(err).with_context(|| format!("read smoke log {}", log_path.display())),
+fn smoke_marker_regex(full_kernel: bool) -> &'static str {
+    if full_kernel {
+        "RUSTOS_EXEC marker=smoke_started|RUSTOS_EXEC marker=smoke_tests_passed|RUSTOS_EXEC marker=smoke_child_reaped|RUSTOS_EXEC marker=init_complete exit=0"
+    } else {
+        "RustOS: BOOT_MINIMAL_OK"
     }
 }
 
-fn run_until_smoke_marker(cmd: &mut Command, log_path: &Path, timeout: Duration) -> Result<()> {
+fn serial_has_smoke_marker(log_path: &Path, full_kernel: bool) -> Result<bool> {
+    let serial = match fs::read_to_string(log_path) {
+        Ok(serial) => serial,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(err) => return Err(err).with_context(|| format!("read smoke log {}", log_path.display())),
+    };
+
+    for failure in [
+        "RUSTOS_EXEC marker=smoke_execve_failed",
+        "RUSTOS_EXEC marker=smoke_fork_failed",
+        "RUSTOS_EXEC marker=smoke_wait_failed",
+        "RUSTOS_EXEC marker=smoke_child_failed",
+        "USERSPACE_BOOT_UNSUPPORTED",
+        "SMOKE FAIL:",
+        "Kernel panic",
+        "KERNEL PANIC",
+    ] {
+        if serial.contains(failure) {
+            bail!("smoke failure marker {failure:?} found in {}", log_path.display());
+        }
+    }
+
+    if !full_kernel {
+        return Ok(serial.lines().any(|line| {
+            let line = line.trim_end_matches('\r');
+            line == "RustOS: BOOT_MINIMAL_OK" || line == "BOOT_MINIMAL_OK"
+        }));
+    }
+
+    let required = [
+        "RUSTOS_EXEC marker=smoke_started",
+        "RUSTOS_EXEC marker=smoke_tests_passed",
+        "RUSTOS_EXEC marker=smoke_child_reaped",
+        "RUSTOS_EXEC marker=init_complete exit=0",
+    ];
+    Ok(required.iter().all(|marker| serial.contains(marker)))
+}
+
+fn json_escape(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    for ch in value.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            ch if ch.is_control() => out.push(' '),
+            ch => out.push(ch),
+        }
+    }
+    out
+}
+
+fn write_smoke_metadata(
+    path: &Path,
+    arch: Arch,
+    profile: BuildProfile,
+    full_kernel: bool,
+    timeout_seconds: u64,
+    started_unix_ms: u128,
+    elapsed_ms: u128,
+    result: &str,
+    log_path: &Path,
+) -> Result<()> {
+    let contract = if full_kernel { "full_userspace_exec" } else { "minimal_boot" };
+    let status = json_escape(result);
+    let arch_name = json_escape(arch_str(arch));
+    let profile_name = json_escape(&format!("{profile:?}"));
+    let log_name = json_escape(&log_path.display().to_string());
+    let metadata = format!(
+        concat!(
+            "{{\n",
+            "  \"schema_version\": 1,\n",
+            "  \"architecture\": \"{}\",\n",
+            "  \"profile\": \"{}\",\n",
+            "  \"contract\": \"{}\",\n",
+            "  \"host_os\": \"{}\",\n",
+            "  \"host_arch\": \"{}\",\n",
+            "  \"started_unix_ms\": {},\n",
+            "  \"elapsed_ms\": {},\n",
+            "  \"qemu_deadline_seconds\": {},\n",
+            "  \"result\": \"{}\",\n",
+            "  \"serial_log\": \"{}\",\n",
+            "  \"expected_markers\": \"{}\"\n",
+            "}}\n"
+        ),
+        arch_name,
+        profile_name,
+        contract,
+        env::consts::OS,
+        env::consts::ARCH,
+        started_unix_ms,
+        elapsed_ms,
+        timeout_seconds,
+        status,
+        log_name,
+        smoke_marker_regex(full_kernel),
+    );
+    fs::write(path, metadata).with_context(|| format!("write smoke metadata {}", path.display()))
+}
+
+fn run_until_smoke_marker(
+    cmd: &mut Command,
+    log_path: &Path,
+    timeout: Duration,
+    full_kernel: bool,
+) -> Result<()> {
     log(format!("running: {:?}", cmd));
     let mut child = cmd.spawn().context("failed to spawn QEMU")?;
     let deadline = Instant::now() + timeout;
 
     loop {
-        if serial_has_smoke_marker(log_path)? {
-            let _ = child.kill();
-            let _ = child.wait();
-            log(format!("smoke marker found in {}", log_path.display()));
-            return Ok(());
+        match serial_has_smoke_marker(log_path, full_kernel) {
+            Ok(true) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                log(format!("smoke contract found in {}", log_path.display()));
+                return Ok(());
+            }
+            Ok(false) => {}
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error);
+            }
         }
 
         if let Some(status) = child.try_wait().context("poll QEMU status")? {
-            if status.success() && serial_has_smoke_marker(log_path)? {
-                log(format!("smoke marker found in {}", log_path.display()));
-                return Ok(());
+            match serial_has_smoke_marker(log_path, full_kernel) {
+                Ok(true) => {
+                    log(format!("smoke contract found in {}", log_path.display()));
+                    return Ok(());
+                }
+                Ok(false) => bail!("QEMU exited before smoke contract appeared with {status}"),
+                Err(error) => return Err(error),
             }
-            bail!("QEMU exited before smoke marker appeared with {status}");
         }
 
         if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
             bail!(
-                "smoke marker not found in {} before timeout; expected {}",
+                "smoke contract not found in {} before timeout; expected {}",
                 log_path.display(),
-                smoke_marker_regex()
+                smoke_marker_regex(full_kernel)
             );
         }
 
