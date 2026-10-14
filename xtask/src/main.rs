@@ -1241,7 +1241,7 @@ fn launch_qemu_riscv64(
 
 fn smoke_marker_regex(full_kernel: bool) -> &'static str {
     if full_kernel {
-        "RUSTOS_EXEC marker=smoke_started|RUSTOS_EXEC marker=smoke_tests_passed|RUSTOS_EXEC marker=smoke_child_reaped pid=<positive-pid> exit=0|RUSTOS_BENCH marker=complete|RUSTOS_EXEC marker=bench_child_reaped pid=<positive-pid> exit=0|RUSTOS_EXEC marker=init_complete exit=0"
+        "BOOT_INIT_EXEC|USERSPACE_SMOKE_START|USERSPACE_SMOKE_PASS|FULL_OS_USERSPACE_OK|RUSTOS_EXEC marker=smoke_started|RUSTOS_EXEC marker=smoke_tests_passed|RUSTOS_EXEC marker=smoke_child_reaped pid=<positive-pid> exit=0|RUSTOS_BENCH marker=complete|RUSTOS_EXEC marker=bench_child_reaped pid=<positive-pid> exit=0|RUSTOS_EXEC marker=init_complete exit=0"
     } else {
         "RustOS: BOOT_MINIMAL_OK"
     }
@@ -1299,7 +1299,11 @@ fn serial_has_smoke_marker(log_path: &Path, full_kernel: bool) -> Result<bool> {
     };
 
     Ok(
-        has_exact_line("RUSTOS_EXEC marker=smoke_started")
+        has_exact_line("BOOT_INIT_EXEC")
+            && has_exact_line("USERSPACE_SMOKE_START")
+            && has_exact_line("USERSPACE_SMOKE_PASS")
+            && has_exact_line("FULL_OS_USERSPACE_OK")
+            && has_exact_line("RUSTOS_EXEC marker=smoke_started")
             && has_exact_line("RUSTOS_EXEC marker=smoke_tests_passed")
             && child_reaped_zero("RUSTOS_EXEC marker=smoke_child_reaped pid=")
             && has_exact_line("RUSTOS_BENCH marker=complete")
@@ -1652,6 +1656,7 @@ fn build_init(root: &Path, arch: Arch) -> Result<()> {
     let initramfs_root = root.join("initramfs_root");
     fs::create_dir_all(&initramfs_root).context("create initramfs_root")?;
     fs::create_dir_all(initramfs_root.join("tmp")).context("create initramfs_root/tmp")?;
+    fs::create_dir_all(initramfs_root.join("bin")).context("create initramfs_root/bin")?;
 
     let init_src = root
         .join("userspace/init/target")
@@ -1665,7 +1670,7 @@ fn build_init(root: &Path, arch: Arch) -> Result<()> {
         .join("userspace/smoke/target")
         .join(target)
         .join("release/smoke");
-    let smoke_dst = initramfs_root.join("smoke");
+    let smoke_dst = initramfs_root.join("bin/smoke");
     fs::copy(&smoke_src, &smoke_dst)
         .with_context(|| format!("copy {} -> {}", smoke_src.display(), smoke_dst.display()))?;
 
