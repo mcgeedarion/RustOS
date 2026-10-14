@@ -1651,6 +1651,7 @@ fn build_init(root: &Path, arch: Arch) -> Result<()> {
     // Stage PID 1, syscall smoke, and benchmark workloads in the initramfs.
     let initramfs_root = root.join("initramfs_root");
     fs::create_dir_all(&initramfs_root).context("create initramfs_root")?;
+    fs::create_dir_all(initramfs_root.join("tmp")).context("create initramfs_root/tmp")?;
 
     let init_src = root
         .join("userspace/init/target")
