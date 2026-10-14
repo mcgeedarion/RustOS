@@ -56,7 +56,7 @@ pub unsafe fn restore(task: *mut crate::proc::task_types::Task) -> ! {
     if task.is_null() {
         crate::serial_println!("context: refusing to restore a null task");
         loop {
-            crate::arch::ArchImpl::halt();
+            <crate::arch::Arch as crate::arch::api::Cpu>::halt();
         }
     }
 
