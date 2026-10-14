@@ -1,5 +1,7 @@
 #![no_main]
 
+extern crate alloc;
+
 use libfuzzer_sys::fuzz_target;
 
 // The production ext4 parser uses this interface only for device I/O during
