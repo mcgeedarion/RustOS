@@ -110,21 +110,15 @@ pub fn spawn_user_process_from_bytes_full(
 ///
 /// This is a simplified implementation that logs the mapping request.
 /// Full implementation would integrate with mm::mmap and page table setup.
-fn map_elf_segments_for_process(_process: &Process, _elf: &[u8], _entry: u64) -> bool {
-    // TODO: Full implementation would:
-    // 1. Parse ELF program headers
-    // 2. Allocate physical pages for each PT_LOAD segment
-    // 3. Map virtual addresses with appropriate permissions (R/W/X)
-    // 4. Copy segment data from ELF to allocated pages
-    // 5. Zero-fill BSS sections
-
+fn map_elf_segments_for_process(_process: &Process, _elf: &[u8], entry: u64) -> bool {
+    // Do not enqueue a process while its address space is not actually mapped.
+    // Claiming success here would make a source-level stub look like a working
+    // ELF loader and could send the scheduler to an unmapped user entry.
     crate::serial_println!(
-        "exec: ELF segment mapping requested for entry={:#x}",
-        _entry
+        "exec: refusing PID creation; PT_LOAD mapping is not implemented (entry={:#x})",
+        entry
     );
-
-    // For now, assume success - actual mapping happens in full kernel path
-    true
+    false
 }
 
 /// Set up initial user stack with argv, envp, and auxv.
@@ -136,20 +130,14 @@ fn map_elf_segments_for_process(_process: &Process, _elf: &[u8], _entry: u64) ->
 /// - auxv[] (auxiliary vector)
 /// - argument strings
 /// - environment strings
-fn setup_user_stack(_process: &Process, _entry: u64, argv: &[&str], envp: &[&str]) -> bool {
-    // TODO: Full implementation would:
-    // 1. Allocate stack pages at top of user address space
-    // 2. Build stack frame with argc/argv/envp/auxv
-    // 3. Copy argument and environment strings onto stack
-    // 4. Set process RIP/RSP to entry point and stack top
-
+fn setup_user_stack(_process: &Process, entry: u64, argv: &[&str], envp: &[&str]) -> bool {
+    // The process cannot safely execute until its initial user stack contains
+    // argc/argv/envp/auxv and the saved user SP points at that stack.
     crate::serial_println!(
-        "exec: stack setup for entry={:#x} argc={} envc={}",
-        _entry,
+        "exec: refusing PID creation; initial user stack is not implemented (entry={:#x}, argc={}, envc={})",
+        entry,
         argv.len(),
         envp.len()
     );
-
-    // For now, assume success - actual stack setup happens in full kernel path
-    true
+    false
 }
