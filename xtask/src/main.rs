@@ -297,6 +297,14 @@ fn has_feature(opts: &BuildOpts, feature: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// True only for a build that selects the real MM/VFS/process/scheduler graph.
+/// UEFI firmware entry by itself does not imply the minimal profile.
+fn uses_full_kernel(opts: &BuildOpts) -> bool {
+    !matches!(opts.profile, BuildProfile::ReleaseBoot)
+        && !has_feature(opts, "boot_minimal")
+        && !has_feature(opts, "userspace_boot")
+}
+
 fn initrd_path(root: &Path) -> PathBuf {
     root.join("initramfs.cpio")
 }
@@ -306,7 +314,7 @@ fn ensure_initrd(root: &Path, opts: &BuildOpts) -> Result<Option<PathBuf>> {
         return Ok(None);
     }
 
-    if has_feature(opts, "userspace_boot") {
+    if has_feature(opts, "userspace_boot") || uses_full_kernel(opts) {
         build_init(root, opts.arch)?;
     }
 
@@ -1281,6 +1289,14 @@ fn run_until_smoke_marker(cmd: &mut Command, log_path: &Path, timeout: Duration)
 }
 
 fn run_smoke(root: &Path, opts: &BuildOpts) -> Result<()> {
+    let mut effective_opts = opts.clone();
+    // A full-kernel smoke must include the userspace workload that proves
+    // process creation, execve, wait/reap, and exit-status handling.
+    if uses_full_kernel(&effective_opts) {
+        effective_opts.initrd = true;
+    }
+    let opts = &effective_opts;
+
     ensure_qemu_for_arch(opts.arch)?;
 
     let initrd = ensure_initrd(root, opts)?;
