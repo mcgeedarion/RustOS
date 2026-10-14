@@ -416,33 +416,24 @@ pub fn parse_phdrs_with_hdr(data: &[u8], hdr: &Elf64Hdr) -> Option<alloc::vec::V
     Some(out)
 }
 
-/// Map the PT_LOAD segments of an already-parsed ELF into `cr3`.
+/// Validate PT_LOAD bounds of an already-parsed ELF and return its entry address.
 ///
-/// Returns the entry virtual address on success, or `None` if any
-/// segment failed to map. This is a thin shim around the existing
-/// private `load_segments`; callers that already have `(hdr, phdrs)`
-/// don't need to re-parse.
-///
-/// Until the loader is fully restructured, we forward to the
-/// arch-neutral `load_segments` helper that operates on the in-memory
-/// slice. The `cr3` parameter is currently advisory — the existing
-/// loader installs mappings via `memory::vmm::map_page` (the old name
-/// for what is now `crate::arch::*::paging::map_page`). When the loader
-/// is migrated to the arch::api Paging trait this argument becomes
-/// load-bearing.
+/// Despite the legacy name, this routine is currently metadata-only. It checks
+/// file offsets and segment sizes but does not allocate frames, install page
+/// table mappings, apply permissions, or use `cr3`. User-process creation
+/// must not be marked supported until a real architecture-aware mapper exists.
 pub fn load_elf_into(
     _cr3: usize,
     data: &[u8],
     hdr: &Elf64Hdr,
     phdrs: &[Elf64Phdr],
 ) -> Result<u64, ParseError> {
-    // Existing load_segments is the canonical mapping logic.
-    // Re-validating here is cheap and keeps this function honest.
+    // Metadata validation only. Actual page-table installation is not wired
+    // to this API yet.
     if data.len() < mem::size_of::<Elf64Header>() {
         return Err(ParseError::OutOfBounds);
     }
-    // Walk PT_LOAD segments and confirm offsets are in range; defer
-    // actual page-table installation to load_segments via load_elf.
+    // Walk PT_LOAD segments and confirm file offsets are in range.
     for p in phdrs {
         let p_type = {
             let v = p.p_type;
