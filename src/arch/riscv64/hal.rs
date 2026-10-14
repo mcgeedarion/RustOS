@@ -124,7 +124,8 @@ impl Paging for ArchImpl {
         } else {
             pte_flags |= super::paging::PTE_EXEC;
         }
-        super::paging::map_page(cr3, va, pa, pte_flags)
+        super::paging::map_page(cr3, va, pa, pte_flags);
+        true
     }
     fn unmap_page(cr3: usize, va: usize) -> Option<usize> {
         super::paging::unmap_page(cr3, va)
