@@ -14,7 +14,8 @@ serial-log checks stay consistent.
 | `cargo xtask check --arch x86_64` | Type-check the default full subsystem graph with x86_64 UEFI entry |
 | `cargo xtask smoke --arch x86_64` | Build the full graph and initramfs, boot QEMU under a deadline, require the full userspace execution protocol, run the timing parser on that real log, and write JSON run metadata |
 | `cargo xtask smoke --arch aarch64` | Same full execution contract for AArch64 UEFI, subject to firmware availability |
-| `cargo xtask smoke --arch x86_64 --features boot_minimal` | Explicit minimal-only QEMU smoke, accepting only `BOOT_MINIMAL_OK` |\n| `cargo xtask build-init --arch x86_64` | Build `/init` and `/smoke`, stage both in the initramfs, and pack `initramfs.cpio` |
+| `cargo xtask smoke --arch x86_64 --features boot_minimal` | Explicit minimal-only QEMU smoke, accepting only `BOOT_MINIMAL_OK` |
+| `cargo xtask build-init --arch x86_64` | Build `/init` and `/smoke`, stage both in the initramfs, and pack `initramfs.cpio` |
 | `cargo xtask roadmap-check` | Validate roadmap/status/syscall/fault docs contain required topics |
 | `bash scripts/ci/check-stubs.sh` | Guard documented stub classifications |
 | `cargo xtask ci-local` | Fast aggregate local gate: check, host tests, module lint, stub guard, docs guard |
