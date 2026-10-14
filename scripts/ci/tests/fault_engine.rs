@@ -70,3 +70,32 @@ fn rearming_and_resetting_counters_are_independent() {
     assert_eq!(point.trigger_count(), 0);
     assert!(!point.check());
 }
+
+
+/// Emit clearly scoped host-engine markers for the catalogued fault classes.
+/// These markers are not a guest-kernel recovery claim: the PMM/VMM/syscall
+/// injection callsites and post-recovery guest workloads are not integrated yet.
+#[test]
+fn catalogued_fault_points_report_host_recovery_boundary() {
+    let scenarios = [
+        ("pmm_alloc_oom_once", "pmm::alloc_frame"),
+        ("pmm_contiguous_alloc_once", "pmm::alloc_frames_contiguous"),
+        ("vmm_map_once", "vmm::map_page"),
+        ("vmm_reserve_once", "vmm::reserve_region"),
+        ("syscall_emfile_once", "syscall::fd_exhaustion"),
+        ("syscall_eagain_once", "syscall::transient_eagain"),
+    ];
+
+    for (scenario, site) in scenarios {
+        let point = FaultPoint::new(site);
+        point.arm(0);
+        assert!(point.check(), "{scenario} should fire once");
+        println!("RUSTOS_FAULT marker=fired scenario={scenario} scope=host_engine");
+        assert_eq!(point.trigger_count(), 1);
+
+        assert!(!point.check(), "{scenario} must disarm after its one-shot fault");
+        println!("RUSTOS_FAULT marker=recovered scenario={scenario} scope=host_engine");
+        assert!(!point.check(), "{scenario} should remain healthy after recovery");
+        println!("RUSTOS_FAULT marker=post_recovery_pass scenario={scenario} scope=host_engine");
+    }
+}
