@@ -1,5 +1,7 @@
 #![no_main]
 
+extern crate alloc;
+
 use std::string::String;
 use libfuzzer_sys::fuzz_target;
 
