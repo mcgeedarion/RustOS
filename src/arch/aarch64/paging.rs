@@ -167,7 +167,7 @@ pub fn free_user_page_table(root_pa: usize) {
 
     unsafe {
         let root = root_pa as *const usize;
-        for index in 0..256 {
+        for index in 0..512 {
             let desc = root.add(index).read_volatile();
             if desc & pte::VALID != 0 && desc & pte::TABLE != 0 {
                 free_table(desc & pte::ADDR_MASK, 1);
