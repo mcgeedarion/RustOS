@@ -20,10 +20,10 @@ or allocate memory using disk-provided size fields.
 Install a nightly toolchain and `cargo-fuzz`, then run:
 
 ```sh
-cargo fuzz run cpio_newc -- -max_len=4096 -max_total_time=60 -dict=fuzz/dictionaries/cpio_newc.dict
-cargo fuzz run elf64 -- -max_len=4096 -max_total_time=60 -dict=fuzz/dictionaries/elf64.dict
-cargo fuzz run vfs_path -- -max_len=4096 -max_total_time=60 -dict=fuzz/dictionaries/vfs_path.dict
-cargo fuzz run ext4_metadata -- -max_len=4096 -max_total_time=60 -dict=fuzz/dictionaries/ext4_metadata.dict
+cargo fuzz run cpio_newc --sanitizer address -- -max_len=4096 -max_total_time=60 -dict=fuzz/dictionaries/cpio_newc.dict
+cargo fuzz run elf64 --sanitizer address -- -max_len=4096 -max_total_time=60 -dict=fuzz/dictionaries/elf64.dict
+cargo fuzz run vfs_path --sanitizer address -- -max_len=4096 -max_total_time=60 -dict=fuzz/dictionaries/vfs_path.dict
+cargo fuzz run ext4_metadata --sanitizer address -- -max_len=4096 -max_total_time=60 -dict=fuzz/dictionaries/ext4_metadata.dict
 ```
 
 Seed files live under `fuzz/corpus/<target>/`. LibFuzzer sanitizer instrumentation
