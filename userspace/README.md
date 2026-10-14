@@ -98,3 +98,23 @@ path = "src/main.rs"
 ## License
 
 MIT OR Apache-2.0
+
+
+## Cross-architecture smoke contract
+
+The shared `raw-syscall` crate provides syscall wrappers for x86_64, AArch64,
+and RISC-V 64 using each architecture's register and trap convention. Userspace
+entry points remain architecture-specific naked ELF stubs. The smoke workload
+checks process creation and normal child exit, descriptor and errno behavior,
+and a regular-file create/write/seek/read/unlink roundtrip including `ENOENT`
+after unlink.
+
+The full QEMU smoke requires an initramfs with writable `/tmp`, `/init`,
+`/bin/smoke`, and `/bench`, plus a kernel with working child creation, ELF
+image replacement, exact-PID wait/reap, regular-file I/O, and required syscall
+mappings. The current kernel still has a known integration blocker: valid
+`execve` returns `ENOSYS` and executable process mapping/initial stack setup
+are incomplete. Source assertions and successful compilation do not establish
+an end-to-end userspace boot. Run `cargo xtask smoke --arch x86_64` and retain
+the serial log and metadata before claiming runtime support. AArch64 and RISC-V
+require separate architecture-specific execution runs.
