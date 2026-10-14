@@ -109,6 +109,7 @@ cargo xtask run --arch x86_64 --features userspace_boot --initrd
 - `docs/architecture.md` describes architecture contracts and code organization rules.
 - `docs/boot-profile-contracts.md` separates slim-profile build, boot, and unsupported userspace-execution guarantees.
 - `docs/milestones.md` tracks M1-M5 product milestones and serial sentinels.
+- `docs/acceptance-criteria.md` defines executable acceptance gates for userspace execution, QEMU artifacts, fault recovery, filesystem/IPC, fuzzing, and syscall benchmarks.
 - `docs/syscalls.md` records syscall maturity and EFAULT-safety expectations.
 - `docs/ci.md`, `docs/getting-started.md`, and `docs/code_coverage.md` cover developer validation.
 - Boot performance and size notes live in `docs/boot-perf.md`, `docs/boot-image-size.md`, and `docs/boot-optimization-checklist.md`.
