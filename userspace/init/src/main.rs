@@ -52,12 +52,31 @@ const SYS_CLOSE: usize = 57;
 #[cfg(target_arch = "aarch64")]
 const SYS_BRK: usize = 214;
 #[cfg(target_arch = "aarch64")]
-const SYS_FORK: usize = usize::MAX;
+const SYS_FORK: usize = 220; // Translated to RustOS fork semantics by syscall dispatch.
 #[cfg(target_arch = "aarch64")]
 const SYS_EXECVE: usize = 221;
 #[cfg(target_arch = "aarch64")]
 const SYS_WAIT4: usize = 260;
 #[cfg(target_arch = "aarch64")]
+const SYS_EXIT_GROUP: usize = 94;
+
+#[cfg(target_arch = "riscv64")]
+const SYS_READ: usize = 63;
+#[cfg(target_arch = "riscv64")]
+const SYS_WRITE: usize = 64;
+#[cfg(target_arch = "riscv64")]
+const SYS_OPEN: usize = 56; // openat
+#[cfg(target_arch = "riscv64")]
+const SYS_CLOSE: usize = 57;
+#[cfg(target_arch = "riscv64")]
+const SYS_BRK: usize = 214;
+#[cfg(target_arch = "riscv64")]
+const SYS_FORK: usize = 220;
+#[cfg(target_arch = "riscv64")]
+const SYS_EXECVE: usize = 221;
+#[cfg(target_arch = "riscv64")]
+const SYS_WAIT4: usize = 260;
+#[cfg(target_arch = "riscv64")]
 const SYS_EXIT_GROUP: usize = 94;
 
 // ── Raw syscall wrappers ───────────────────────────────────────────────────
@@ -95,6 +114,14 @@ unsafe fn sys_write(fd: usize, buf: *const u8, count: usize) -> isize {
         );
         ret
     }
+    #[cfg(target_arch = "riscv64")]
+    {
+        let ret: isize;
+        asm!("ecall", in("a7") SYS_WRITE, in("a0") fd, in("a1") buf, in("a2") count,
+             lateout("a0") ret, options(nostack));
+        ret
+    }
+
 }
 
 /// `read(fd, buf, count)` → bytes read (or negative errno)
@@ -131,6 +158,14 @@ unsafe fn sys_read(fd: usize, buf: *mut u8, count: usize) -> isize {
         );
         ret
     }
+    #[cfg(target_arch = "riscv64")]
+    {
+        let ret: isize;
+        asm!("ecall", in("a7") SYS_READ, in("a0") fd, in("a1") buf, in("a2") count,
+             lateout("a0") ret, options(nostack));
+        ret
+    }
+
 }
 
 /// `open(path, flags, mode)` → fd (or negative errno).
@@ -167,6 +202,14 @@ unsafe fn sys_open(path: *const u8, flags: usize, mode: usize) -> isize {
         );
         ret
     }
+    #[cfg(target_arch = "riscv64")]
+    {
+        let ret: isize;
+        asm!("ecall", in("a7") SYS_OPEN, in("a0") -100isize, in("a1") path,
+             in("a2") flags, in("a3") mode, lateout("a0") ret, options(nostack));
+        ret
+    }
+
 }
 
 /// `close(fd)` → 0 or negative errno.
@@ -198,6 +241,13 @@ unsafe fn sys_close(fd: usize) -> isize {
         );
         ret
     }
+    #[cfg(target_arch = "riscv64")]
+    {
+        let ret: isize;
+        asm!("ecall", in("a7") SYS_CLOSE, in("a0") fd, lateout("a0") ret, options(nostack));
+        ret
+    }
+
 }
 
 /// `brk(addr)` — returns current program break; brk(0) is a harmless probe.
@@ -229,6 +279,13 @@ unsafe fn sys_brk(addr: usize) -> usize {
         );
         ret
     }
+    #[cfg(target_arch = "riscv64")]
+    {
+        let ret: usize;
+        asm!("ecall", in("a7") SYS_BRK, in("a0") addr, lateout("a0") ret, options(nostack));
+        ret
+    }
+
 }
 
 #[inline(always)]
@@ -248,7 +305,15 @@ unsafe fn sys_fork() -> isize {
     }
     #[cfg(target_arch = "aarch64")]
     {
-        -38
+        let ret: isize;
+        asm!("svc #0", in("x8") SYS_FORK, lateout("x0") ret, options(nostack));
+        ret
+    }
+    #[cfg(target_arch = "riscv64")]
+    {
+        let ret: isize;
+        asm!("ecall", in("a7") SYS_FORK, lateout("a0") ret, options(nostack));
+        ret
     }
 }
 
@@ -286,6 +351,14 @@ unsafe fn sys_wait4(pid: isize, status: *mut i32, options: usize, rusage: usize)
         );
         ret
     }
+    #[cfg(target_arch = "riscv64")]
+    {
+        let ret: isize;
+        asm!("ecall", in("a7") SYS_WAIT4, in("a0") pid, in("a1") status, in("a2") options,
+             in("a3") rusage, lateout("a0") ret, options(nostack));
+        ret
+    }
+
 }
 
 #[inline(always)]
@@ -320,6 +393,14 @@ unsafe fn sys_execve(path: *const u8, argv: *const usize, envp: *const usize) ->
         );
         ret
     }
+    #[cfg(target_arch = "riscv64")]
+    {
+        let ret: isize;
+        asm!("ecall", in("a7") SYS_EXECVE, in("a0") path, in("a1") argv, in("a2") envp,
+             lateout("a0") ret, options(nostack));
+        ret
+    }
+
 }
 
 /// `exit_group(status)` — terminates every thread in the thread group.
@@ -340,6 +421,9 @@ unsafe fn sys_exit_group(status: usize) -> ! {
         in("x0") status,
         options(noreturn),
     );
+    #[cfg(target_arch = "riscv64")]
+    asm!("ecall", in("a7") SYS_EXIT_GROUP, in("a0") status, options(noreturn));
+
 }
 
 // ── Convenience write helper ───────────────────────────────────────────────
