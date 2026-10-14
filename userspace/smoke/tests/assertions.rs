@@ -22,6 +22,7 @@ const O_RDWR: usize = 0x2;
 const O_CREAT: usize = 0x40;
 const O_TRUNC: usize = 0x200;
 const FILE_DATA: &[u8] = b"rustos-write-test";
+const RENAMED_PATH: &[u8] = b"/tmp/rustos-smoke-write-renamed\0";
 const PIPE_DATA: &[u8] = b"rustos-pipe-roundtrip";
 
 struct Mock {
@@ -39,7 +40,9 @@ struct Mock {
     read_calls: usize,
     pipe_result: isize,
     unlink_result: isize,
+    rename_result: isize,
     pipe_calls: usize,
+    rename_calls: usize,
     unlink_calls: usize,
     waited_pids: Vec<isize>,
     failures: Vec<String>,
@@ -62,7 +65,9 @@ impl Default for Mock {
             read_calls: 0,
             pipe_result: 0,
             unlink_result: 0,
+            rename_result: 0,
             pipe_calls: 0,
+            rename_calls: 0,
             unlink_calls: 0,
             waited_pids: Vec::new(),
             failures: Vec::new(),
@@ -140,6 +145,14 @@ unsafe fn sys_read(fd: usize, buf: *mut u8, count: usize) -> isize {
     })
 }
 
+unsafe fn sys_rename(_old_path: *const u8, _new_path: *const u8) -> isize {
+    MOCK.with(|state| {
+        let mut state = state.borrow_mut();
+        state.rename_calls += 1;
+        state.rename_result
+    })
+}
+
 unsafe fn sys_unlink(_path: *const u8) -> isize {
     MOCK.with(|state| {
         let mut state = state.borrow_mut();
@@ -197,6 +210,7 @@ fn successful_run_checks_both_children_and_eof() {
     assert_eq!(state.close_calls, 6);
     assert_eq!(state.read_calls, 3);
     assert_eq!(state.pipe_calls, 1);
+    assert_eq!(state.rename_calls, 1);
     assert_eq!(state.unlink_calls, 1);
 }
 
@@ -276,6 +290,18 @@ fn pipe_creation_failure_cannot_pass() {
     assert!(!passed);
     assert_eq!(state.failures, ["pipe2 create"]);
     assert_eq!(state.pipe_calls, 1);
+}
+
+#[test]
+fn rename_failure_cannot_pass_and_still_cleans_up() {
+    let (passed, state) = run_with(Mock {
+        rename_result: -2,
+        ..Mock::default()
+    });
+    assert!(!passed);
+    assert_eq!(state.failures, ["rename smoke file"]);
+    assert_eq!(state.rename_calls, 1);
+    assert_eq!(state.unlink_calls, 1);
 }
 
 #[test]
