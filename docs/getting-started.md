@@ -1,16 +1,23 @@
 # Getting Started — RustOS Developer On-Ramp
 
-_Last reviewed: 2026-07-01._
+_Last reviewed: 2026-10-13._
 
-The canonical local validation command is:
+The default validation command compiles the full subsystem graph:
 
 ```bash
-cargo xtask smoke --arch x86_64
+cargo xtask check --arch x86_64
 ```
 
-It builds the default x86_64 UEFI/minimal-boot image, assembles a FAT ESP disk
-image, boots it in QEMU, captures serial output, and checks for a supported boot
-sentinel.
+The separate known-scope minimal boot smoke is explicit:
+
+```bash
+cargo xtask smoke --arch x86_64 --features boot_minimal
+```
+
+The default full-kernel runtime gate is `cargo xtask smoke --arch x86_64`.
+It enforces userspace child execution, exact-PID reaping with status zero,
+benchmark JSON, and timing-parser success. It remains blocked until the real
+ELF mapping, initial stack, and process scheduling path are integrated.
 
 ## Prerequisites
 
@@ -36,17 +43,20 @@ available. For AArch64, set `QEMU_EFI` if the known firmware paths are absent.
 ```bash
 git clone https://github.com/mcgeedarion/RustOS.git
 cd RustOS
+cargo xtask check --arch x86_64
+cargo xtask smoke --arch x86_64 --features boot_minimal
+```
+
+The explicit minimal smoke writes serial output to `target/smoke-x86_64.log` and
+passes only when the `BOOT_MINIMAL_OK` sentinel appears. Idle-loop text and a
+userspace alias are not sufficient. The full userspace gate is separate:
+
+```bash
 cargo xtask smoke --arch x86_64
 ```
 
-A successful smoke run writes serial output to `target/smoke-x86_64.log` and
-passes if it contains one of:
-
-```text
-BOOT_MINIMAL_OK
-FULL_OS_USERSPACE_OK
-entering cpu_idle
-```
+That gate stays blocked until init can successfully execute/reap `/smoke` and
+`/bench` with normal zero exits from a working userspace process backend.
 
 ## Common commands
 
@@ -66,7 +76,7 @@ cargo xtask run --arch x86_64
 # QEMU run with GDB server on tcp::1234
 cargo xtask debug --arch x86_64
 
-# Build userspace init and pack initramfs.cpio
+# Build init, smoke, benchmark binaries and pack initramfs.cpio
 cargo xtask build-init --arch x86_64
 
 # Validate roadmap/status/syscall/fault documentation contracts
@@ -80,9 +90,9 @@ cargo xtask ci-local
 
 | Selection | Purpose |
 |---|---|
-| default `uefi_boot` | Enables `boot_minimal`; current default smoke path |
-| `--features boot_minimal` | Explicit minimal boot path |
-| `--features userspace_boot --initrd` | Thin userspace-handoff experiments |
+| default `full_kernel` | Selects the normal subsystem graph with UEFI firmware entry |
+| `--features boot_minimal` | Explicit minimal boot path and sentinel contract |
+| `--features userspace_boot --initrd` | Diagnostic-only userspace handoff experiments |
 | `--profile release-boot` | Lean image profile; size baselines are documented separately |
 
 ## Disk image layout
