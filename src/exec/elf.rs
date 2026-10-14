@@ -579,3 +579,77 @@ pub fn end_of_bss(phdrs: &[Elf64Phdr], bias: u64) -> usize {
     }
     hi as usize
 }
+
+
+#[cfg(test)]
+mod acceptance_tests {
+    use super::*;
+
+    const TEST_ENTRY: u64 = 0x0040_0000;
+    const TEST_PHDR_OFFSET: usize = mem::size_of::<Elf64Header>();
+    const TEST_SEGMENT_OFFSET: usize = 0x100;
+
+    fn static_executable() -> alloc::vec::Vec<u8> {
+        let mut data = alloc::vec![0u8; TEST_SEGMENT_OFFSET + 1];
+        data[0..4].copy_from_slice(&ELF_MAGIC);
+        data[4] = ELFCLASS64;
+        data[5] = ELFDATA2LSB;
+        data[6] = 1; // EV_CURRENT
+        data[16..18].copy_from_slice(&ET_EXEC.to_le_bytes());
+        data[18..20].copy_from_slice(&TARGET_ELF_MACHINE.to_le_bytes());
+        data[20..24].copy_from_slice(&1u32.to_le_bytes());
+        data[24..32].copy_from_slice(&TEST_ENTRY.to_le_bytes());
+        data[32..40].copy_from_slice(&(TEST_PHDR_OFFSET as u64).to_le_bytes());
+        data[52..54].copy_from_slice(&(mem::size_of::<Elf64Header>() as u16).to_le_bytes());
+        data[54..56].copy_from_slice(&(mem::size_of::<Elf64Phdr>() as u16).to_le_bytes());
+        data[56..58].copy_from_slice(&1u16.to_le_bytes());
+
+        let ph = TEST_PHDR_OFFSET;
+        data[ph..ph + 4].copy_from_slice(&PT_LOAD.to_le_bytes());
+        data[ph + 4..ph + 8].copy_from_slice(&(PF_R | PF_X).to_le_bytes());
+        data[ph + 8..ph + 16].copy_from_slice(&(TEST_SEGMENT_OFFSET as u64).to_le_bytes());
+        data[ph + 16..ph + 24].copy_from_slice(&TEST_ENTRY.to_le_bytes());
+        data[ph + 32..ph + 40].copy_from_slice(&1u64.to_le_bytes());
+        data[ph + 40..ph + 48].copy_from_slice(&4096u64.to_le_bytes());
+        data[ph + 48..ph + 56].copy_from_slice(&4096u64.to_le_bytes());
+        data[TEST_SEGMENT_OFFSET] = 0xc3; // ret
+        data
+    }
+
+    #[test]
+    fn accepts_well_formed_static_executable() {
+        let data = static_executable();
+        assert_eq!(validate_executable_elf(&data), Ok(TEST_ENTRY));
+    }
+
+    #[test]
+    fn rejects_truncated_program_header_table() {
+        let mut data = static_executable();
+        data.truncate(TEST_PHDR_OFFSET + mem::size_of::<Elf64Phdr>() - 1);
+        assert_eq!(validate_executable_elf(&data), Err(ParseError::OutOfBounds));
+    }
+
+    #[test]
+    fn rejects_file_size_larger_than_memory_size() {
+        let mut data = static_executable();
+        let ph = TEST_PHDR_OFFSET;
+        data[ph + 32..ph + 40].copy_from_slice(&2u64.to_le_bytes());
+        data[ph + 40..ph + 48].copy_from_slice(&1u64.to_le_bytes());
+        assert_eq!(validate_executable_elf(&data), Err(ParseError::InvalidSegment));
+    }
+
+    #[test]
+    fn rejects_writable_executable_segments() {
+        let mut data = static_executable();
+        let ph = TEST_PHDR_OFFSET;
+        data[ph + 4..ph + 8].copy_from_slice(&(PF_R | PF_W | PF_X).to_le_bytes());
+        assert_eq!(validate_executable_elf(&data), Err(ParseError::InvalidSegment));
+    }
+
+    #[test]
+    fn rejects_entry_outside_executable_segments() {
+        let mut data = static_executable();
+        data[24..32].copy_from_slice(&0x0050_0000u64.to_le_bytes());
+        assert_eq!(validate_executable_elf(&data), Err(ParseError::InvalidEntry));
+    }
+}
