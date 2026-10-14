@@ -23,3 +23,6 @@ panic = "abort"
 
 [profile.dev]
 panic = "abort"
+
+[dependencies]
+raw-syscall = { path = "../raw-syscall" }
