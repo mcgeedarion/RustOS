@@ -45,7 +45,7 @@ const SYS_CLOSE: usize = 57;
 #[cfg(target_arch = "aarch64")]
 const SYS_WAIT4: usize = 260;
 #[cfg(target_arch = "aarch64")]
-const SYS_FORK: usize = usize::MAX; // Not implemented
+const SYS_FORK: usize = 220; // Linux AArch64 clone, translated to RustOS fork semantics
 #[cfg(target_arch = "aarch64")]
 const SYS_EXIT_GROUP: usize = 94;
 #[cfg(target_arch = "aarch64")]
@@ -244,7 +244,14 @@ unsafe fn sys_fork() -> isize {
     }
     #[cfg(target_arch = "aarch64")]
     {
-        -38 // ENOSYS
+        let ret: isize;
+        asm!(
+            "svc #0",
+            in("x8") SYS_FORK,
+            lateout("x0") ret,
+            options(nostack),
+        );
+        ret
     }
 }
 
