@@ -1,6 +1,6 @@
 # CI and Local Validation Contract
 
-_CI coverage boundary updated: 2026-09-11._
+_CI coverage boundary updated: 2026-10-13._
 
 RustOS uses `cargo xtask` as the canonical automation layer. Raw `cargo` commands
 are useful for debugging, but CI and pre-push validation should go through
@@ -11,10 +11,10 @@ serial-log checks stay consistent.
 
 | Command | Purpose |
 |---|---|
-| `cargo xtask check --arch x86_64` | Type-check the default x86_64 UEFI/minimal path |
-| `cargo xtask smoke --arch x86_64` | Build, image, boot QEMU, and assert a serial marker |
-| `cargo xtask smoke --arch aarch64` | Same contract for AArch64 UEFI, subject to local firmware availability |
-| `cargo xtask build-init --arch x86_64` | Build userspace init and pack `initramfs.cpio` |
+| `cargo xtask check --arch x86_64` | Type-check the default full subsystem graph with x86_64 UEFI entry |
+| `cargo xtask smoke --arch x86_64` | Build the full graph and initramfs, boot QEMU under a deadline, require the full userspace execution protocol, run the timing parser on that real log, and write JSON run metadata |
+| `cargo xtask smoke --arch aarch64` | Same full execution contract for AArch64 UEFI, subject to firmware availability |
+| `cargo xtask smoke --arch x86_64 --features boot_minimal` | Explicit minimal-only QEMU smoke, accepting only `BOOT_MINIMAL_OK` |\n| `cargo xtask build-init --arch x86_64` | Build `/init` and `/smoke`, stage both in the initramfs, and pack `initramfs.cpio` |
 | `cargo xtask roadmap-check` | Validate roadmap/status/syscall/fault docs contain required topics |
 | `bash scripts/ci/check-stubs.sh` | Guard documented stub classifications |
 | `cargo xtask ci-local` | Fast aggregate local gate: check, host tests, module lint, stub guard, docs guard |
@@ -23,18 +23,40 @@ serial-log checks stay consistent.
 | `bash scripts/ci/parse-boot-marks.sh <log>` | Strict full/userspace marker contract, including `BOOT_INIT_EXEC` |
 | `bash scripts/ci/boot-regression.sh <log>` | Compare boot times against baselines; fails if any phase exceeds baseline by >20% |
 
-## Serial success markers
+## Serial success and execution markers
 
-`cargo xtask smoke` captures QEMU serial output to `target/smoke-<arch>.log` and
-passes when any of these strings is present:
+`cargo xtask smoke` captures a fresh QEMU serial log at
+`target/smoke-<arch>.log`. It truncates any prior log before launching QEMU,
+enforces an architecture-specific deadline, and writes
+`target/smoke-<arch>-metadata.json` with the selected profile, architecture,
+host environment, elapsed time, deadline, result, timing-parser result, log path,
+and expected contract.
+
+The explicit minimal profile accepts only `BOOT_MINIMAL_OK`. It does not accept
+the generic idle-loop message, `FULL_OS_USERSPACE_OK`, or a stale marker from a
+previous run.
+
+The default full-kernel profile requires all of these execution records:
 
 ```text
-BOOT_MINIMAL_OK|FULL_OS_USERSPACE_OK|entering cpu_idle
+RUSTOS_EXEC marker=smoke_started
+RUSTOS_EXEC marker=smoke_tests_passed
+RUSTOS_EXEC marker=smoke_child_reaped pid=<pid> exit=0
+RUSTOS_EXEC marker=init_complete exit=0
 ```
 
-Timeout status from QEMU is tolerated because a successfully booted kernel may
-be parked in the idle loop; the serial marker check is the actual pass/fail
-signal.
+These records are emitted across the real userspace child path. `/init` must
+successfully execute `/smoke`, wait for the same child PID, and observe normal
+termination with status zero before it emits completion. An exec failure,
+failed wait, signal termination, or nonzero exit is a hard failure. Reaching an
+idle loop is never evidence of a successful userspace boot.
+
+Boot timing markers remain a separate contract. After each QEMU run, xtask
+applies `scripts/ci/parse-boot-marks.sh` with `--mode minimal` or `--mode full`
+to that run's actual serial log. A timing parser pass does not substitute for
+the userspace execution markers, and a marker parser unit test does not count
+as runtime evidence. The full smoke gate is expected to remain red until
+working process creation and image replacement are integrated.
 
 ## Boot performance regression checks
 
@@ -57,8 +79,10 @@ Baseline files are stored in `docs/` (e.g., `boot-perf-baseline.txt`) and should
 To run locally:
 
 ```sh
-cargo xtask smoke --arch x86_64
+cargo xtask smoke --arch x86_64 --features boot_minimal
 bash scripts/ci/parse-boot-marks.sh --mode minimal target/smoke-x86_64.log
+cargo xtask smoke --arch x86_64
+# Full smoke also runs the full timing parser against its fresh serial log
 bash scripts/ci/boot-regression.sh target/smoke-x86_64.log
 ```
 
@@ -66,8 +90,8 @@ bash scripts/ci/boot-regression.sh target/smoke-x86_64.log
 
 | Architecture | Machine | Firmware | Timeout | Log path |
 |---|---|---|---:|---|
-| x86_64 | `q35` | `OVMF_CODE` or discovered OVMF | 60s | `target/smoke-x86_64.log` |
-| aarch64 | `virt` | `QEMU_EFI` or discovered AAVMF/QEMU EFI | 45s | `target/smoke-aarch64.log` |
+| x86_64 | `q35` | `OVMF_CODE` or discovered OVMF | 60s | `target/smoke-x86_64.log` and `target/smoke-x86_64-metadata.json` |
+| aarch64 | `virt` | `QEMU_EFI` or discovered AAVMF/QEMU EFI | 45s | `target/smoke-aarch64.log` and `target/smoke-aarch64-metadata.json` |
 
 ## Adding CI coverage
 
