@@ -1,0 +1,47 @@
+[package]
+name = "rustos-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+log = { version = "0.4", default-features = false }
+spin = { version = "0.9", default-features = false, features = ["spin_mutex", "rwlock", "once", "lazy"] }
+
+[[bin]]
+name = "cpio_newc"
+path = "fuzz_targets/cpio_newc.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "elf64"
+path = "fuzz_targets/elf64.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "vfs_path"
+path = "fuzz_targets/vfs_path.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ext4_metadata"
+path = "fuzz_targets/ext4_metadata.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
