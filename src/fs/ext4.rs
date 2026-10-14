@@ -334,6 +334,16 @@ struct Ext4Fs {
 
 static FS: Mutex<Option<Ext4Fs>> = Mutex::new(None);
 
+/// Decode the on-disk ext4 superblock without assuming the caller supplied a
+/// complete 1024-byte superblock window. Shared by mount and the fuzz harness.
+fn decode_superblock(raw: &[u8]) -> Option<Superblock> {
+    if raw.len() < core::mem::size_of::<Superblock>() {
+        return None;
+    }
+    // SAFETY: the size check above covers the repr(C, packed) structure.
+    Some(unsafe { core::ptr::read_unaligned(raw.as_ptr() as *const Superblock) })
+}
+
 /// Mount an ext4 filesystem from the virtio-blk device.
 pub fn mount() -> bool {
     if !crate::drivers::virtio_blk::is_present() {
@@ -352,8 +362,10 @@ pub fn mount() -> bool {
     }
     raw_sb[512..].copy_from_slice(&half);
 
-    // Safety: Superblock is repr(C, packed), size ≤ 1024.
-    let sb: Superblock = unsafe { core::ptr::read_unaligned(raw_sb.as_ptr() as *const Superblock) };
+    let sb = match decode_superblock(&raw_sb) {
+        Some(sb) => sb,
+        None => return false,
+    };
 
     let magic = sb.magic;
     let rev_level = sb.rev_level;
@@ -934,6 +946,44 @@ impl Ext4Fs {
             }
         });
     }
+
+/// Fuzz-only entry point that exercises the exact production metadata
+/// decoders without mounting a filesystem or allocating based on disk fields.
+#[cfg(fuzzing)]
+pub fn fuzz_metadata(data: &[u8], offset: usize, block_number: u64) {
+    let _ = decode_superblock(data);
+    let _ = read_u16_le(data, offset);
+    let _ = read_u32_le(data, offset);
+
+    let block_size = match data.first().copied().unwrap_or(0) % 3 {
+        0 => 1024,
+        1 => 2048,
+        _ => 4096,
+    };
+    let fs = Ext4Fs {
+        data: data.to_vec(),
+        block_size,
+        inode_size: 128,
+        inodes_per_grp: 1,
+        blocks_per_grp: 1,
+        first_data_blk: 1,
+        total_groups: data.len().saturating_add(1),
+        bgd_size: if data.get(1).copied().unwrap_or(0) & 1 == 0 { 32 } else { 64 },
+        feature_incompat: 0,
+        feature_ro_compat: 0,
+        free_blocks: 0,
+        r_blocks: 0,
+        total_blocks: 0,
+    };
+    let safe_off = if data.is_empty() {
+        0
+    } else {
+        offset % data.len().saturating_add(1)
+    };
+    let _ = fs.block_slice(block_number);
+    let _ = fs.bgd_offset(offset);
+    let _ = fs.parse_dir_entry(data, safe_off);
+}
 
     fn parse_dir_entry<'a>(&self, blk: &'a [u8], off: usize) -> Option<ParsedDirEntry<'a>> {
         if off.checked_add(8)? > blk.len() {
