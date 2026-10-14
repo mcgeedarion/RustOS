@@ -1547,7 +1547,7 @@ fn run_smoke(root: &Path, opts: &BuildOpts) -> Result<()> {
             if let Some(initrd) = initrd.as_deref() {
                 cmd.arg("-initrd").arg(initrd);
             }
-            run_until_smoke_marker(&mut cmd, &log_path, Duration::from_secs(45))?;
+            run_until_smoke_marker(&mut cmd, &log_path, Duration::from_secs(timeout_seconds), full_kernel)?;
         },
     }
     Ok(())
