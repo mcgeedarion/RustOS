@@ -89,7 +89,7 @@ pub unsafe fn restore(task: *mut crate::proc::task_types::Task) -> ! {
             sp
         );
         loop {
-            crate::arch::ArchImpl::halt();
+            <crate::arch::Arch as crate::arch::api::Cpu>::halt();
         }
     }
 
