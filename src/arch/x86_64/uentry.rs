@@ -105,3 +105,40 @@ pub unsafe fn sysret_to_user(cr3: usize, entry: usize, user_rsp: usize) -> ! {
         options(noreturn),
     );
 }
+
+
+/// Restore a saved userspace register frame and return through SYSRETQ.
+///
+/// The frame lives in kernel memory shared by the process page table. The
+/// assembly changes CR3 before loading the user register values and then
+/// changes RSP immediately before SYSRETQ, so it never returns through the old
+/// userspace syscall stack.
+pub unsafe fn sysret_to_user_context(
+    cr3: usize,
+    context: *const crate::proc::context::UserContext,
+) -> ! {
+    asm!(
+        "mov cr3, rdi",
+        "mov r11, rsi",
+        "mov rcx, [r11 + 256]",
+        "mov r10, [r11 + 264]",
+        "mov rax, [r11 + 0]",
+        "mov rbx, [r11 + 8]",
+        "mov rdx, [r11 + 16]",
+        "mov rdi, [r11 + 32]",
+        "mov rbp, [r11 + 40]",
+        "mov r8,  [r11 + 48]",
+        "mov r9,  [r11 + 56]",
+        "mov r12, [r11 + 72]",
+        "mov r13, [r11 + 80]",
+        "mov r14, [r11 + 88]",
+        "mov r15, [r11 + 96]",
+        "mov rsi, [r11 + 24]",
+        "mov rsp, r10",
+        "mov r11, 0x202",
+        "sysretq",
+        in("rdi") cr3,
+        in("rsi") context,
+        options(nostack, noreturn)
+    );
+}
