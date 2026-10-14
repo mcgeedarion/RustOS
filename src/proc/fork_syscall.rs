@@ -18,7 +18,8 @@ fn clone_user_mappings(parent: &crate::proc::process::Pcb) -> Result<usize, isiz
         return Err(-12);
     }
     let root = <Arch as Paging>::new_user_address_space().ok_or(-12)?;
-    let mut copied: Vec<(usize, usize)> = Vec::new();
+    let mut mapped_vas: Vec<usize> = Vec::new();
+    let mut owned_frames: Vec<usize> = Vec::new();
 
     for vma in &parent.vmas {
         for va in (vma.start..vma.end).step_by(PAGE) {
@@ -43,14 +44,15 @@ fn clone_user_mappings(parent: &crate::proc::process::Pcb) -> Result<usize, isiz
 
             if matches!(vma.kind, VmaKind::PhysMap(_)) {
                 if !<Arch as Paging>::map_page(root, va, source_frame, flags) {
-                    rollback_user_mappings(root, &copied);
+                    rollback_user_mappings(root, &mapped_vas, &owned_frames);
                     return Err(-12);
                 }
+                mapped_vas.push(va);
                 continue;
             }
 
             let Some(destination_pa) = crate::mm::pmm::alloc_page() else {
-                rollback_user_mappings(root, &copied);
+                rollback_user_mappings(root, &mapped_vas, &owned_frames);
                 return Err(-12);
             };
             unsafe {
@@ -63,22 +65,27 @@ fn clone_user_mappings(parent: &crate::proc::process::Pcb) -> Result<usize, isiz
 
             if !<Arch as Paging>::map_page(root, va, destination_pa, flags) {
                 crate::mm::pmm::free_page(destination_pa);
-                rollback_user_mappings(root, &copied);
+                rollback_user_mappings(root, &mapped_vas, &owned_frames);
                 return Err(-12);
             }
-            copied.push((va, destination_pa));
+            mapped_vas.push(va);
+            owned_frames.push(destination_pa);
         }
     }
 
     Ok(root)
 }
 
-fn rollback_user_mappings(root: usize, copied: &[(usize, usize)]) {
-    for (va, pa) in copied {
+fn rollback_user_mappings(root: usize, mapped_vas: &[usize], owned_frames: &[usize]) {
+    // Unmap every installed leaf, including borrowed PhysMap entries. Only
+    // frames allocated specifically for the child are returned to the PMM.
+    for va in mapped_vas {
         let _ = <Arch as Paging>::unmap_page(root, *va);
-        crate::mm::pmm::free_page(*pa);
     }
     <Arch as Paging>::free_page_table(root);
+    for pa in owned_frames {
+        crate::mm::pmm::free_page(*pa);
+    }
 }
 
 /// Fork creates a separately scheduled child with a copied userspace return
