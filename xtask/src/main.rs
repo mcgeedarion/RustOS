@@ -1438,22 +1438,36 @@ fn build_init(root: &Path, arch: Arch) -> Result<()> {
     // Ensure the freestanding userspace target is installed.
     run(Command::new("rustup").args(["target", "add", target]))?;
 
-    // Build userspace/init
-    let mut cmd = cargo();
-    cmd.current_dir(root.join("userspace/init"))
+    // Build PID 1 and the separately executable syscall smoke workload.
+    let mut init_cmd = cargo();
+    init_cmd.current_dir(root.join("userspace/init"))
         .args(["build", "--release", "--target", target]);
-    run(&mut cmd)?;
+    run(&mut init_cmd)?;
 
-    // Stage as /init in a minimal initramfs tree
+    let mut smoke_cmd = cargo();
+    smoke_cmd.current_dir(root.join("userspace/smoke"))
+        .args(["build", "--release", "--target", target]);
+    run(&mut smoke_cmd)?;
+
+    // Stage both binaries into the initramfs as /init and /smoke.
+    let initramfs_root = root.join("initramfs_root");
+    fs::create_dir_all(&initramfs_root).context("create initramfs_root")?;
+
     let init_src = root
         .join("userspace/init/target")
         .join(target)
         .join("release/init");
-    let initramfs_root = root.join("initramfs_root");
-    fs::create_dir_all(&initramfs_root).context("create initramfs_root")?;
     let init_dst = initramfs_root.join("init");
     fs::copy(&init_src, &init_dst)
-        .with_context(|| format!("copy {} → {}", init_src.display(), init_dst.display()))?;
+        .with_context(|| format!("copy {} -> {}", init_src.display(), init_dst.display()))?;
+
+    let smoke_src = root
+        .join("userspace/smoke/target")
+        .join(target)
+        .join("release/smoke");
+    let smoke_dst = initramfs_root.join("smoke");
+    fs::copy(&smoke_src, &smoke_dst)
+        .with_context(|| format!("copy {} -> {}", smoke_src.display(), smoke_dst.display()))?;
 
     // Write a minimal /etc/os-release
     let etc = initramfs_root.join("etc");
