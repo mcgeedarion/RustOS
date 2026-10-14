@@ -75,7 +75,7 @@ pub unsafe fn restore(task: *mut crate::proc::task_types::Task) -> ! {
         None => {
             crate::serial_println!("context: PID {} has no PCB", pid);
             loop {
-                crate::arch::ArchImpl::halt();
+                <crate::arch::Arch as crate::arch::api::Cpu>::halt();
             }
         }
     };
