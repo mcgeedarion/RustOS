@@ -166,7 +166,22 @@ pub fn sys_wait4(target_pid: isize, wstatus_va: usize, options: i32, rusage_va: 
             return 0; // Caller asked not to block.
         }
 
-        // Block until a child exits and sends SIGCHLD / wakes us.
+        // The current scheduler context switch abandons the blocked kernel
+        // continuation and restores the last saved userspace frame instead.
+        // Rewind that frame to the syscall instruction so wait4 is re-entered
+        // after the child becomes a zombie, rather than returning a stale
+        // syscall number to userspace.
+        let _ = scheduler::with_proc_mut(caller as usize, |pcb, _| {
+            #[cfg(target_arch = "x86_64")]
+            {
+                pcb.user_context.pc = pcb.user_context.pc.saturating_sub(2);
+            }
+            #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
+            {
+                pcb.user_context.pc = pcb.user_context.pc.saturating_sub(4);
+            }
+            pcb.pc = pcb.user_context.pc;
+        });
         scheduler::sleep_current();
         // Check for EINTR (pending signal was delivered while sleeping).
         if signal::has_pending_signal(caller) {
