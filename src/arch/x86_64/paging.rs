@@ -266,3 +266,36 @@ pub fn clone_pml4_cow(parent_cr3: usize) -> usize {
     }
     child_cr3
 }
+
+
+/// Free intermediate page-table pages in a user address space. Leaf frames are
+/// the process owner's responsibility and must be released before this call.
+/// Kernel-half PML4 entries are shared with the kernel and are never traversed.
+pub fn free_user_page_table(cr3: usize) {
+    unsafe fn free_level(table_pa: usize, level: usize) {
+        for index in 0..P::TABLE_ENTRIES {
+            let entry = *pte_ptr(table_pa, index);
+            if entry & PRESENT == 0 {
+                continue;
+            }
+            // The current user mapper uses 4 KiB pages. Do not descend into a
+            // huge-page leaf if one was installed by another subsystem.
+            if level < 3 && entry & (1 << 7) == 0 {
+                let child_pa = (entry & ADDR_MASK) as usize;
+                free_level(child_pa, level + 1);
+            }
+        }
+        crate::mm::pmm::free_page(table_pa);
+    }
+
+    unsafe {
+        for index in 0..256 {
+            let entry = *pte_ptr(cr3, index);
+            if entry & PRESENT != 0 {
+                let child = (entry & ADDR_MASK) as usize;
+                free_level(child, 1);
+            }
+        }
+    }
+    crate::mm::pmm::free_page(cr3);
+}
