@@ -1307,7 +1307,7 @@ fn serial_has_smoke_marker(log_path: &Path, full_kernel: bool) -> Result<bool> {
             && has_exact_line("RUSTOS_EXEC marker=smoke_tests_passed")
             && child_reaped_zero("RUSTOS_EXEC marker=smoke_child_reaped pid=")
             && has_exact_line("RUSTOS_BENCH marker=complete")
-            && serial.contains("{\"schema_version\":1,\"benchmark\":\"getpid\"")
+            && serial.contains("{\"schema_version\":2,\"benchmark\":\"getpid\"")
             && child_reaped_zero("RUSTOS_EXEC marker=bench_child_reaped pid=")
             && has_exact_line("RUSTOS_EXEC marker=init_complete exit=0")
     )
@@ -1329,6 +1329,17 @@ fn json_escape(value: &str) -> String {
     out
 }
 
+fn command_first_line(program: &str, args: &[&str]) -> String {
+    Command::new(program)
+        .args(args)
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .and_then(|output| output.lines().next().map(str::trim).filter(|line| !line.is_empty()).map(str::to_owned))
+        .unwrap_or_else(|| "unavailable".to_owned())
+}
+
 fn write_smoke_metadata(
     path: &Path,
     arch: Arch,
@@ -1346,6 +1357,10 @@ fn write_smoke_metadata(
     let arch_name = json_escape(arch_str(arch));
     let profile_name = json_escape(&format!("{profile:?}"));
     let log_name = json_escape(&log_path.display().to_string());
+    let compiler_version = json_escape(&command_first_line("rustc", &["--version"]));
+    let qemu_program = format!("qemu-system-{}", arch_str(arch));
+    let qemu_version = json_escape(&command_first_line(&qemu_program, &["--version"]));
+    let kernel_revision = json_escape(&command_first_line("git", &["rev-parse", "HEAD"]));
     let metadata = format!(
         concat!(
             "{{\n",
@@ -1355,6 +1370,9 @@ fn write_smoke_metadata(
             "  \"contract\": \"{}\",\n",
             "  \"host_os\": \"{}\",\n",
             "  \"host_arch\": \"{}\",\n",
+            "  \"compiler_version\": \"{}\",\n",
+            "  \"qemu_version\": \"{}\",\n",
+            "  \"kernel_revision\": \"{}\",\n",
             "  \"started_unix_ms\": {},\n",
             "  \"elapsed_ms\": {},\n",
             "  \"qemu_deadline_seconds\": {},\n",
@@ -1369,6 +1387,9 @@ fn write_smoke_metadata(
         contract,
         env::consts::OS,
         env::consts::ARCH,
+        compiler_version,
+        qemu_version,
+        kernel_revision,
         started_unix_ms,
         elapsed_ms,
         timeout_seconds,
@@ -1647,9 +1668,17 @@ fn build_init(root: &Path, arch: Arch) -> Result<()> {
         .args(["build", "--release", "--target", target]);
     run(&mut smoke_cmd)?;
 
+    let rustc_version = command_first_line("rustc", &["--version"]);
+    let qemu_program = format!("qemu-system-{}", arch_str(arch));
+    let qemu_version = command_first_line(&qemu_program, &["--version"]);
     let mut bench_cmd = cargo();
-    bench_cmd.current_dir(root.join("userspace/bench"))
-        .args(["build", "--release", "--target", target]);
+    bench_cmd
+        .current_dir(root.join("userspace/bench"))
+        .args(["build", "--release", "--target", target])
+        .env("RUSTOS_HOST_OS", env::consts::OS)
+        .env("RUSTOS_HOST_ARCH", env::consts::ARCH)
+        .env("RUSTOS_COMPILER_VERSION", rustc_version)
+        .env("RUSTOS_QEMU_VERSION", qemu_version);
     run(&mut bench_cmd)?;
 
     // Stage PID 1, syscall smoke, and benchmark workloads in the initramfs.
