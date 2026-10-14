@@ -105,18 +105,30 @@ impl Timer for ArchImpl {
 
 impl Paging for ArchImpl {
     fn map_page(cr3: usize, va: usize, pa: usize, flags: PageFlags) -> bool {
-        // Translate HAL flags → native AArch64 PTE flags
-        let mut pte_flags: u64 = 0b11; // AP[1:0] = 11 (read/write), AF = 1
-        if !flags.contains(PageFlags::WRITE) {
-            pte_flags &= !0b10; // Clear AP[1] for read-only
-        }
+        // AArch64 stage-1 leaf descriptors encode user access in AP[2:1].
+        // Descriptor type, AF, normal-memory attribute and shareability remain
+        // independent of the ELF PF_R/PF_W/PF_X flags.
+        let mut native = super::mem_layout::pte::PAGE
+            | super::mem_layout::pte::AF
+            | super::mem_layout::pte::SH_INNER
+            | super::mem_layout::pte::ATTR_NORMAL;
         if flags.contains(PageFlags::USER) {
-            pte_flags |= 0b100; // AP[2] = 1 for user access
+            native |= if flags.contains(PageFlags::WRITE) {
+                super::mem_layout::pte::AP_RW_EL0
+            } else {
+                super::mem_layout::pte::AP_RO_EL0
+            };
+        } else {
+            native |= if flags.contains(PageFlags::WRITE) {
+                super::mem_layout::pte::AP_RW_EL1
+            } else {
+                super::mem_layout::pte::AP_RO_EL1
+            };
         }
         if flags.contains(PageFlags::NX) {
-            pte_flags |= 1 << 54; // XN bit
+            native |= super::mem_layout::pte::UXN | super::mem_layout::pte::PXN;
         }
-        super::paging::map_page(cr3, va, pa, pte_flags);
+        super::paging::map_page_into(cr3, va, pa, native);
         true
     }
     fn unmap_page(cr3: usize, va: usize) -> Option<usize> {
