@@ -252,7 +252,7 @@ fn dev_null_requires_exact_eof() {
         });
         assert!(!passed, "/dev/null read returning {result} passed");
         assert_eq!(state.failures, ["read /dev/null returns EOF"]);
-        assert_eq!(state.close_calls, 2);
+        assert_eq!(state.close_calls, 6);
     }
 }
 
@@ -265,6 +265,28 @@ fn either_close_failure_fails_the_run() {
         assert!(!passed, "close {index} failure passed");
         assert_eq!(state.close_calls, 6);
     }
+}
+
+#[test]
+fn pipe_creation_failure_cannot_pass() {
+    let (passed, state) = run_with(Mock {
+        pipe_result: -24,
+        ..Mock::default()
+    });
+    assert!(!passed);
+    assert_eq!(state.failures, ["pipe2 create"]);
+    assert_eq!(state.pipe_calls, 1);
+}
+
+#[test]
+fn unlink_failure_cannot_pass() {
+    let (passed, state) = run_with(Mock {
+        unlink_result: -2,
+        ..Mock::default()
+    });
+    assert!(!passed);
+    assert_eq!(state.failures, ["unlink smoke file"]);
+    assert_eq!(state.unlink_calls, 1);
 }
 
 #[test]
