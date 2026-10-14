@@ -93,7 +93,7 @@ See `docs/syscalls.md` for syscall-by-syscall status.
 
 | Module | Status | Notes |
 |---|---|---|
-| `src/proc/` | partial | Process APIs exist, but `spawn_user_process()` returns false and valid `execve()` returns `ENOSYS`; do not claim a working fork/exec userspace path |
+| `src/proc/` | partial | Exec safely bounds and copies argv/envp before returning `ENOSYS` for valid requests; `spawn_user_process()` remains unavailable, and no working fork/exec userspace path is supported |
 | `src/proc/signal.rs` | partial | Signal-handling code exists; full delivery, return, exec-reset and userspace ABI semantics are not end-to-end gated |
 | `src/proc/wait.rs` | partial | Wait APIs exist; exact-child reap and status handling remain blocked on working userspace process creation/exec |
 | `src/proc/creds.rs` | partial | Credential, process-group and session code exists; end-to-end compatibility is not yet runtime-gated |
@@ -158,10 +158,10 @@ See `docs/ERROR_HANDLING_AUDIT.md` for detailed audit results.
 | Gate | Current status | Evidence required before promotion |
 |---|---|---|
 | Full-kernel QEMU execution | blocked | Fresh QEMU log with all required `RUSTOS_EXEC` child markers, exact-PID wait/reap, normal exit status zero, and timing-parser success |
-| CPIO/ELF/VFS/ext4 parser fuzzing | harnesses added, first campaign pending | Bounded CI campaigns against the production modules, retained logs/artifacts, minimized crash regressions |
+| CPIO/ELF/VFS/ext4 parser fuzzing | harnesses and seed corpora added, runtime pending | Explicit AddressSanitizer campaigns against production modules, retained logs/artifacts, minimized crash regressions |
 | Fault recovery in the guest | not supported yet | Catalogued fault injection, fired/recovered markers, and post-recovery filesystem/process workload success |
 | Writable filesystem and IPC workloads | not supported yet | A guest creates, writes, reads, renames and unlinks a file; IPC send/receive completes with checked exit statuses |
-| Syscall benchmark workload | implemented, runtime pending | `/bench` is staged in the initramfs and emits JSON with fixed iterations and guest environment metadata; strict smoke requires its completion marker |
+| Syscall benchmark workload | implemented, runtime pending | `/bench` emits schema-version-2 JSON with fixed iterations, counts, 256 batch latency samples (min/p50/p90/p99/max), and host/compiler/QEMU/guest metadata; strict smoke requires its completion marker |
 | Reviewed benchmark baseline | not established | Repeated successful runs, variance characterization, and review of an equivalent architecture/compiler/QEMU configuration |
 
 Do not upgrade any row to `real` based on source inspection, parser unit tests,
