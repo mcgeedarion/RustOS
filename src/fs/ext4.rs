@@ -528,6 +528,44 @@ fn read_u16_le(buf: &[u8], off: usize) -> Option<u16> {
     Some(u16::from_le_bytes(bytes.try_into().ok()?))
 }
 
+/// Fuzz-only entry point that exercises the exact production metadata
+/// decoders without mounting a filesystem or allocating based on disk fields.
+#[cfg(fuzzing)]
+pub fn fuzz_metadata(data: &[u8], offset: usize, block_number: u64) {
+    let _ = decode_superblock(data);
+    let _ = read_u16_le(data, offset);
+    let _ = read_u32_le(data, offset);
+
+    let block_size = match data.first().copied().unwrap_or(0) % 3 {
+        0 => 1024,
+        1 => 2048,
+        _ => 4096,
+    };
+    let fs = Ext4Fs {
+        data: data.to_vec(),
+        block_size,
+        inode_size: 128,
+        inodes_per_grp: 1,
+        blocks_per_grp: 1,
+        first_data_blk: 1,
+        total_groups: data.len().saturating_add(1),
+        bgd_size: if data.get(1).copied().unwrap_or(0) & 1 == 0 { 32 } else { 64 },
+        feature_incompat: 0,
+        feature_ro_compat: 0,
+        free_blocks: 0,
+        r_blocks: 0,
+        total_blocks: 0,
+    };
+    let safe_off = if data.is_empty() {
+        0
+    } else {
+        offset % data.len().saturating_add(1)
+    };
+    let _ = fs.block_slice(block_number);
+    let _ = fs.bgd_offset(offset);
+    let _ = fs.parse_dir_entry(data, safe_off);
+}
+
 impl Ext4Fs {
     #[inline]
     fn block_slice(&self, blkno: u64) -> Option<&[u8]> {
@@ -946,44 +984,6 @@ impl Ext4Fs {
             }
         });
     }
-
-/// Fuzz-only entry point that exercises the exact production metadata
-/// decoders without mounting a filesystem or allocating based on disk fields.
-#[cfg(fuzzing)]
-pub fn fuzz_metadata(data: &[u8], offset: usize, block_number: u64) {
-    let _ = decode_superblock(data);
-    let _ = read_u16_le(data, offset);
-    let _ = read_u32_le(data, offset);
-
-    let block_size = match data.first().copied().unwrap_or(0) % 3 {
-        0 => 1024,
-        1 => 2048,
-        _ => 4096,
-    };
-    let fs = Ext4Fs {
-        data: data.to_vec(),
-        block_size,
-        inode_size: 128,
-        inodes_per_grp: 1,
-        blocks_per_grp: 1,
-        first_data_blk: 1,
-        total_groups: data.len().saturating_add(1),
-        bgd_size: if data.get(1).copied().unwrap_or(0) & 1 == 0 { 32 } else { 64 },
-        feature_incompat: 0,
-        feature_ro_compat: 0,
-        free_blocks: 0,
-        r_blocks: 0,
-        total_blocks: 0,
-    };
-    let safe_off = if data.is_empty() {
-        0
-    } else {
-        offset % data.len().saturating_add(1)
-    };
-    let _ = fs.block_slice(block_number);
-    let _ = fs.bgd_offset(offset);
-    let _ = fs.parse_dir_entry(data, safe_off);
-}
 
     fn parse_dir_entry<'a>(&self, blk: &'a [u8], off: usize) -> Option<ParsedDirEntry<'a>> {
         if off.checked_add(8)? > blk.len() {
