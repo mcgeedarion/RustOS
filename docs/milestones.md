@@ -18,6 +18,8 @@ is replaced by a real executable process path.
 | **M4** | VFS/initramfs/devfs/procfs support real init workloads | full kernel graph | successful writable-file and IPC workloads plus `/dev/null` and `/proc/version` checks | **Not promoted** |
 | **M5** | Network, display, and input demos run as userspace processes | full kernel graph plus optional device features | an executable demo completes under QEMU with retained logs and metadata | **Experimental/planned** |
 
+The detailed, testable requirements for these gates are defined in [Acceptance Criteria](acceptance-criteria.md). These are requirements, not implementation claims; milestone promotion still requires the corresponding executable gate to pass.
+
 ## Marker contracts
 
 Boot timing markers and userspace execution markers are separate contracts.
