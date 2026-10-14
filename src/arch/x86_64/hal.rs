@@ -160,6 +160,9 @@ impl Paging for ArchImpl {
         }
         Some(cr3)
     }
+    fn free_page_table(root: usize) {
+        x86_paging::free_user_page_table(root);
+    }
 }
 
 impl Tlb for ArchImpl {
