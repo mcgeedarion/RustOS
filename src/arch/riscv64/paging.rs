@@ -234,8 +234,7 @@ pub fn map_page(root_pa: usize, va: usize, pa: usize, flags: u64) {
 
 /// Remove the mapping for `va` in the **current** address space.
 /// Returns the physical address that was mapped, or `None`.
-pub fn unmap_page(va: usize) -> Option<usize> {
-    let root_pa = satp_to_root_pa(current_satp());
+pub fn unmap_page(root_pa: usize, va: usize) -> Option<usize> {
     unsafe {
         let pte = walk_ro(root_pa, va)?;
         if *pte & VALID == 0 {
@@ -243,7 +242,9 @@ pub fn unmap_page(va: usize) -> Option<usize> {
         }
         let pa = pte_to_pa(*pte);
         *pte = 0;
-        sfence_vma(va);
+        if satp_to_root_pa(current_satp()) == root_pa {
+            sfence_vma(va);
+        }
         Some(pa)
     }
 }
@@ -256,7 +257,7 @@ pub fn virt_to_phys(root_pa: usize, va: usize) -> Option<usize> {
         if *pte & VALID == 0 {
             return None;
         }
-        Some(pte_to_pa(*pte))
+        Some(pte_to_pa(*pte) + (va & (PAGE_SIZE - 1)))
     }
 }
 
