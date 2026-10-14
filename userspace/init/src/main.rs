@@ -442,6 +442,24 @@ fn write_all(fd: usize, msg: &[u8]) {
     }
 }
 
+/// Write a decimal integer without a trailing newline.
+fn write_usize_inline(fd: usize, value: usize) {
+    let mut buf = [0u8; 24];
+    let mut i = buf.len();
+    let mut v = value;
+    if v == 0 {
+        i -= 1;
+        buf[i] = b'0';
+    } else {
+        while v > 0 {
+            i -= 1;
+            buf[i] = b'0' + (v % 10) as u8;
+            v /= 10;
+        }
+    }
+    write_all(fd, &buf[i..]);
+}
+
 /// Write a decimal integer followed by a newline to `fd`.
 fn write_usize(fd: usize, prefix: &[u8], value: usize) {
     let mut buf = [0u8; 24]; // max usize decimal digits + newline
@@ -568,13 +586,15 @@ fn run_exec_smoke_child() {
             sys_execve(path.as_ptr() as *const u8, argv.as_ptr(), envp.as_ptr())
         };
         write_all(STDERR, b"RUSTOS_EXEC marker=smoke_execve_failed errno=");
-        write_usize(STDERR, b"", result.wrapping_neg() as usize);
+        write_usize_inline(STDERR, result.wrapping_neg() as usize);
+        write_all(STDERR, b"\n");
         unsafe { sys_exit_group(127) };
     }
 
     if child < 0 {
         write_all(STDERR, b"RUSTOS_EXEC marker=smoke_fork_failed errno=");
-        write_usize(STDERR, b"", child.wrapping_neg() as usize);
+        write_usize_inline(STDERR, child.wrapping_neg() as usize);
+        write_all(STDERR, b"\n");
         unsafe { sys_exit_group(1) };
     }
 
@@ -589,17 +609,17 @@ fn run_exec_smoke_child() {
     let exit_code = (status >> 8) & 0xff;
     if !exited_normally || exit_code != 0 {
         write_all(STDERR, b"RUSTOS_EXEC marker=smoke_child_failed pid=");
-        write_usize(STDERR, b"", child as usize);
+        write_usize_inline(STDERR, child as usize);
         write_all(STDERR, b" status=");
-        write_usize(STDERR, b"", status as usize);
+        write_usize_inline(STDERR, status as usize);
         write_all(STDERR, b" exit=");
-        write_usize(STDERR, b"", exit_code as usize);
+        write_usize_inline(STDERR, exit_code as usize);
         write_all(STDERR, b"\n");
         unsafe { sys_exit_group(1) };
     }
 
     write_all(STDOUT, b"RUSTOS_EXEC marker=smoke_child_reaped pid=");
-    write_usize(STDOUT, b"", child as usize);
+    write_usize_inline(STDOUT, child as usize);
     write_all(STDOUT, b" exit=0\n");
 }
 
