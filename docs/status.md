@@ -90,7 +90,7 @@ See `docs/syscalls.md` for syscall-by-syscall status.
 
 | Module | Status | Notes |
 |---|---|---|
-| `src/proc/` | partial | Exec safely bounds and copies argv/envp before returning `ENOSYS` for valid requests; `spawn_user_process()` remains unavailable, and no working fork/exec userspace path is supported |
+| `src/proc/` | partial | ELF image construction, initial stack setup, process spawn, fork mapping-copy, exec image replacement, and wait/exit paths exist; full userspace runtime remains unverified |
 | `src/proc/signal.rs` | partial | Signal-handling code exists; full delivery, return, exec-reset and userspace ABI semantics are not end-to-end gated |
 | `src/proc/wait.rs` | partial | Wait APIs exist; exact-child reap and status handling remain blocked on working userspace process creation/exec |
 | `src/proc/creds.rs` | partial | Credential, process-group and session code exists; end-to-end compatibility is not yet runtime-gated |
