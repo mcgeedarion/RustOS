@@ -1,7 +1,7 @@
 //! Shared smoke assertions. The host regression harness supplies mock syscalls.
 
 use super::{
-    check, sys_close, sys_open, sys_pipe2, sys_read, sys_unlink, sys_write, test_errno_checks,
+    check, sys_close, sys_open, sys_pipe2, sys_read, sys_rename, sys_unlink, sys_write, test_errno_checks,
     O_CREAT, O_RDONLY, O_RDWR, O_TRUNC,
 };
 #[cfg(any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "riscv64"))]
@@ -78,7 +78,9 @@ pub(super) fn run_tests() -> bool {
     // back, then remove it. A missing /tmp mount or unsupported write/unlink
     // syscall is a hard smoke failure.
     const FILE_PATH: &[u8] = b"/tmp/rustos-smoke-write-test\0";
+    const RENAMED_PATH: &[u8] = b"/tmp/rustos-smoke-write-renamed\0";
     const FILE_DATA: &[u8] = b"rustos-write-test";
+    let mut file_was_renamed = false;
     let file_fd = unsafe {
         sys_open(
             FILE_PATH.as_ptr(),
@@ -92,7 +94,11 @@ pub(super) fn run_tests() -> bool {
         pass &= check("write smoke file", written == FILE_DATA.len() as isize);
         pass &= check("close smoke file after write", unsafe { sys_close(file_fd as usize) } == 0);
 
-        let read_fd = unsafe { sys_open(FILE_PATH.as_ptr(), O_RDONLY, 0) };
+        let rename_result = unsafe { sys_rename(FILE_PATH.as_ptr(), RENAMED_PATH.as_ptr()) };
+        pass &= check("rename smoke file", rename_result == 0);
+        file_was_renamed = rename_result == 0;
+        let read_path = if file_was_renamed { RENAMED_PATH } else { FILE_PATH };
+        let read_fd = unsafe { sys_open(read_path.as_ptr(), O_RDONLY, 0) };
         pass &= check("reopen smoke file", read_fd >= 0);
         if read_fd >= 0 {
             let mut contents = [0u8; 32];
@@ -105,7 +111,9 @@ pub(super) fn run_tests() -> bool {
             pass &= check("close smoke file after read", unsafe { sys_close(read_fd as usize) } == 0);
         }
     }
-    pass &= check("unlink smoke file", unsafe { sys_unlink(FILE_PATH.as_ptr()) } == 0);
+    // Remove whichever name remains, including when rename failed.
+    let cleanup_path: &[u8] = if file_was_renamed { RENAMED_PATH } else { FILE_PATH };
+    pass &= check("unlink smoke file", unsafe { sys_unlink(cleanup_path.as_ptr()) } == 0);
 
     // Exercise kernel-backed pipe IPC with a bounded in-pipe payload.
     let mut pipe_fds = [-1i32; 2];
