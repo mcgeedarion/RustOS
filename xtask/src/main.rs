@@ -1632,7 +1632,12 @@ fn build_init(root: &Path, arch: Arch) -> Result<()> {
         .args(["build", "--release", "--target", target]);
     run(&mut smoke_cmd)?;
 
-    // Stage both binaries into the initramfs as /init and /smoke.
+    let mut bench_cmd = cargo();
+    bench_cmd.current_dir(root.join("userspace/bench"))
+        .args(["build", "--release", "--target", target]);
+    run(&mut bench_cmd)?;
+
+    // Stage PID 1, syscall smoke, and benchmark workloads in the initramfs.
     let initramfs_root = root.join("initramfs_root");
     fs::create_dir_all(&initramfs_root).context("create initramfs_root")?;
 
@@ -1651,6 +1656,14 @@ fn build_init(root: &Path, arch: Arch) -> Result<()> {
     let smoke_dst = initramfs_root.join("smoke");
     fs::copy(&smoke_src, &smoke_dst)
         .with_context(|| format!("copy {} -> {}", smoke_src.display(), smoke_dst.display()))?;
+
+    let bench_src = root
+        .join("userspace/bench/target")
+        .join(target)
+        .join("release/bench");
+    let bench_dst = initramfs_root.join("bench");
+    fs::copy(&bench_src, &bench_dst)
+        .with_context(|| format!("copy {} -> {}", bench_src.display(), bench_dst.display()))?;
 
     // Write a minimal /etc/os-release
     let etc = initramfs_root.join("etc");
