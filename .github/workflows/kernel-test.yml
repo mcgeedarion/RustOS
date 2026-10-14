@@ -157,7 +157,7 @@ jobs:
         if: inputs.run_smoke && inputs.arch == 'x86_64'
         run: |
           set -o pipefail
-          cargo xtask image --arch x86_64 --debug \
+          cargo xtask image --arch x86_64 --debug --features boot_minimal \
             2>&1 | tee "build-x86_64-image.log"
           test -f boot-x86_64.img
 
@@ -212,8 +212,9 @@ jobs:
         if: inputs.run_smoke
         run: |
           LOG="qemu-${{ inputs.arch }}.log"
-          SMOKE_MARKER_RE='BOOT_MINIMAL_OK|FULL_OS_USERSPACE_OK|entering cpu_idle'
+          SMOKE_MARKER_RE='(^|[[:space:]])(RustOS: )?BOOT_MINIMAL_OK([[:space:]]|$)'
           grep -Eq "$SMOKE_MARKER_RE" "$LOG"
+          bash scripts/ci/parse-boot-marks.sh --mode minimal "$LOG"
 
       - name: Build x86_64 UEFI image for kmtest boot
         if: inputs.run_kmtest && inputs.arch == 'x86_64'
