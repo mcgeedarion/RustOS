@@ -191,7 +191,7 @@ pub fn virt_to_phys(cr3: usize, va: usize) -> Option<usize> {
         if *pte & PRESENT == 0 {
             return None;
         }
-        Some((*pte & ADDR_MASK) as usize)
+        Some(((*pte & ADDR_MASK) as usize) + (va & (P::SIZE - 1)))
     }
 }
 
