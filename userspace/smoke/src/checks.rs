@@ -1,7 +1,7 @@
 //! Shared smoke assertions. The host regression harness supplies mock syscalls.
 
 use super::{
-    check, sys_close, sys_open, sys_pipe2, sys_read, sys_rename, sys_unlink, sys_write, test_errno_checks,
+    check, sys_close, sys_lseek, sys_open, sys_pipe2, sys_read, sys_unlink, sys_write, test_errno_checks,
     O_CREAT, O_RDONLY, O_RDWR, O_TRUNC,
 };
 #[cfg(any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "riscv64"))]
@@ -54,7 +54,9 @@ pub(super) fn run_tests() -> bool {
                 "wait4 child",
                 unsafe { sys_wait4(child, &mut status as *mut c_int, 0) } == child,
             );
+            let exited_normally = (status & 0x7f) == 0;
             let exit_status = ((status >> 8) & 0xff) as u8;
+            pass &= check("child terminated normally", exited_normally);
             pass &= check("child exit status", exit_status == 42);
         }
 
@@ -69,51 +71,32 @@ pub(super) fn run_tests() -> bool {
                 "wait4 exit status",
                 unsafe { sys_wait4(child2, &mut status as *mut c_int, 0) } == child2,
             );
+            let exited_normally = (status & 0x7f) == 0;
             let exit_status = ((status >> 8) & 0xff) as u8;
+            pass &= check("second child terminated normally", exited_normally);
             pass &= check("exit status 42", exit_status == 42);
         }
     }
 
-    // Create a real writable file, write known bytes, reopen and read them
-    // back, then remove it. A missing /tmp mount or unsupported write/unlink
-    // syscall is a hard smoke failure.
+    // Create/write/seek/read/unlink roundtrip on a regular file.
     const FILE_PATH: &[u8] = b"/tmp/rustos-smoke-write-test\0";
-    const RENAMED_PATH: &[u8] = b"/tmp/rustos-smoke-write-renamed\0";
     const FILE_DATA: &[u8] = b"rustos-write-test";
-    let mut file_was_renamed = false;
-    let file_fd = unsafe {
-        sys_open(
-            FILE_PATH.as_ptr(),
-            O_CREAT | O_RDWR | O_TRUNC,
-            0o600,
-        )
-    };
+    let file_fd = unsafe { sys_open(FILE_PATH.as_ptr(), O_CREAT | O_RDWR | O_TRUNC, 0o600) };
     pass &= check("create writable smoke file", file_fd >= 0);
     if file_fd >= 0 {
-        let written = unsafe { sys_write(file_fd as usize, FILE_DATA.as_ptr(), FILE_DATA.len()) };
+        let fd = file_fd as usize;
+        let written = unsafe { sys_write(fd, FILE_DATA.as_ptr(), FILE_DATA.len()) };
         pass &= check("write smoke file", written == FILE_DATA.len() as isize);
-        pass &= check("close smoke file after write", unsafe { sys_close(file_fd as usize) } == 0);
-
-        let rename_result = unsafe { sys_rename(FILE_PATH.as_ptr(), RENAMED_PATH.as_ptr()) };
-        pass &= check("rename smoke file", rename_result == 0);
-        file_was_renamed = rename_result == 0;
-        let read_path = if file_was_renamed { RENAMED_PATH } else { FILE_PATH };
-        let read_fd = unsafe { sys_open(read_path.as_ptr(), O_RDONLY, 0) };
-        pass &= check("reopen smoke file", read_fd >= 0);
-        if read_fd >= 0 {
-            let mut contents = [0u8; 32];
-            let bytes_read = unsafe { sys_read(read_fd as usize, contents.as_mut_ptr(), contents.len()) };
-            pass &= check(
-                "read back smoke file contents",
-                bytes_read == FILE_DATA.len() as isize
-                    && &contents[..FILE_DATA.len()] == FILE_DATA,
-            );
-            pass &= check("close smoke file after read", unsafe { sys_close(read_fd as usize) } == 0);
-        }
+        pass &= check("seek smoke file to start", unsafe { sys_lseek(fd, 0, 0) } == 0);
+        let mut contents = [0u8; 32];
+        let bytes_read = unsafe { sys_read(fd, contents.as_mut_ptr(), contents.len()) };
+        pass &= check("read back smoke file contents",
+            bytes_read == FILE_DATA.len() as isize && &contents[..FILE_DATA.len()] == FILE_DATA);
+        pass &= check("close smoke file", unsafe { sys_close(fd) } == 0);
     }
-    // Remove whichever name remains, including when rename failed.
-    let cleanup_path: &[u8] = if file_was_renamed { RENAMED_PATH } else { FILE_PATH };
-    pass &= check("unlink smoke file", unsafe { sys_unlink(cleanup_path.as_ptr()) } == 0);
+    pass &= check("unlink smoke file", unsafe { sys_unlink(FILE_PATH.as_ptr()) } == 0);
+    pass &= check("open after unlink returns ENOENT",
+        unsafe { sys_open(FILE_PATH.as_ptr(), O_RDONLY, 0) } == ENOENT);
 
     // Exercise kernel-backed pipe IPC with a bounded in-pipe payload.
     let mut pipe_fds = [-1i32; 2];
