@@ -340,6 +340,8 @@ pub fn dispatch_arch(abi: SyscallAbi, nr: usize, args: [usize; 6], saved_rip: u6
         23 => 32,   // dup
         24 => 292,  // dup3
         25 => 72,   // fcntl
+        35 => 263,  // unlinkat
+        59 => 293,  // pipe2
         29 => 16,   // ioctl
         82 => 74,   // fsync
         83 => 75,   // fdatasync
