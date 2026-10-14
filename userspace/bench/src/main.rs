@@ -11,7 +11,9 @@
 use core::arch::{asm, naked_asm};
 
 const WARMUP_ITERATIONS: u64 = 1_000;
-const MEASURED_ITERATIONS: u64 = 10_000;
+const SAMPLE_COUNT: usize = 256;
+const SAMPLE_BATCH_SIZE: usize = 32;
+const MEASURED_ITERATIONS: u64 = SAMPLE_COUNT as u64 * SAMPLE_BATCH_SIZE as u64;
 const CLOCK_MONOTONIC: usize = 1;
 
 #[cfg(target_arch = "x86_64")]
@@ -192,6 +194,28 @@ fn write_u64(fd: usize, value: u64) {
     write_all(fd, &buffer[index..]);
 }
 
+
+fn write_json_string(fd: usize, value: &str) {
+    write_all(fd, b"\"");
+    for byte in value.as_bytes() {
+        match *byte {
+            b'"' => write_all(fd, b"\\\""),
+            b'\\' => write_all(fd, b"\\\\"),
+            b'\\n' => write_all(fd, b"\\n"),
+            b'\\r' => write_all(fd, b"\\r"),
+            b'\\t' => write_all(fd, b"\\t"),
+            0..=0x1f => write_all(fd, b" "),
+            _ => write_all(fd, core::slice::from_ref(byte)),
+        }
+    }
+    write_all(fd, b"\"");
+}
+
+fn percentile(samples: &[u64; SAMPLE_COUNT], percentile: usize) -> u64 {
+    let index = (samples.len() - 1) * percentile / 100;
+    samples[index]
+}
+
 fn now_ns() -> Option<i128> {
     let mut ts = Timespec::default();
     let result = unsafe { sys_clock_gettime(CLOCK_MONOTONIC, &mut ts) };
@@ -209,62 +233,110 @@ fn run_benchmark() -> bool {
     for _ in 0..WARMUP_ITERATIONS {
         let pid = unsafe { sys_getpid() };
         if pid <= 0 {
-            write_all(stderr, b"RUSTOS_BENCH marker=getpid_failed phase=warmup\n");
+            write_all(stderr, b"RUSTOS_BENCH marker=getpid_failed phase=warmup\\n");
             return false;
         }
         checksum = checksum.wrapping_add(pid as u64);
     }
 
-    let started = match now_ns() {
-        Some(value) => value,
-        None => {
-            write_all(stderr, b"RUSTOS_BENCH marker=clock_failed phase=start\n");
-            return false;
-        }
-    };
-
+    // Collect a distribution of per-call batch means. Each sample times a
+    // fixed group so clock_gettime overhead is amortized rather than timing
+    // every syscall individually.
+    let mut samples = [0u64; SAMPLE_COUNT];
     let mut completed = 0u64;
-    for _ in 0..MEASURED_ITERATIONS {
-        let pid = unsafe { sys_getpid() };
-        if pid <= 0 {
-            write_all(stderr, b"RUSTOS_BENCH marker=getpid_failed phase=measured\n");
-            return false;
+    let mut elapsed_ns = 0u64;
+
+    for sample_index in 0..SAMPLE_COUNT {
+        let started = match now_ns() {
+            Some(value) => value,
+            None => {
+                write_all(stderr, b"RUSTOS_BENCH marker=clock_failed phase=sample_start\\n");
+                return false;
+            }
+        };
+
+        for _ in 0..SAMPLE_BATCH_SIZE {
+            let pid = unsafe { sys_getpid() };
+            if pid <= 0 {
+                write_all(stderr, b"RUSTOS_BENCH marker=getpid_failed phase=measured\\n");
+                return false;
+            }
+            checksum = checksum.wrapping_add(pid as u64);
+            completed += 1;
         }
-        checksum = checksum.wrapping_add(pid as u64);
-        completed += 1;
+
+        let ended = match now_ns() {
+            Some(value) if value >= started => value,
+            _ => {
+                write_all(stderr, b"RUSTOS_BENCH marker=clock_failed phase=sample_end\\n");
+                return false;
+            }
+        };
+        let sample_elapsed = (ended - started) as u64;
+        elapsed_ns = elapsed_ns.saturating_add(sample_elapsed);
+        samples[sample_index] = sample_elapsed / SAMPLE_BATCH_SIZE as u64;
     }
 
-    let ended = match now_ns() {
-        Some(value) if value >= started => value,
-        _ => {
-            write_all(stderr, b"RUSTOS_BENCH marker=clock_failed phase=end\n");
-            return false;
+    // An in-place insertion sort avoids allocation and is small enough for
+    // this fixed 256-sample distribution.
+    for i in 1..SAMPLE_COUNT {
+        let value = samples[i];
+        let mut j = i;
+        while j > 0 && samples[j - 1] > value {
+            samples[j] = samples[j - 1];
+            j -= 1;
         }
-    };
+        samples[j] = value;
+    }
 
-    let elapsed_ns = (ended - started) as u64;
     let mean_ns = elapsed_ns / completed.max(1);
-
-    write_all(stdout, b"{\"schema_version\":1,\"benchmark\":\"getpid\",\"benchmark_version\":1,\"architecture\":\"");
+    write_all(stdout, b"{\\"schema_version\\":2,\\"benchmark\\":\\"getpid\\",\\"benchmark_version\\":2,\\"architecture\\":\\"");
     #[cfg(target_arch = "x86_64")]
     write_all(stdout, b"x86_64");
     #[cfg(target_arch = "aarch64")]
     write_all(stdout, b"aarch64");
     #[cfg(target_arch = "riscv64")]
     write_all(stdout, b"riscv64");
-    write_all(stdout, b"\",\"environment\":{\"guest\":\"RustOS\",\"execution_context\":\"QEMU_or_bare_metal\",\"build_profile\":\"release\",\"clock\":\"CLOCK_MONOTONIC\",\"syscall_abi\":\"raw_linux_compatible\"},\"warmup_iterations\":");
+
+    write_all(stdout, b"\\",\\"environment\\":{\\"guest\\":\\"RustOS\\",\\"execution_context\\":\\"QEMU guest\\",\\"build_profile\\":\\"release\\",\\"clock\\":\\"CLOCK_MONOTONIC\\",\\"syscall_abi\\":\\"raw_linux_compatible\\",\\"host_os\\":");
+    write_json_string(stdout, option_env!("RUSTOS_HOST_OS").unwrap_or("unknown"));
+    write_all(stdout, b",\\"host_arch\\":");
+    write_json_string(stdout, option_env!("RUSTOS_HOST_ARCH").unwrap_or("unknown"));
+    write_all(stdout, b",\\"compiler_version\\":");
+    write_json_string(stdout, option_env!("RUSTOS_COMPILER_VERSION").unwrap_or("unknown"));
+    write_all(stdout, b",\\"qemu_version\\":");
+    write_json_string(stdout, option_env!("RUSTOS_QEMU_VERSION").unwrap_or("unknown"));
+    write_all(stdout, b"},\\"warmup_iterations\\":");
     write_u64(stdout, WARMUP_ITERATIONS);
-    write_all(stdout, b",\"measured_iterations\":");
+    write_all(stdout, b",\\"measured_iterations\\":");
     write_u64(stdout, MEASURED_ITERATIONS);
-    write_all(stdout, b",\"successful_calls\":");
+    write_all(stdout, b",\\"successful_calls\\":");
     write_u64(stdout, completed);
-    write_all(stdout, b",\"elapsed_ns\":");
+    write_all(stdout, b",\\"operation_counts\\":{\\"getpid\\":");
+    write_u64(stdout, completed);
+    write_all(stdout, b",\\"clock_gettime\\":");
+    write_u64(stdout, (SAMPLE_COUNT * 2) as u64);
+    write_all(stdout, b"},\\"elapsed_ns\\":");
     write_u64(stdout, elapsed_ns);
-    write_all(stdout, b",\"mean_ns_per_call\":");
+    write_all(stdout, b",\\"mean_ns_per_call\\":");
     write_u64(stdout, mean_ns);
-    write_all(stdout, b",\"pid_checksum\":");
+    write_all(stdout, b",\\"sample_count\\":");
+    write_u64(stdout, SAMPLE_COUNT as u64);
+    write_all(stdout, b",\\"sample_batch_size\\":");
+    write_u64(stdout, SAMPLE_BATCH_SIZE as u64);
+    write_all(stdout, b",\\"latency_ns_per_call\\":{\\"min\\":");
+    write_u64(stdout, samples[0]);
+    write_all(stdout, b",\\"p50\\":");
+    write_u64(stdout, percentile(&samples, 50));
+    write_all(stdout, b",\\"p90\\":");
+    write_u64(stdout, percentile(&samples, 90));
+    write_all(stdout, b",\\"p99\\":");
+    write_u64(stdout, percentile(&samples, 99));
+    write_all(stdout, b",\\"max\\":");
+    write_u64(stdout, samples[SAMPLE_COUNT - 1]);
+    write_all(stdout, b"},\\"pid_checksum\\":");
     write_u64(stdout, checksum);
-    write_all(stdout, b"}\nRUSTOS_BENCH marker=complete\n");
+    write_all(stdout, b"}\\nRUSTOS_BENCH marker=complete\\n");
     true
 }
 
