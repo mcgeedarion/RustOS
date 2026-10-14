@@ -75,15 +75,13 @@ thiserror.workspace = true
 cc = "1"
 
 [features]
-# Historical default feature name. Currently selects the transitional UEFI
-# userspace-diagnostic profile, NOT the complete MM/VFS/scheduler graph.
-# Keep this alias stable while the full subsystem graph is integrated.
-full_kernel = ["uefi_boot", "userspace_boot"]
+# The full kernel uses the normal MM/VFS/process/scheduler graph and the
+# architecture-specific UEFI firmware entry. Firmware selection does not choose
+# the minimal or diagnostic subsystem profile.
+full_kernel = ["uefi_boot"]
 
-# ---------------------------------------------------------------------------
-# Default: transitional userspace diagnostics with UEFI boot infrastructure.
-# This profile can inspect /init but cannot yet execute a userspace process.
-# ---------------------------------------------------------------------------
+# Default builds the actual full subsystem graph. Minimal and diagnostic
+# profiles are opt-in through their explicit feature flags.
 default = ["full_kernel"]
 
 # Compile only the firmware handoff, common BootInfo path, early console,
@@ -110,7 +108,7 @@ cgroups = []
 gdbstub = []
 
 # Build as a UEFI loader/application.
-uefi_boot = ["boot_minimal"]
+uefi_boot = []
 
 
 # Full debug build: GDB RSP stub + rich oops/backtrace + trace drain.
