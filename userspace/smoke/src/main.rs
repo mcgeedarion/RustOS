@@ -73,6 +73,19 @@ const ECHILD: isize = -10;
 
 // Open flags
 const O_RDONLY: usize = 0;
+const O_RDWR: usize = 0x2;
+const O_CREAT: usize = 0x40;
+const O_TRUNC: usize = 0x200;
+
+#[cfg(target_arch = "x86_64")]
+const SYS_UNLINKAT: usize = 263;
+#[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
+const SYS_UNLINKAT: usize = 35;
+
+#[cfg(target_arch = "x86_64")]
+const SYS_PIPE2: usize = 293;
+#[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
+const SYS_PIPE2: usize = 59;
 
 // ── Raw syscall wrappers ───────────────────────────────────────────────────
 
@@ -167,6 +180,99 @@ unsafe fn sys_open(path: *const u8, flags: usize, mode: usize) -> isize {
             in("a1") path,
             in("a2") flags,
             in("a3") mode,
+            lateout("a0") ret,
+            options(nostack),
+        );
+        ret
+    }
+}
+
+#[inline(always)]
+unsafe fn sys_unlink(path: *const u8) -> isize {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let ret: isize;
+        asm!(
+            "syscall",
+            in("rax") SYS_UNLINKAT,
+            in("rdi") -100isize, // AT_FDCWD
+            in("rsi") path,
+            in("rdx") 0usize,
+            out("rcx") _,
+            out("r11") _,
+            lateout("rax") ret,
+            options(nostack),
+        );
+        ret
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        let ret: isize;
+        asm!(
+            "svc #0",
+            in("x8") SYS_UNLINKAT,
+            in("x0") -100isize, // AT_FDCWD
+            in("x1") path,
+            in("x2") 0usize,
+            lateout("x0") ret,
+            options(nostack),
+        );
+        ret
+    }
+    #[cfg(target_arch = "riscv64")]
+    {
+        let ret: isize;
+        asm!(
+            "ecall",
+            in("a7") SYS_UNLINKAT,
+            in("a0") -100isize, // AT_FDCWD
+            in("a1") path,
+            in("a2") 0usize,
+            lateout("a0") ret,
+            options(nostack),
+        );
+        ret
+    }
+}
+
+#[inline(always)]
+unsafe fn sys_pipe2(pipefd: *mut c_int, flags: usize) -> isize {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let ret: isize;
+        asm!(
+            "syscall",
+            in("rax") SYS_PIPE2,
+            in("rdi") pipefd,
+            in("rsi") flags,
+            out("rcx") _,
+            out("r11") _,
+            lateout("rax") ret,
+            options(nostack),
+        );
+        ret
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        let ret: isize;
+        asm!(
+            "svc #0",
+            in("x8") SYS_PIPE2,
+            in("x0") pipefd,
+            in("x1") flags,
+            lateout("x0") ret,
+            options(nostack),
+        );
+        ret
+    }
+    #[cfg(target_arch = "riscv64")]
+    {
+        let ret: isize;
+        asm!(
+            "ecall",
+            in("a7") SYS_PIPE2,
+            in("a0") pipefd,
+            in("a1") flags,
             lateout("a0") ret,
             options(nostack),
         );
