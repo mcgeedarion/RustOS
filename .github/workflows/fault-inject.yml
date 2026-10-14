@@ -23,7 +23,7 @@ jobs:
         run: |
           rustc --edition=2021 --test --cfg 'feature="fault-inject"' \
             scripts/ci/tests/fault_engine.rs -o "$RUNNER_TEMP/fault-engine-tests"
-          "$RUNNER_TEMP/fault-engine-tests"
+          "$RUNNER_TEMP/fault-engine-tests" 2>&1 | tee fault-engine-tests.log
       - name: State the coverage boundary
         run: |
           {
@@ -32,6 +32,17 @@ jobs:
             echo "PMM/VMM/syscall integration is NOT exercised: supported boot profiles exclude those modules."
             echo "The kernel integration job is explicitly skipped until a real executable harness exists."
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload fault-injection evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fault-injection-host-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            fault-engine-tests.log
+            ${{ runner.temp }}/fault-engine-tests
 
   kernel-integration:
     name: Kernel fault integration (unsupported)
