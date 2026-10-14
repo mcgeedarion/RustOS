@@ -1,19 +1,24 @@
 # RustOS Architecture Support Policy
 
-_Last reviewed: 2026-07-01._
+_Last reviewed: 2026-10-13._
 
 RustOS currently has two maintained architecture paths. The repository is in a
-boot-first stabilization state: x86_64 UEFI is the primary path, AArch64 is kept
-buildable for UEFI and bare-metal bring-up, and the full kernel module graph is
-compiled only when neither `boot_minimal` nor `userspace_boot` is selected.
+boot-first stabilization state: x86_64 UEFI is the primary path and AArch64 is
+kept buildable for UEFI and bare-metal bring-up. The default selects the full
+subsystem graph; minimal and diagnostic profiles are explicit opt-ins. A full
+subsystem build does not yet prove that userspace execution works.
 
 ## Primary architecture: x86_64
 
 - **Boot method:** UEFI PE/COFF image using the `x86_64-unknown-uefi` target.
-- **Default feature path:** `uefi_boot`, which aliases into `boot_minimal`.
-- **Local smoke command:** `cargo xtask smoke --arch x86_64`.
-- **Success contract:** serial output must contain `BOOT_MINIMAL_OK`,
-  `FULL_OS_USERSPACE_OK`, or `entering cpu_idle`.
+- **Default feature path:** `full_kernel`, with UEFI firmware entry independent
+  of the selected subsystem graph.
+- **Minimal smoke command:** `cargo xtask smoke --arch x86_64 --features boot_minimal`.
+- **Full smoke command:** `cargo xtask smoke --arch x86_64`.
+- **Success contract:** minimal smoke requires `BOOT_MINIMAL_OK`; full smoke
+  requires the exact-PID userspace execution protocol, benchmark JSON, and timing
+  parser success from the same fresh QEMU log. The full path is blocked until
+  real ELF mapping, user-stack setup, and process scheduling are implemented.
 - **QEMU contract:** Q35 machine, OVMF firmware, 256 MiB RAM, serial captured to
   `target/smoke-x86_64.log`.
 
@@ -21,11 +26,12 @@ compiled only when neither `boot_minimal` nor `userspace_boot` is selected.
 
 - **Boot methods:** UEFI PE/COFF via `aarch64-unknown-uefi`, and bare-metal ELF
   via `targets/aarch64-kernel.json` plus `linker/aarch64.ld`.
-- **Local smoke command:** `cargo xtask smoke --arch aarch64`.
+- **Minimal smoke command:** `cargo xtask smoke --arch aarch64 --features boot_minimal`.
+- **Full smoke command:** `cargo xtask smoke --arch aarch64` (execution currently blocked).
 - **Firmware requirement:** install AAVMF/QEMU EFI firmware or set `QEMU_EFI`.
 - **Status:** kept aligned with the shared `BootInfo`, early console, boot
-  marker, and idle-loop contracts; full subsystem parity with x86_64 is not yet
-  required.
+  marker, and idle-loop contracts. Full userspace execution remains blocked until
+  the architecture-aware process/address-space backend is integrated.
 
 ---
 
@@ -36,11 +42,12 @@ The crate root intentionally selects one of three module graphs:
 | Feature selection | Active path | Current purpose |
 |---|---|---|
 | `boot_minimal` without `userspace_boot` | first-stage boot only | firmware handoff, `BootInfo`, early console, boot marker, idle loop |
-| `userspace_boot` | boot plus thin shims | validates initramfs/userspace handoff without the unstable full module graph |
-| neither `boot_minimal` nor `userspace_boot` | full kernel graph | compiles mm/fs/proc/net/security/drivers/syscalls for integration work |
+| `userspace_boot` | boot plus thin shims | diagnostic-only handoff checks; never counts as a full userspace execution pass |
+| `full_kernel` / Cargo defaults | full kernel graph with UEFI entry | compiles mm/fs/proc/net/security/drivers/syscalls; end-to-end userspace execution remains blocked |
 
-`uefi_boot` is the default feature and enables `boot_minimal`. Use explicit
-features when validating a non-default path.
+`full_kernel` is the default and enables `uefi_boot` without selecting `boot_minimal`.
+Use `--features boot_minimal` for the separate minimal smoke contract and
+`--features userspace_boot` for diagnostic-only experiments.
 
 ## Code organisation rules
 
