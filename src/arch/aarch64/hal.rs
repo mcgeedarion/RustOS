@@ -169,6 +169,9 @@ impl Paging for ArchImpl {
         }
         Some(pgd)
     }
+    fn free_page_table(root: usize) {
+        super::paging::free_user_page_table(root);
+    }
 }
 
 impl Tlb for ArchImpl {
