@@ -77,7 +77,7 @@ pub(super) fn run_tests() -> bool {
     // Create a real writable file, write known bytes, reopen and read them
     // back, then remove it. A missing /tmp mount or unsupported write/unlink
     // syscall is a hard smoke failure.
-    const FILE_PATH: &[u8] = b"/tmp/rustos-smoke-write-test\\0";
+    const FILE_PATH: &[u8] = b"/tmp/rustos-smoke-write-test\0";
     const FILE_DATA: &[u8] = b"rustos-write-test";
     let file_fd = unsafe {
         sys_open(
