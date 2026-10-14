@@ -1,0 +1,67 @@
+name: Parser Fuzz Smoke
+
+on:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "fuzz/**"
+      - "src/init/initramfs/**"
+      - "src/exec/elf.rs"
+      - "src/fs/vfs/symlink.rs"
+      - "src/fs/ext4.rs"
+  pull_request:
+    paths:
+      - "fuzz/**"
+      - "src/init/initramfs/**"
+      - "src/exec/elf.rs"
+      - "src/fs/vfs/symlink.rs"
+      - "src/fs/ext4.rs"
+
+permissions:
+  contents: read
+
+jobs:
+  parser-fuzz:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src, llvm-tools-preview
+      - name: Install sanitizer and libFuzzer build dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends clang llvm lld
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      - name: Fuzz production CPIO parser
+        run: |
+          set -o pipefail
+          timeout 50s cargo fuzz run cpio_newc -- -max_len=4096 -max_total_time=20 -dict=fuzz/dictionaries/cpio_newc.dict 2>&1 | tee fuzz-cpio.log
+      - name: Fuzz production ELF parser
+        run: |
+          set -o pipefail
+          timeout 50s cargo fuzz run elf64 -- -max_len=4096 -max_total_time=20 -dict=fuzz/dictionaries/elf64.dict 2>&1 | tee fuzz-elf.log
+      - name: Fuzz production VFS path resolver
+        run: |
+          set -o pipefail
+          timeout 50s cargo fuzz run vfs_path -- -max_len=4096 -max_total_time=20 -dict=fuzz/dictionaries/vfs_path.dict 2>&1 | tee fuzz-vfs-path.log
+      - name: Fuzz production ext4 metadata parser
+        run: |
+          set -o pipefail
+          timeout 50s cargo fuzz run ext4_metadata -- -max_len=4096 -max_total_time=20 -dict=fuzz/dictionaries/ext4_metadata.dict 2>&1 | tee fuzz-ext4-metadata.log
+      - name: Upload fuzz logs, crash artifacts, and discovered corpus
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: parser-fuzz-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            fuzz-*.log
+            fuzz/artifacts/**
+            fuzz/corpus/**
