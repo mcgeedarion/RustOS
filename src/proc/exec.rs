@@ -310,8 +310,17 @@ fn build_elf_image(data: &[u8]) -> Result<PreparedImage, isize> {
             return Err(ENOEXEC);
         }
 
-        if phoff >= p_offset && phoff.checked_add((phnum * phentsize) as u64).is_some_and(|pe| pe <= p_offset + p_filesz) {
-            phdr_va = va.checked_add((phoff - p_offset) as usize).unwrap_or(0);
+        let phdr_table_bytes = phnum.checked_mul(phentsize).ok_or(ENOEXEC)?;
+        let phdr_table_bytes_u64 = u64::try_from(phdr_table_bytes).map_err(|_| ENOEXEC)?;
+        let phdr_table_end = phoff.checked_add(phdr_table_bytes_u64);
+        let segment_file_end = p_offset.checked_add(p_filesz);
+        if phoff >= p_offset
+            && phdr_table_end.is_some()
+            && segment_file_end.is_some()
+            && phdr_table_end.unwrap_or(u64::MAX) <= segment_file_end.unwrap_or(0)
+        {
+            let delta = usize::try_from(phoff - p_offset).map_err(|_| ENOEXEC)?;
+            phdr_va = va.checked_add(delta).ok_or(ENOEXEC)?;
         }
 
         for page_va in (start..end).step_by(PAGE_SIZE) {
