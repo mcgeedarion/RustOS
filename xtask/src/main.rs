@@ -443,26 +443,24 @@ fn kernel_cargo_command(root: &Path, opts: &BuildOpts, subcommand: &str) -> Resu
                     .filter(|feature| !feature.is_empty())
                     .collect();
 
-                let lean_boot = requested
+                // Selecting UEFI is a firmware-entry decision, not a request
+                // for the minimal subsystem graph. Only explicit slim-profile
+                // features disable the full-kernel defaults.
+                let slim_profile = requested
                     .iter()
-                    .any(|feature| matches!(*feature, "boot_minimal" | "uefi_boot"));
-                if lean_boot {
+                    .any(|feature| matches!(*feature, "boot_minimal" | "userspace_boot"));
+                if slim_profile {
                     cmd.arg("--no-default-features");
                 }
 
-                let mut effective_features = features.to_string();
-                if requested.contains(&"uefi_boot") && !requested.contains(&"boot_minimal") {
-                    effective_features.push_str(",boot_minimal");
-                }
-
-                cmd.arg("--features").arg(effective_features);
+                cmd.arg("--features").arg(features);
             },
             None => {
-                // Keep the default developer boot path on the known-good
-                // first-stage profile while the full kernel module graph is
-                // still being stabilised.
+                // The normal xtask path must compile the real subsystem graph.
+                // Minimal and userspace-diagnostic images require explicit
+                // feature selection; release-boot remains a separate lean path.
                 cmd.arg("--no-default-features");
-                cmd.arg("--features").arg("boot_minimal");
+                cmd.arg("--features").arg("full_kernel");
             },
         }
     }
