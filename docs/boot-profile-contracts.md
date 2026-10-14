@@ -7,23 +7,24 @@ Compilation is a separate contract from boot success or userspace execution.
 
 | Selection | Compiled services | Runtime contract |
 |---|---|---|
-| `--no-default-features --features boot_minimal` | Firmware handoff, early console, bump allocator | Minimal boot may emit `BOOT_MINIMAL_OK`; this does not prove userspace execution |
-| `--no-default-features --features userspace_boot` | Firmware handoff, raw CPIO lookup, ELF diagnostics | Missing archive/init and invalid ELF produce diagnostics; a valid image returns execution unavailable |
-| Cargo defaults | `full_kernel` currently enables `uefi_boot` and `userspace_boot` | Same transitional diagnostic contract, despite the historical feature name |
-| Neither slim flag | Full subsystem graph | Separate experimental integration work; not made production-ready by these fixes |
+| `--no-default-features --features boot_minimal` | Firmware handoff, early console, bump allocator | Minimal boot must emit `BOOT_MINIMAL_OK`; this does not prove userspace execution |
+| `--no-default-features --features userspace_boot` | Firmware handoff, raw CPIO lookup, ELF diagnostics | Diagnostic profile reports execution unavailable; never a full-boot pass |
+| Cargo defaults / `full_kernel` | Full subsystem graph with UEFI firmware entry | Full execution gate requires real process creation, ELF mappings, initial stack, exec/reap, benchmark JSON, and real-log timing parser |
+| Explicit slim flags | Minimal or diagnostic profiles | Separate compile/boot gates; do not promote full-kernel support |
 
 HAL implementations, their imports/reexports, the `Arch` alias, and HAL-backed
 address helpers share the same full-graph gate. The trait definitions remain
 available to all profiles; no fake paging or process implementation is supplied.
 
 Firmware initramfs registration and the embedded-archive fallback remain enabled
-whenever `userspace_boot` is active, including Cargo defaults that also select
-`boot_minimal`. Pure minimal boot still omits that diagnostic-only work.
+when `userspace_boot` is explicitly selected. The default `full_kernel` build is
+a separate configuration; its execution gate is not supported until the real
+process/address-space backend is integrated.
 
 ## Reproducible validation
 
-The `Focused host regressions` workflow builds all three supported UEFI
-selections in debug and release on x86_64 and AArch64. These are actual
+The `Focused host regressions` workflow builds explicit minimal/diagnostic UEFI
+selections and the default full graph in debug and release on x86_64 and AArch64. These are actual
 `cargo build` invocations so a missing firmware entrypoint cannot hide behind
 a successful `cargo check`.
 
