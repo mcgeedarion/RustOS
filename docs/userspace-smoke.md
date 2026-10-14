@@ -31,10 +31,6 @@ x86_64, AArch64, and RISC-V 64, descriptor/errno behavior, and regular-file
 create/write/seek/read/unlink plus `ENOENT` after unlink. These assertions prove
 runtime behavior only when the workload is actually executed by the guest.
 
-The kernel's current `src/proc/exec.rs` still returns `ENOSYS` for a valid
-`execve`, and process ELF segment mapping and initial userspace stack setup are
-intentionally incomplete. The full userspace QEMU gate remains blocked until
-process creation, ELF replacement, exact-child reaping, and architecture-specific
-return-state setup are implemented and exercised. Build success, marker string
+The repository contains process creation, ELF segment mapping, initial userspace stack construction, and an `execve` replacement path. The full userspace QEMU gate remains blocked until these paths are exercised end to end, including architecture-specific return-state setup, address-space lifetime, exact-child reaping, and normal exit-status validation. Build success, marker string
 presence, or parser unit tests alone do not establish end-to-end support. Validate
 each architecture independently.
