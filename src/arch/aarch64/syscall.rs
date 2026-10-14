@@ -19,6 +19,22 @@ use crate::proc::scheduler;
 /// Called from `aarch64_sync_handler` when ESR_EL1.EC == 0x15 (SVC64).
 pub fn handle(frame: &mut ExceptionFrame) {
     let nr = frame.x[8];
+
+    // Save the EL0 register image before syscall dispatch. ELR is already
+    // advanced below, so a fork child resumes after the SVC instruction.
+    let pid = scheduler::current_pid() as usize;
+    if pid != 0 {
+        scheduler::with_proc_mut(pid, |pcb, _| {
+            for index in 0..31 {
+                pcb.user_context.regs[index] = frame.x[index] as usize;
+            }
+            pcb.user_context.pc = frame.elr_el1 as usize + 4;
+            pcb.user_context.sp = frame.sp_el0 as usize;
+            pcb.user_context.flags = frame.spsr_el1 as usize;
+            pcb.pc = pcb.user_context.pc;
+            pcb.sp = pcb.user_context.sp;
+        });
+    }
     let args = [
         frame.x[0], frame.x[1], frame.x[2], frame.x[3], frame.x[4], frame.x[5],
     ];
