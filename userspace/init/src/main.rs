@@ -553,6 +553,56 @@ fn run_syscall_tests() {
     }
 }
 
+/// Execute the real /smoke ELF as a child, then reap the same PID and
+/// require normal exit with status zero. A returning execve is a failure.
+fn run_exec_smoke_child() {
+    const STDOUT: usize = 1;
+    const STDERR: usize = 2;
+    let child = unsafe { sys_fork() };
+
+    if child == 0 {
+        let path = c"/smoke";
+        let argv = [path.as_ptr() as usize, 0usize];
+        let envp = [0usize];
+        let result = unsafe {
+            sys_execve(path.as_ptr() as *const u8, argv.as_ptr(), envp.as_ptr())
+        };
+        write_all(STDERR, b"RUSTOS_EXEC marker=smoke_execve_failed errno=");
+        write_usize(STDERR, b"", result.wrapping_neg() as usize);
+        unsafe { sys_exit_group(127) };
+    }
+
+    if child < 0 {
+        write_all(STDERR, b"RUSTOS_EXEC marker=smoke_fork_failed errno=");
+        write_usize(STDERR, b"", child.wrapping_neg() as usize);
+        unsafe { sys_exit_group(1) };
+    }
+
+    let mut status = 0i32;
+    let waited = unsafe { sys_wait4(child, &mut status as *mut i32, 0, 0) };
+    if waited != child {
+        write_all(STDERR, b"RUSTOS_EXEC marker=smoke_wait_failed\n");
+        unsafe { sys_exit_group(1) };
+    }
+
+    let exited_normally = (status & 0x7f) == 0;
+    let exit_code = (status >> 8) & 0xff;
+    if !exited_normally || exit_code != 0 {
+        write_all(STDERR, b"RUSTOS_EXEC marker=smoke_child_failed pid=");
+        write_usize(STDERR, b"", child as usize);
+        write_all(STDERR, b" status=");
+        write_usize(STDERR, b"", status as usize);
+        write_all(STDERR, b" exit=");
+        write_usize(STDERR, b"", exit_code as usize);
+        write_all(STDERR, b"\n");
+        unsafe { sys_exit_group(1) };
+    }
+
+    write_all(STDOUT, b"RUSTOS_EXEC marker=smoke_child_reaped pid=");
+    write_usize(STDOUT, b"", child as usize);
+    write_all(STDOUT, b" exit=0\n");
+}
+
 // ── Entry point ────────────────────────────────────────────────────────────
 
 /// Rust entry point called from `_start` below.
@@ -582,9 +632,12 @@ fn init_main() -> ! {
     }
 
     run_syscall_tests();
+    write_all(STDOUT, b"RUSTOS_EXEC marker=init_started\n");
+    run_exec_smoke_child();
 
-    // ── 3. Smoke marker (scanned by scripts/ci/run_qemu.sh --smoke) ───────
-    // The CI harness looks for this exact line on the serial output.
+    // Completion is emitted only after successful execve, exact-PID wait/reap,
+    // normal termination, and child exit status zero.
+    write_all(STDOUT, b"RUSTOS_EXEC marker=init_complete exit=0\n");
     write_all(STDOUT, b"SMOKE OK: userspace_init\n");
     write_all(STDOUT, b"[init] TEST PASS: userspace_init\n");
     write_all(STDOUT, b"FULL_OS_USERSPACE_OK\n");
@@ -607,21 +660,47 @@ fn init_main() -> ! {
 ///
 /// We ignore all of those for now (init takes no arguments) and simply
 /// call into `init_main()`.
+#[cfg(target_arch = "x86_64")]
 #[no_mangle]
 #[unsafe(naked)]
 unsafe extern "C" fn _start() -> ! {
     naked_asm!(
-        // Align the stack to 16 bytes as required by the SysV ABI before
-        // calling into Rust code (CALL pushes 8 bytes, so AND -16 aligns).
         "and rsp, -16",
-        // Zero the frame pointer so stack unwinders stop here.
         "xor rbp, rbp",
         "call {entry}",
-        // Should never be reached — init_main() is divergent (-> !).
-        // If somehow we fall through, issue a clean exit(1).
         "mov rdi, 1",
-        "mov rax, 231",   // SYS_exit_group
+        "mov rax, 231",
         "syscall",
+        entry = sym init_main,
+    );
+}
+
+#[cfg(target_arch = "aarch64")]
+#[no_mangle]
+#[unsafe(naked)]
+unsafe extern "C" fn _start() -> ! {
+    naked_asm!(
+        "mov x29, xzr",
+        "and sp, sp, #-16",
+        "bl {entry}",
+        "mov x0, #1",
+        "mov x8, #94",
+        "svc #0",
+        entry = sym init_main,
+    );
+}
+
+#[cfg(target_arch = "riscv64")]
+#[no_mangle]
+#[unsafe(naked)]
+unsafe extern "C" fn _start() -> ! {
+    naked_asm!(
+        "mv s0, zero",
+        "andi sp, sp, -16",
+        "call {entry}",
+        "li a0, 1",
+        "li a7, 94",
+        "ecall",
         entry = sym init_main,
     );
 }
