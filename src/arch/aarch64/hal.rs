@@ -116,7 +116,8 @@ impl Paging for ArchImpl {
         if flags.contains(PageFlags::NX) {
             pte_flags |= 1 << 54; // XN bit
         }
-        super::paging::map_page(cr3, va, pa, pte_flags)
+        super::paging::map_page(cr3, va, pa, pte_flags);
+        true
     }
     fn unmap_page(cr3: usize, va: usize) -> Option<usize> {
         super::paging::unmap_page(cr3, va)
@@ -160,13 +161,8 @@ impl Paging for ArchImpl {
         unsafe {
             core::ptr::write_bytes(pgd as *mut u8, 0, 4096);
         }
-        // Copy kernel mappings (upper half)
-        let kpgd = Self::kernel_cr3();
-        unsafe {
-            let src = (kpgd + 256 * 8) as *const u64;
-            let dst = (pgd + 256 * 8) as *mut u64;
-            core::ptr::copy_nonoverlapping(src, dst, 256);
-        }
+        // TTBR1_EL1 keeps the shared kernel map independently. TTBR0_EL1
+        // owns only this process's user mappings, so leave the lower root empty.
         Some(pgd)
     }
     fn free_page_table(root: usize) {
