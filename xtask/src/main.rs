@@ -1241,7 +1241,7 @@ fn launch_qemu_riscv64(
 
 fn smoke_marker_regex(full_kernel: bool) -> &'static str {
     if full_kernel {
-        "RUSTOS_EXEC marker=smoke_started|RUSTOS_EXEC marker=smoke_tests_passed|RUSTOS_EXEC marker=smoke_child_reaped|RUSTOS_EXEC marker=init_complete exit=0"
+        "RUSTOS_EXEC marker=smoke_started|RUSTOS_EXEC marker=smoke_tests_passed|RUSTOS_EXEC marker=smoke_child_reaped pid=<positive-pid> exit=0|RUSTOS_BENCH marker=complete|RUSTOS_EXEC marker=bench_child_reaped pid=<positive-pid> exit=0|RUSTOS_EXEC marker=init_complete exit=0"
     } else {
         "RustOS: BOOT_MINIMAL_OK"
     }
