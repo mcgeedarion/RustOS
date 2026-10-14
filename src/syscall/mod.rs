@@ -324,6 +324,10 @@ pub enum SyscallAbi {
 /// Translate foreign Linux syscall numbers at one explicit architecture
 /// boundary. Unknown AArch64/RISC-V numbers fail closed with ENOSYS.
 pub fn dispatch_arch(abi: SyscallAbi, nr: usize, args: [usize; 6], saved_rip: u64) -> isize {
+    // execve switches away from its old image without returning. The next
+    // syscall therefore runs on the new stack/address space and can safely
+    // release the deferred old image before dispatching this request.
+    crate::proc::exec::reap_deferred_exec_images_at_syscall();
     if abi == SyscallAbi::X86_64 {
         return dispatch_with_rip(nr, args[0], args[1], args[2], args[3], args[4], args[5], saved_rip);
     }
