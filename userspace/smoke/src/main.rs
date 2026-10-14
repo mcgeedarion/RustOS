@@ -83,6 +83,11 @@ const SYS_UNLINKAT: usize = 263;
 const SYS_UNLINKAT: usize = 35;
 
 #[cfg(target_arch = "x86_64")]
+const SYS_RENAMEAT: usize = 264;
+#[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
+const SYS_RENAMEAT: usize = 38;
+
+#[cfg(target_arch = "x86_64")]
 const SYS_PIPE2: usize = 293;
 #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
 const SYS_PIPE2: usize = 59;
@@ -228,6 +233,57 @@ unsafe fn sys_unlink(path: *const u8) -> isize {
             in("a0") -100isize, // AT_FDCWD
             in("a1") path,
             in("a2") 0usize,
+            lateout("a0") ret,
+            options(nostack),
+        );
+        ret
+    }
+}
+
+#[inline(always)]
+unsafe fn sys_rename(old_path: *const u8, new_path: *const u8) -> isize {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let ret: isize;
+        asm!(
+            "syscall",
+            in("rax") SYS_RENAMEAT,
+            in("rdi") -100isize, // AT_FDCWD
+            in("rsi") old_path,
+            in("rdx") -100isize, // AT_FDCWD
+            in("r10") new_path,
+            out("rcx") _,
+            out("r11") _,
+            lateout("rax") ret,
+            options(nostack),
+        );
+        ret
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        let ret: isize;
+        asm!(
+            "svc #0",
+            in("x8") SYS_RENAMEAT,
+            in("x0") -100isize,
+            in("x1") old_path,
+            in("x2") -100isize,
+            in("x3") new_path,
+            lateout("x0") ret,
+            options(nostack),
+        );
+        ret
+    }
+    #[cfg(target_arch = "riscv64")]
+    {
+        let ret: isize;
+        asm!(
+            "ecall",
+            in("a7") SYS_RENAMEAT,
+            in("a0") -100isize,
+            in("a1") old_path,
+            in("a2") -100isize,
+            in("a3") new_path,
             lateout("a0") ret,
             options(nostack),
         );
