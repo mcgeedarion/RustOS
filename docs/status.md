@@ -11,7 +11,7 @@ full userspace boot is supported. The real execution gate requires the kernel
 to launch `/init`, successfully exec `/smoke`, reap that exact child, and
 observe a normal exit with status zero. The current process path remains
 blocked: `spawn_user_process()` returns false and valid `execve` requests
-currently return `ENOSYS`. Do not promote full boot, fork/exec, or userspace
+currently return `ENOSYS`. Shared raw syscall wrappers and stricter userspace assertions do not implement the missing process loader. Do not promote full boot, fork/exec, or userspace
 compatibility claims until the QEMU execution contract passes.
 
 ## Legend
