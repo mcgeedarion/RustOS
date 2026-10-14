@@ -38,14 +38,14 @@ pub fn handle(frame: &mut ExceptionFrame) {
         crate::smp::percpu::PERCPU_BLOCKS[cpu].in_syscall += 1;
     }
 
-    let ret = crate::syscall::dispatch(
+    let ret = crate::syscall::dispatch_arch(
+        crate::syscall::SyscallAbi::AArch64,
         nr as usize,
-        args[0] as usize,
-        args[1] as usize,
-        args[2] as usize,
-        args[3] as usize,
-        args[4] as usize,
-        args[5] as usize,
+        [
+            args[0] as usize, args[1] as usize, args[2] as usize,
+            args[3] as usize, args[4] as usize, args[5] as usize,
+        ],
+        frame.elr_el1,
     );
     frame.x[0] = ret as u64;
 
