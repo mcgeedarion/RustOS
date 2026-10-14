@@ -42,7 +42,74 @@ impl UserContext {
             regs: [0; 32],
             pc: 0,
             sp: 0,
-            flags: 0x202,
+            flags: 0,
         }
     }
+}
+
+
+/// First-run path for a schedulable user process.
+///
+/// User tasks have a valid mapped ELF entry and a complete userspace return
+/// context. The architecture handoff never returns to the caller's old stack.
+pub unsafe fn restore(task: *mut crate::proc::task_types::Task) -> ! {
+    if task.is_null() {
+        crate::serial_println!("context: refusing to restore a null task");
+        loop {
+            crate::arch::ArchImpl::halt();
+        }
+    }
+
+    let pid = (*task).pid as usize;
+    let saved = crate::proc::scheduler::with_proc(pid, |pcb| {
+        (
+            pcb.user_pagetable,
+            core::ptr::addr_of!(pcb.user_context),
+            pcb.user_context.pc,
+            pcb.user_context.sp,
+        )
+    });
+
+    let (root, context, pc, sp) = match saved {
+        Some(value) => value,
+        None => {
+            crate::serial_println!("context: PID {} has no PCB", pid);
+            loop {
+                crate::arch::ArchImpl::halt();
+            }
+        }
+    };
+
+    if root == 0 || pc == 0 || sp == 0 {
+        crate::serial_println!(
+            "context: refusing invalid user context pid={} root={:#x} pc={:#x} sp={:#x}",
+            pid,
+            root,
+            pc,
+            sp
+        );
+        loop {
+            crate::arch::ArchImpl::halt();
+        }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    crate::arch::x86_64::uentry::sysret_to_user_context(root, context);
+    #[cfg(target_arch = "aarch64")]
+    crate::arch::aarch64::uentry::eret_to_user_context(root, context);
+    #[cfg(target_arch = "riscv64")]
+    crate::arch::riscv64::uentry::sret_to_user_context(root, context);
+}
+
+/// Preemptive user-task switch.
+///
+/// The architecture trap/syscall entry path saves the outgoing userspace
+/// frame before the scheduler is entered. Restore the selected task directly
+/// from its saved user frame rather than pretending that the minimal kernel
+/// Context struct is a complete callee-saved register frame.
+pub unsafe fn switch(
+    _previous: *mut crate::proc::task_types::Task,
+    next: *mut crate::proc::task_types::Task,
+) -> ! {
+    restore(next)
 }
