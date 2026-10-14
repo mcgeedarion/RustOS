@@ -1,6 +1,6 @@
 # RustOS Subsystem Status
 
-_Last reviewed: 2026-08-30._
+_Last reviewed: 2026-10-13._
 
 This file is the authoritative high-level status registry. The default Cargo
 feature set is `full_kernel`, which now selects the normal subsystem graph with
@@ -78,14 +78,14 @@ See `docs/syscalls.md` for syscall-by-syscall status.
 
 | Module | Status | Notes |
 |---|---|---|
-| `crates/vfs-core/` | **real** | Complete VFS core with FileSystem trait, FileOps, and error handling |
-| `crates/fs-ext4/` | **real** | Production-ready ext4 implementation with journaling support |
-| `crates/fs-fat32/` | **real** | FAT32 implementation optimized for EFI System Partition use cases |
+| `crates/vfs-core/` | partial | VFS traits and operations exist; writable guest workloads and IPC integration are not yet evidenced by the full-kernel gate |
+| `crates/fs-ext4/` | partial | Crate-level host path returns NotSupported without `kernel_impl`; integrated `src/fs/ext4.rs` is read-only and does not establish journal replay or writable ext4 support |
+| `crates/fs-fat32/` | partial | FAT32 adapter exists; mount/read/write support is not promoted without runtime coverage for its supported paths |
 | `src/fs/vfs/` | partial | VFS data structures and POSIX operation helpers exist |
 | `src/fs/initramfs.rs` | partial | Initramfs support exists for boot handoff work |
 | `src/fs/devfs.rs`, `src/fs/procfs.rs`, `src/fs/sysfs.rs` | partial | Kernel pseudo-filesystem scaffolding exists; not fully validated as production interfaces |
 | `src/fs/ext2/`, `src/fs/ext4.rs`, `src/fs/fat32.rs` | partial | Filesystem implementations integrated with new crate-based architecture |
-| `src/fs/jbd2.rs` | **real** | JBD2 journaling layer with full validation and replay support |
+| `src/fs/jbd2.rs` | partial | JBD2 code exists; journal recovery and replay are not promoted without executable filesystem-image regression tests |
 | exFAT/NTFS/NFS/CDFS/overlayfs modules | experimental | Code exists for bring-up/integration, not a supported compatibility claim |
 | `src/io_uring/` | experimental | Ring and operation modules exist; not part of current milestone gates |
 
@@ -94,9 +94,9 @@ See `docs/syscalls.md` for syscall-by-syscall status.
 | Module | Status | Notes |
 |---|---|---|
 | `src/proc/` | partial | Process APIs exist, but `spawn_user_process()` returns false and valid `execve()` returns `ENOSYS`; do not claim a working fork/exec userspace path |
-| `src/proc/signal.rs` | **real** | Full POSIX signal semantics: real-time signals (SIGRTMIN-SIGRTMAX), sigqueue(2), sigaltstack(2), SA_RESTART, signal disposition reset on exec |
-| `src/proc/wait.rs` | **real** | Complete wait/waitpid/waitid with WUNTRACED, WCONTINUED, WSTOPPED, WNOWAIT, siginfo_t output |
-| `src/proc/creds.rs` | **real** | Process group and session leadership, kill_pgrp, kill_session, POSIX setpgid/setsid/getpgrp/getsid |
+| `src/proc/signal.rs` | partial | Signal-handling code exists; full delivery, return, exec-reset and userspace ABI semantics are not end-to-end gated |
+| `src/proc/wait.rs` | partial | Wait APIs exist; exact-child reap and status handling remain blocked on working userspace process creation/exec |
+| `src/proc/creds.rs` | partial | Credential, process-group and session code exists; end-to-end compatibility is not yet runtime-gated |
 | `src/proc/futex.rs` | partial | Futex code exists; correctness/performance validation remains |
 | `src/fs/pipe.rs`, `src/net/socket/unix/` | partial | Pipe and Unix-socket code exists but is not fully milestone-gated |
 | `crates/smp-core/` | experimental | Crate exists in-tree but is not currently a workspace member |
@@ -151,6 +151,20 @@ See `docs/syscalls.md` for syscall-by-syscall status.
 | Macro adoption | **partial** | New code uses try_opt!, try_result!, or ? operator |
 
 See `docs/ERROR_HANDLING_AUDIT.md` for detailed audit results.
+
+## Runtime promotion gates
+
+| Gate | Current status | Evidence required before promotion |
+|---|---|---|
+| Full-kernel QEMU execution | blocked | Fresh QEMU log with all required `RUSTOS_EXEC` child markers, exact-PID wait/reap, normal exit status zero, and timing-parser success |
+| CPIO/ELF/VFS/ext4 parser fuzzing | harnesses added, first campaign pending | Bounded CI campaigns against the production modules, retained logs/artifacts, minimized crash regressions |
+| Fault recovery in the guest | not supported yet | Catalogued fault injection, fired/recovered markers, and post-recovery filesystem/process workload success |
+| Writable filesystem and IPC workloads | not supported yet | A guest creates, writes, reads, renames and unlinks a file; IPC send/receive completes with checked exit statuses |
+| Syscall benchmark and baseline | not established | Warmups, fixed iterations, JSON statistics and environment metadata; reviewed like-for-like baseline after variance is characterized |
+
+Do not upgrade any row to `real` based on source inspection, parser unit tests,
+or a workflow definition alone. Require completed executable gates and retain
+the logs and metadata used to make the decision.
 
 ## Current improvement roadmap
 
