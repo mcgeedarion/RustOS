@@ -39,19 +39,19 @@ pub fn sys_execve(path_va: usize, _argv_va: usize, _envp_va: usize) -> isize {
     }
 }
 
-/// Full ELF userspace spawning - stub for backward compatibility.
-/// Use spawn_user_process_from_bytes_full for complete process creation.
+/// Compatibility entry point for process creation.
+/// No executable userspace backend is integrated yet, so this always fails closed.
+/// Do not treat the bytes-based helper below as a complete loader either.
 pub fn spawn_user_process(_path: &str, _argv: &[&str], _envp: &[&str]) -> bool {
     false
 }
 
-/// Spawn a user process from ELF bytes with full scheduler integration.
+/// Staged entry point for spawning a user process from ELF bytes.
 ///
-/// This function:
-/// 1. Allocates a new PID and Process structure
-/// 2. Maps PT_LOAD segments into the process address space
-/// 3. Sets up the initial stack with argv/envp/auxv
-/// 4. Enqueues the process on the scheduler run-queue
+/// This path is deliberately not promoted as working process execution:
+/// PT_LOAD installation, a valid initial userspace stack, and architecture
+/// return-state setup are not integrated. It returns false until those pieces
+/// are implemented and an executable guest test proves the result.
 ///
 /// Parameters:
 /// - pid: Pre-allocated PID from scheduler::alloc_pid()
@@ -106,10 +106,10 @@ pub fn spawn_user_process_from_bytes_full(
     true
 }
 
-/// Map ELF PT_LOAD segments into process address space.
+/// Install the ELF PT_LOAD segments in this process's isolated address space.
 ///
-/// This is a simplified implementation that logs the mapping request.
-/// Full implementation would integrate with mm::mmap and page table setup.
+/// The mapper is not implemented yet. This function deliberately returns false
+/// instead of treating ELF header validation as page-table installation.
 fn map_elf_segments_for_process(_process: &Process, _elf: &[u8], entry: u64) -> bool {
     // Do not enqueue a process while its address space is not actually mapped.
     // Claiming success here would make a source-level stub look like a working
@@ -121,15 +121,10 @@ fn map_elf_segments_for_process(_process: &Process, _elf: &[u8], entry: u64) -> 
     false
 }
 
-/// Set up initial user stack with argv, envp, and auxv.
+/// Set up an ABI-compliant initial user stack with argv, envp, and auxv.
 ///
-/// The stack layout follows the System V ABI convention:
-/// - argc (argument count)
-/// - argv[] (argument pointers, NULL-terminated)
-/// - envp[] (environment pointers, NULL-terminated)
-/// - auxv[] (auxiliary vector)
-/// - argument strings
-/// - environment strings
+/// The initial stack builder is not implemented; scheduling a process before
+/// this exists would enter user mode with an invalid SP.
 fn setup_user_stack(_process: &Process, entry: u64, argv: &[&str], envp: &[&str]) -> bool {
     // The process cannot safely execute until its initial user stack contains
     // argc/argv/envp/auxv and the saved user SP points at that stack.
