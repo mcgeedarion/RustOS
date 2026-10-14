@@ -165,6 +165,33 @@ extern "C" {
 pub extern "C" fn rust_syscall_handler(frame: &mut SyscallFrame) {
     let nr = frame.rax;
 
+    // Save a complete user return state before dispatch. A forked child copies
+    // this frame and changes only the architecture's syscall return register.
+    let pid = scheduler::current_pid() as usize;
+    if pid != 0 {
+        scheduler::with_proc_mut(pid, |pcb, _| {
+            let context = &mut pcb.user_context;
+            context.regs[0] = frame.rax;
+            context.regs[1] = frame.rbx;
+            context.regs[2] = frame.rdx;
+            context.regs[3] = frame.rsi;
+            context.regs[4] = frame.rdi;
+            context.regs[5] = frame.rbp;
+            context.regs[6] = frame.r8;
+            context.regs[7] = frame.r9;
+            context.regs[8] = frame.r10;
+            context.regs[9] = frame.r12;
+            context.regs[10] = frame.r13;
+            context.regs[11] = frame.r14;
+            context.regs[12] = frame.r15;
+            context.pc = frame.rip;
+            context.sp = frame.rsp;
+            context.flags = frame.rflags;
+            pcb.pc = frame.rip;
+            pcb.sp = frame.rsp;
+        });
+    }
+
     if nr == 15 {
         // rt_sigreturn: restore the pre-signal SyscallFrame state.
         // This must NOT call check_and_deliver afterwards — the restored frame
