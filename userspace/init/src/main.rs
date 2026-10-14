@@ -558,7 +558,11 @@ fn run_exec_benchmark_child() {
     }
 
     let mut status = 0i32;
-    let waited = unsafe { sys_wait4(child, &mut status as *mut i32, 0, 0) };
+    let mut waited;
+    loop {
+        waited = unsafe { sys_wait4(child, &mut status as *mut i32, 0, 0) };
+        if waited != EINTR { break; }
+    }
     if waited != child {
         write_all(STDERR, b"RUSTOS_EXEC marker=bench_wait_failed\n");
         unsafe { sys_exit_group(1) };
