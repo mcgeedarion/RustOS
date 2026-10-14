@@ -6,7 +6,7 @@ BOOT=uefi
 TIMEOUT=${TIMEOUT:-30}
 SMOKE=0
 TEMP_FW_VARS=""
-SMOKE_MARKER_RE=${SMOKE_MARKER_RE:-'BOOT_MINIMAL_OK|FULL_OS_USERSPACE_OK|entering cpu_idle'}
+SMOKE_MARKER_RE=${SMOKE_MARKER_RE:-'(^|[[:space:]])(RustOS: )?BOOT_MINIMAL_OK([[:space:]]|$)'}
 
 usage() {
     echo "Usage: ARCH=<arch> [TIMEOUT=<s>] [SMOKE=1] $0 [--arch <arch>] [--boot uefi] [--timeout <s>] [--smoke|--test]"
@@ -173,7 +173,7 @@ echo "[run_qemu] launching QEMU for ${ARCH} (timeout ${TIMEOUT}s)..."
 timeout "$TIMEOUT" "${QEMU_CMD[@]}" || true
 
 if [[ "$SMOKE" == "1" ]]; then
-    echo "[run_qemu] checking serial output for boot sentinel..."
+    echo "[run_qemu] checking serial output for explicit minimal boot sentinel..."
     if grep -qE "$SMOKE_MARKER_RE" "$SERIAL_LOG"; then
         echo "[run_qemu] SMOKE PASS: sentinel found."
         exit 0
