@@ -1,9 +1,9 @@
 //! Shared smoke assertions. The host regression harness supplies mock syscalls.
 
 use super::{check, sys_close, sys_open, sys_read, sys_write, test_errno_checks, O_RDONLY};
-#[cfg(any(target_arch = "x86_64", target_arch = "riscv64"))]
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "riscv64"))]
 use super::{sys_exit_group, sys_fork, sys_wait4, write_str};
-#[cfg(any(target_arch = "x86_64", target_arch = "riscv64"))]
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "riscv64"))]
 use core::ffi::c_int;
 
 pub(super) fn run_tests() -> bool {
@@ -36,7 +36,7 @@ pub(super) fn run_tests() -> bool {
     }
 
     // Test fork/wait on architectures that support it.
-    #[cfg(any(target_arch = "x86_64", target_arch = "riscv64"))]
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "riscv64"))]
     {
         let child = unsafe { sys_fork() };
         if child == 0 {
