@@ -113,3 +113,36 @@ pub fn virt_to_phys(root_pa: usize, va: usize) -> Option<usize> {
     }
     None
 }
+
+
+/// Free user-half page-table pages. Leaf data frames must already be unmapped
+/// and released by the process-memory owner. Upper-half kernel tables are
+/// shared and must remain intact.
+pub fn free_user_page_table(root_pa: usize) {
+    unsafe fn free_table(table_pa: usize, level: usize) {
+        for index in 0..512 {
+            let slot = (table_pa as *const usize).add(index);
+            let desc = slot.read_volatile();
+            if desc & pte::VALID == 0 {
+                continue;
+            }
+            // A table descriptor has bit 1 set at intermediate levels. Blocks
+            // and 4 KiB pages are leaves and are not traversed.
+            if level < 3 && desc & pte::TABLE != 0 {
+                free_table(desc & pte::ADDR_MASK, level + 1);
+            }
+        }
+        crate::mm::pmm::free_page(table_pa);
+    }
+
+    unsafe {
+        let root = root_pa as *const usize;
+        for index in 0..256 {
+            let desc = root.add(index).read_volatile();
+            if desc & pte::VALID != 0 && desc & pte::TABLE != 0 {
+                free_table(desc & pte::ADDR_MASK, 1);
+            }
+        }
+    }
+    crate::mm::pmm::free_page(root_pa);
+}
