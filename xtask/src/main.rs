@@ -1276,13 +1276,26 @@ fn serial_has_smoke_marker(log_path: &Path, full_kernel: bool) -> Result<bool> {
         }));
     }
 
-    let required = [
-        "RUSTOS_EXEC marker=smoke_started",
-        "RUSTOS_EXEC marker=smoke_tests_passed",
-        "RUSTOS_EXEC marker=smoke_child_reaped",
-        "RUSTOS_EXEC marker=init_complete exit=0",
-    ];
-    Ok(required.iter().all(|marker| serial.contains(marker)))
+    let has_exact_line = |expected: &str| {
+        serial.lines().any(|line| line.trim_end_matches('\\r') == expected)
+    };
+    let child_reaped_zero = serial.lines().any(|line| {
+        let line = line.trim_end_matches('\\r');
+        let Some(fields) = line.strip_prefix("RUSTOS_EXEC marker=smoke_child_reaped pid=") else {
+            return false;
+        };
+        let Some((pid, exit)) = fields.split_once(" exit=") else {
+            return false;
+        };
+        pid.parse::<u64>().map(|pid| pid > 0).unwrap_or(false) && exit == "0"
+    });
+
+    Ok(
+        has_exact_line("RUSTOS_EXEC marker=smoke_started")
+            && has_exact_line("RUSTOS_EXEC marker=smoke_tests_passed")
+            && child_reaped_zero
+            && has_exact_line("RUSTOS_EXEC marker=init_complete exit=0")
+    )
 }
 
 fn json_escape(value: &str) -> String {
