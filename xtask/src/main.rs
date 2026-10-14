@@ -1259,6 +1259,12 @@ fn serial_has_smoke_marker(log_path: &Path, full_kernel: bool) -> Result<bool> {
         "RUSTOS_EXEC marker=smoke_fork_failed",
         "RUSTOS_EXEC marker=smoke_wait_failed",
         "RUSTOS_EXEC marker=smoke_child_failed",
+        "RUSTOS_EXEC marker=bench_execve_failed",
+        "RUSTOS_EXEC marker=bench_fork_failed",
+        "RUSTOS_EXEC marker=bench_wait_failed",
+        "RUSTOS_EXEC marker=bench_child_failed",
+        "RUSTOS_BENCH marker=getpid_failed",
+        "RUSTOS_BENCH marker=clock_failed",
         "USERSPACE_BOOT_UNSUPPORTED",
         "SMOKE FAIL:",
         "Kernel panic",
@@ -1277,23 +1283,28 @@ fn serial_has_smoke_marker(log_path: &Path, full_kernel: bool) -> Result<bool> {
     }
 
     let has_exact_line = |expected: &str| {
-        serial.lines().any(|line| line.trim_end_matches('\\r') == expected)
+        serial.lines().any(|line| line.trim_end_matches('\r') == expected)
     };
-    let child_reaped_zero = serial.lines().any(|line| {
-        let line = line.trim_end_matches('\\r');
-        let Some(fields) = line.strip_prefix("RUSTOS_EXEC marker=smoke_child_reaped pid=") else {
-            return false;
-        };
-        let Some((pid, exit)) = fields.split_once(" exit=") else {
-            return false;
-        };
-        pid.parse::<u64>().map(|pid| pid > 0).unwrap_or(false) && exit == "0"
-    });
+    let child_reaped_zero = |marker: &str| {
+        serial.lines().any(|line| {
+            let line = line.trim_end_matches('\r');
+            let Some(fields) = line.strip_prefix(marker) else {
+                return false;
+            };
+            let Some((pid, exit)) = fields.split_once(" exit=") else {
+                return false;
+            };
+            pid.parse::<u64>().map(|pid| pid > 0).unwrap_or(false) && exit == "0"
+        })
+    };
 
     Ok(
         has_exact_line("RUSTOS_EXEC marker=smoke_started")
             && has_exact_line("RUSTOS_EXEC marker=smoke_tests_passed")
-            && child_reaped_zero
+            && child_reaped_zero("RUSTOS_EXEC marker=smoke_child_reaped pid=")
+            && has_exact_line("RUSTOS_BENCH marker=complete")
+            && serial.contains("{\"schema_version\":1,\"benchmark\":\"getpid\"")
+            && child_reaped_zero("RUSTOS_EXEC marker=bench_child_reaped pid=")
             && has_exact_line("RUSTOS_EXEC marker=init_complete exit=0")
     )
 }
