@@ -149,6 +149,14 @@ fn align_up(value: usize, alignment: usize) -> Option<usize> {
 }
 
 fn cleanup_allocated_pages(root: usize, pages: &[ExecPage]) {
+    // The Paging contract requires leaf mappings to be removed before the
+    // page-table hierarchy is released. Some frames may have been allocated
+    // but not mapped yet, so unmapping an absent leaf is intentionally benign.
+    for page in pages {
+        if page.pa.is_some() {
+            let _ = <Arch as Paging>::unmap_page(root, page.va);
+        }
+    }
     <Arch as Paging>::free_page_table(root);
     for page in pages {
         if let Some(pa) = page.pa {
