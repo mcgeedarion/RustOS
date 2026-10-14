@@ -97,6 +97,9 @@ pub trait Paging {
     fn flush_all();
     fn clone_address_space(src_cr3: usize) -> Option<usize>;
     fn new_user_address_space() -> Option<usize>;
+    /// Free page-table pages belonging to a user address space. Leaf frames must
+    /// be unmapped and released by the caller before this operation.
+    fn free_page_table(root: usize);
 }
 
 pub trait Tlb {
