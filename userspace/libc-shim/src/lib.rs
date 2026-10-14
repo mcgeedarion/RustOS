@@ -291,29 +291,64 @@ pub extern "C" fn memset(dst: *mut c_void, c: c_int, n: size_t) -> *mut c_void {
     }
 }
 
-// ── Entry point (optional, for programs using this as their libc) ─────────
+// ── Native process entry point (optional) ──────────────────────────────────
 
-/// _start — bare entry point used when linking with -nostdlib.
-///
-/// The kernel places argc/argv/envp on the stack per the System V ABI.
-/// We call main() then exit() with its return value.
+/// Provide a freestanding startup entry for programs linking this shim with
+/// provide_start. Decode the initial argc/argv/envp stack using each
+/// architecture's native ABI, call main, then exit with its return status.
 #[cfg(all(target_arch = "x86_64", feature = "provide_start"))]
 #[no_mangle]
 #[unsafe(naked)]
-pub extern "C" fn _start() -> ! {
-    unsafe {
-        core::arch::asm!(
-            "xor rbp, rbp",
-            "mov (%rsp), %rdi",      // argc
-            "lea 8(%rsp), %rsi",     // argv
-            "lea 8(%rsi,%rdi,8), %rdx", // envp
-            "and $-16, %rsp",
-            "call main",
-            "mov %rax, %rdi",
-            "mov $60, %rax",         // SYS_exit
-            "syscall",
-            "hlt",
-            options(noreturn),
-        )
-    }
+pub unsafe extern "C" fn _start() -> ! {
+    core::arch::naked_asm!(
+        "xor rbp, rbp",
+        "mov rdi, [rsp]",
+        "lea rsi, [rsp + 8]",
+        "lea rdx, [rsi + rdi*8 + 8]",
+        "and rsp, -16",
+        "call main",
+        "mov rdi, rax",
+        "mov rax, 60",
+        "syscall",
+        "ud2",
+    );
+}
+
+#[cfg(all(target_arch = "aarch64", feature = "provide_start"))]
+#[no_mangle]
+#[unsafe(naked)]
+pub unsafe extern "C" fn _start() -> ! {
+    core::arch::naked_asm!(
+        "mov x29, xzr",
+        "ldr x0, [sp]",
+        "add x1, sp, #8",
+        "add x2, x1, x0, lsl #3",
+        "add x2, x2, #8",
+        "mov x9, sp",
+        "and x9, x9, #-16",
+        "mov sp, x9",
+        "bl main",
+        "mov x8, #93",
+        "svc #0",
+        "brk #0",
+    );
+}
+
+#[cfg(all(target_arch = "riscv64", feature = "provide_start"))]
+#[no_mangle]
+#[unsafe(naked)]
+pub unsafe extern "C" fn _start() -> ! {
+    core::arch::naked_asm!(
+        "mv s0, zero",
+        "ld a0, 0(sp)",
+        "addi a1, sp, 8",
+        "addi t0, a0, 1",
+        "slli t0, t0, 3",
+        "add a2, a1, t0",
+        "andi sp, sp, -16",
+        "call main",
+        "li a7, 93",
+        "ecall",
+        "unimp",
+    );
 }

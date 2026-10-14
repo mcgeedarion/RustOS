@@ -12,7 +12,7 @@
 #![no_std]
 #![no_main]
 
-use core::arch::asm;
+use core::arch::{asm, naked_asm};
 
 // ── Linux syscall numbers ─────────────────────────────────────────────────
 
@@ -137,39 +137,42 @@ fn hello_main() -> ! {
 // ── Low-level entry stub ───────────────────────────────────────────────────
 
 /// `_start` — the ELF entry point.
+#[cfg(target_arch = "x86_64")]
 #[no_mangle]
 #[unsafe(naked)]
 unsafe extern "C" fn _start() -> ! {
-    #[cfg(target_arch = "x86_64")]
-    {
-        asm!(
-            "and rsp, -16",
-            "xor rbp, rbp",
-            "call {entry}",
-            entry = sym hello_main,
-            options(noreturn),
-        )
-    }
-    #[cfg(target_arch = "aarch64")]
-    {
-        asm!(
-            "mov x29, #0",
-            "and sp, sp, #-16",
-            "bl {entry}",
-            entry = sym hello_main,
-            options(noreturn),
-        )
-    }
-    #[cfg(target_arch = "riscv64")]
-    {
-        asm!(
-            "mv s0, zero",
-            "and sp, sp, -16",
-            "call {entry}",
-            entry = sym hello_main,
-            options(noreturn),
-        )
-    }
+    naked_asm!(
+        "and rsp, -16",
+        "xor rbp, rbp",
+        "call {entry}",
+        entry = sym hello_main,
+    );
+}
+
+#[cfg(target_arch = "aarch64")]
+#[no_mangle]
+#[unsafe(naked)]
+unsafe extern "C" fn _start() -> ! {
+    naked_asm!(
+        "mov x29, xzr",
+        "mov x9, sp",
+        "and x9, x9, #-16",
+        "mov sp, x9",
+        "bl {entry}",
+        entry = sym hello_main,
+    );
+}
+
+#[cfg(target_arch = "riscv64")]
+#[no_mangle]
+#[unsafe(naked)]
+unsafe extern "C" fn _start() -> ! {
+    naked_asm!(
+        "mv s0, zero",
+        "andi sp, sp, -16",
+        "call {entry}",
+        entry = sym hello_main,
+    );
 }
 
 // ── Panic handler (required for no_std) ───────────────────────────────────

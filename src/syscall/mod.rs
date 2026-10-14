@@ -328,6 +328,9 @@ pub fn dispatch_arch(abi: SyscallAbi, nr: usize, args: [usize; 6], saved_rip: u6
         return dispatch_with_rip(nr, args[0], args[1], args[2], args[3], args[4], args[5], saved_rip);
     }
     let mapped = match nr {
+        // Private kmtest syscall IDs are common across userspace ABIs.
+        0x8000_0000 => 0x8000_0000,
+        0x8000_0001 => 0x8000_0001,
         56 => 257,  // openat
         57 => 3,    // close
         62 => 8,    // lseek

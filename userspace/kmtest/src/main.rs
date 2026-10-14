@@ -22,7 +22,7 @@
 #![no_std]
 #![no_main]
 
-use core::arch::asm;
+use core::arch::{asm, naked_asm};
 use core::ffi::{c_char, c_long};
 
 // ── Private syscall numbers ────────────────────────────────────────────────
@@ -59,7 +59,20 @@ unsafe fn sys_kmtest_list(buf: *mut u8, len: usize) -> c_long {
         );
         ret
     }
-    #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
+    #[cfg(target_arch = "aarch64")]
+    {
+        let ret: c_long;
+        asm!(
+            "svc #0",
+            in("x8") SYS_KMTEST_LIST,
+            in("x0") buf,
+            in("x1") len,
+            lateout("x0") ret,
+            options(nostack),
+        );
+        ret
+    }
+    #[cfg(target_arch = "riscv64")]
     {
         let ret: c_long;
         asm!(
@@ -90,7 +103,19 @@ unsafe fn sys_kmtest_run(idx: usize) -> c_long {
         );
         ret
     }
-    #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
+    #[cfg(target_arch = "aarch64")]
+    {
+        let ret: c_long;
+        asm!(
+            "svc #0",
+            in("x8") SYS_KMTEST_RUN,
+            in("x0") idx,
+            lateout("x0") ret,
+            options(nostack),
+        );
+        ret
+    }
+    #[cfg(target_arch = "riscv64")]
     {
         let ret: c_long;
         asm!(
@@ -107,43 +132,21 @@ unsafe fn sys_kmtest_run(idx: usize) -> c_long {
 #[inline(always)]
 unsafe fn sys_exit_group(status: usize) -> ! {
     #[cfg(target_arch = "x86_64")]
-    const SYS_EXIT_GROUP: usize = 231;
+    asm!("syscall", in("rax") 231usize, in("rdi") status, options(noreturn));
     #[cfg(target_arch = "aarch64")]
-    const SYS_EXIT_GROUP: usize = 94;
+    asm!("svc #0", in("x8") 94usize, in("x0") status, options(noreturn));
     #[cfg(target_arch = "riscv64")]
-    const SYS_EXIT_GROUP: usize = 94;
-
-    #[cfg(target_arch = "x86_64")]
-    asm!(
-        "syscall",
-        in("rax") SYS_EXIT_GROUP,
-        in("rdi") status,
-        options(noreturn),
-    );
-    #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
-    asm!(
-        "ecall",
-        in("a7") SYS_EXIT_GROUP,
-        in("a0") status,
-        options(noreturn),
-    );
+    asm!("ecall", in("a7") 94usize, in("a0") status, options(noreturn));
 }
 
 #[inline(always)]
 unsafe fn sys_write(fd: usize, buf: *const u8, count: usize) -> isize {
     #[cfg(target_arch = "x86_64")]
-    const SYS_WRITE: usize = 1;
-    #[cfg(target_arch = "aarch64")]
-    const SYS_WRITE: usize = 64;
-    #[cfg(target_arch = "riscv64")]
-    const SYS_WRITE: usize = 64;
-
-    #[cfg(target_arch = "x86_64")]
     {
         let ret: isize;
         asm!(
             "syscall",
-            in("rax") SYS_WRITE,
+            in("rax") 1usize,
             in("rdi") fd,
             in("rsi") buf,
             in("rdx") count,
@@ -154,12 +157,26 @@ unsafe fn sys_write(fd: usize, buf: *const u8, count: usize) -> isize {
         );
         ret
     }
-    #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
+    #[cfg(target_arch = "aarch64")]
+    {
+        let ret: isize;
+        asm!(
+            "svc #0",
+            in("x8") 64usize,
+            in("x0") fd,
+            in("x1") buf,
+            in("x2") count,
+            lateout("x0") ret,
+            options(nostack),
+        );
+        ret
+    }
+    #[cfg(target_arch = "riscv64")]
     {
         let ret: isize;
         asm!(
             "ecall",
-            in("a7") SYS_WRITE,
+            in("a7") 64usize,
             in("a0") fd,
             in("a1") buf,
             in("a2") count,
@@ -334,39 +351,42 @@ fn kmtest_main() -> ! {
     }
 }
 
+#[cfg(target_arch = "x86_64")]
 #[no_mangle]
 #[unsafe(naked)]
 unsafe extern "C" fn _start() -> ! {
-    #[cfg(target_arch = "x86_64")]
-    {
-        asm!(
-            "and rsp, -16",
-            "xor rbp, rbp",
-            "call {entry}",
-            entry = sym kmtest_main,
-            options(noreturn),
-        )
-    }
-    #[cfg(target_arch = "aarch64")]
-    {
-        asm!(
-            "mov x29, #0",
-            "and sp, sp, #-16",
-            "bl {entry}",
-            entry = sym kmtest_main,
-            options(noreturn),
-        )
-    }
-    #[cfg(target_arch = "riscv64")]
-    {
-        asm!(
-            "mv s0, zero",
-            "and sp, sp, -16",
-            "call {entry}",
-            entry = sym kmtest_main,
-            options(noreturn),
-        )
-    }
+    naked_asm!(
+        "and rsp, -16",
+        "xor rbp, rbp",
+        "call {entry}",
+        entry = sym kmtest_main,
+    );
+}
+
+#[cfg(target_arch = "aarch64")]
+#[no_mangle]
+#[unsafe(naked)]
+unsafe extern "C" fn _start() -> ! {
+    naked_asm!(
+        "mov x29, xzr",
+        "mov x9, sp",
+        "and x9, x9, #-16",
+        "mov sp, x9",
+        "bl {entry}",
+        entry = sym kmtest_main,
+    );
+}
+
+#[cfg(target_arch = "riscv64")]
+#[no_mangle]
+#[unsafe(naked)]
+unsafe extern "C" fn _start() -> ! {
+    naked_asm!(
+        "mv s0, zero",
+        "andi sp, sp, -16",
+        "call {entry}",
+        entry = sym kmtest_main,
+    );
 }
 
 #[panic_handler]
