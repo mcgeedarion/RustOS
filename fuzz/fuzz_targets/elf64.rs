@@ -8,6 +8,7 @@ use libfuzzer_sys::fuzz_target;
 mod production_elf;
 
 fuzz_target!(|data: &[u8]| {
+    let _ = production_elf::validate_executable_elf(data);
     if let Ok(header) = production_elf::parse_elf_header(data) {
         if let Some(phdrs) = production_elf::parse_phdrs_with_hdr(data, &header) {
             let _ = production_elf::load_elf_into(0, data, &header, &phdrs);
