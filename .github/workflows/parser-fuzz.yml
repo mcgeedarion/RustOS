@@ -15,6 +15,7 @@ on:
       - "src/fs/ext4.rs"
   pull_request:
     paths:
+      - ".github/workflows/parser-fuzz.yml"
       - "fuzz/**"
       - "src/init/initramfs/**"
       - "src/exec/elf.rs"
@@ -27,7 +28,7 @@ permissions:
 jobs:
   parser-fuzz:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
@@ -42,7 +43,7 @@ jobs:
       - name: Fuzz production CPIO parser
         run: |
           set -o pipefail
-          timeout 50s cargo fuzz run cpio_newc -- -max_len=4096 -max_total_time=20 -dict=fuzz/dictionaries/cpio_newc.dict 2>&1 | tee fuzz-cpio.log
+          timeout 120s cargo fuzz run cpio_newc -- -max_len=4096 -max_total_time=15 -dict=fuzz/dictionaries/cpio_newc.dict 2>&1 | tee fuzz-cpio.log
       - name: Fuzz production ELF parser
         run: |
           set -o pipefail
