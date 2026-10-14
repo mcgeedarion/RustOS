@@ -313,6 +313,67 @@ fn copy_mq_attr_to_user(va: usize, attr: &mq::MqAttr) -> bool {
     crate::uaccess::copy_to_user(va, &buf).is_ok()
 }
 
+/// Userspace syscall ABI selected by the architecture entry stub.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum SyscallAbi {
+    X86_64,
+    AArch64,
+    RiscV64,
+}
+
+/// Translate foreign Linux syscall numbers at one explicit architecture
+/// boundary. Unknown AArch64/RISC-V numbers fail closed with ENOSYS.
+pub fn dispatch_arch(abi: SyscallAbi, nr: usize, args: [usize; 6], saved_rip: u64) -> isize {
+    if abi == SyscallAbi::X86_64 {
+        return dispatch_with_rip(nr, args[0], args[1], args[2], args[3], args[4], args[5], saved_rip);
+    }
+    let mapped = match nr {
+        56 => 257,  // openat
+        57 => 3,    // close
+        62 => 8,    // lseek
+        63 => 0,    // read
+        64 => 1,    // write
+        65 => 19,   // readv
+        66 => 20,   // writev
+        67 => 17,   // pread64
+        68 => 18,   // pwrite64
+        23 => 32,   // dup
+        24 => 292,  // dup3
+        25 => 72,   // fcntl
+        29 => 16,   // ioctl
+        82 => 74,   // fsync
+        83 => 75,   // fdatasync
+        93 => 60,   // exit
+        94 => 231,  // exit_group
+        101 => 35,  // nanosleep
+        113 => 228, // clock_gettime
+        124 => 24,  // sched_yield
+        134 => 13,  // rt_sigaction
+        135 => 14,  // rt_sigprocmask
+        160 => 63,  // uname
+        172 => 39,  // getpid
+        173 => 110, // getppid
+        214 => 12,  // brk
+        215 => 11,  // munmap
+        220 => 57,  // current fork-compatible clone subset
+        221 => 59,  // execve
+        222 => 9,   // mmap
+        226 => 10,  // mprotect
+        260 => 61,  // wait4
+        278 => 318, // getrandom
+        291 => 332, // statx
+        _ => return -38,
+    };
+    // The current clone entry only implements fork-compatible semantics.
+    // Its architecture-specific extra arguments are intentionally not forwarded.
+    let canonical_args = if mapped == 57 { [0; 6] } else { args };
+    dispatch_with_rip(
+        mapped,
+        canonical_args[0], canonical_args[1], canonical_args[2],
+        canonical_args[3], canonical_args[4], canonical_args[5], saved_rip,
+    )
+}
+
 pub fn dispatch(nr: usize, a: usize, b: usize, c: usize, d: usize, e: usize, f: usize) -> isize {
     dispatch_with_rip(nr, a, b, c, d, e, f, 0)
 }
