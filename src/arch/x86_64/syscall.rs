@@ -181,8 +181,11 @@ pub extern "C" fn rust_syscall_handler(frame: &mut SyscallFrame) {
         blk.in_syscall = blk.in_syscall.saturating_add(1);
     }
 
-    let ret = crate::syscall::dispatch(
-        nr, frame.rdi, frame.rsi, frame.rdx, frame.r10, frame.r8, frame.r9,
+    let ret = crate::syscall::dispatch_arch(
+        crate::syscall::SyscallAbi::X86_64,
+        nr,
+        [frame.rdi, frame.rsi, frame.rdx, frame.r10, frame.r8, frame.r9],
+        frame.rip as u64,
     );
     frame.rax = ret as usize;
 
