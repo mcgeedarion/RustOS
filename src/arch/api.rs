@@ -46,7 +46,7 @@ impl BitOrAssign for PageFlags {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TrapFrame {
-    pub regs: [u64; 16],
+    pub regs: [u64; 32],
     pub pc: u64,
     pub user_sp: u64,
     pub flags: u64,
@@ -55,7 +55,7 @@ pub struct TrapFrame {
 impl TrapFrame {
     pub const fn zeroed() -> Self {
         Self {
-            regs: [0; 16],
+            regs: [0; 32],
             pc: 0,
             user_sp: 0,
             flags: 0,
