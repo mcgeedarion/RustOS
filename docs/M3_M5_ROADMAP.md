@@ -1,8 +1,8 @@
 # RustOS M3-M5 Implementation Roadmap
 
-_Last reviewed: 2026-08-30._
+_Last reviewed: 2026-10-13._
 
-This document provides the detailed acceptance criteria, implementation plan, and validation requirements for promoting RustOS from M2 (userspace boot with shims) through M5 (networking demos).
+This document provides the detailed acceptance criteria, implementation plan, and validation requirements for promoting RustOS through M5. The full userspace gate is currently blocked: `src/proc/exec.rs::spawn_user_process()` returns false and valid `execve()` requests still return `ENOSYS`. Code presence, marker-parser tests, and source inspection do not satisfy the runtime gates below.
 
 ---
 
@@ -20,7 +20,7 @@ This document provides the detailed acceptance criteria, implementation plan, an
 
 ## M3 Gate: Replace userspace_boot shim dependencies
 
-**Status:** In Progress  
+**Status:** Blocked on executable full-userspace process creation  
 **Priority:** P0 (M3 gate)
 
 ### Overview
@@ -30,13 +30,13 @@ Replace the thin shim implementations in `src/userspace_shims.rs` with real kern
 ### Acceptance Criteria
 
 1. **VFS Integration**
-   - [x] `userspace_shims::fs::mount_initramfs()` parses CPIO and populates real VFS tree
+   - [ ] Runtime-proven initramfs-to-VFS mounting for required paths. The diagnostic shim can parse CPIO, but this does not prove mounted VFS availability in the full kernel.
    - [ ] All initramfs files accessible via standard VFS paths (`/init`, `/dev/null`, `/proc/version`)
    - [ ] VFS operations (`open`, `read`, `write`, `close`) return proper errno values
    - [ ] Initramfs mount emits boot marker `BOOT_INITRAMFS_MOUNTED`
 
 2. **Process Management Integration**
-   - [x] `userspace_shims::proc::exec::spawn_user_process_from_bytes()` integrates with scheduler
+   - [ ] Runtime-proven process creation and scheduler handoff. The current full process entry returns false and `execve()` returns `ENOSYS`.
    - [ ] Full POSIX fork/exec/wait semantics operational
    - [ ] Process spawning emits boot marker `BOOT_PROC_SPAWNED`
    - [ ] PID allocation and cleanup functional
@@ -48,8 +48,8 @@ Replace the thin shim implementations in `src/userspace_shims.rs` with real kern
    - [ ] Page fault handling operational for user mappings
 
 4. **Validation**
-   - [ ] `cargo xtask smoke --arch x86_64` succeeds with `FULL_OS_USERSPACE_OK` sentinel
-   - [ ] `userspace/smoke` test suite passes minimum 20 syscall tests
+   - [ ] `cargo xtask smoke --arch x86_64` succeeds with the strict `RUSTOS_EXEC` child protocol and timing parser on the same fresh QEMU log.
+   - [ ] `userspace/smoke` executes as a child through successful `execve`, is reaped by its exact PID, and exits normally with status zero.
    - [ ] `src/kmtest/` includes VFS integrity tests
    - [ ] No panics on malformed initramfs or ELF binaries
 
@@ -59,9 +59,9 @@ Replace the thin shim implementations in `src/userspace_shims.rs` with real kern
 
 | Task | Owner | Status | Notes |
 |------|-------|--------|-------|
-| Wire `crate::fs::vfs::ops::mkdir` into shim | @kernel-team | Done | `userspace_shims.rs:66` |
-| Wire `crate::fs::vfs::ops::write_all` into shim | @kernel-team | Done | `userspace_shims.rs:70` |
-| Wire `crate::fs::vfs::symlink::symlink` into shim | @kernel-team | Done | `userspace_shims.rs:78` |
+| Wire `crate::fs::vfs::ops::mkdir` into shim | @kernel-team | Implemented, runtime validation pending | `userspace_shims.rs:66`; not yet promoted by a guest workload |
+| Wire `crate::fs::vfs::ops::write_all` into shim | @kernel-team | Implemented, runtime validation pending | `userspace_shims.rs:70`; not yet promoted by a guest workload |
+| Wire `crate::fs::vfs::symlink::symlink` into shim | @kernel-team | Implemented, runtime validation pending | `userspace_shims.rs:78`; not yet promoted by a guest workload |
 | Add boot marker for initramfs mount | @kernel-team | TODO | Insert after `mount_cpio_to_vfs` |
 | Validate all initramfs entries mounted | @kernel-team | TODO | Add count verification |
 | Test `/init` accessibility post-mount | @kmtest-team | TODO | Add kmtest case |
@@ -78,7 +78,7 @@ crate::serial_println!("initramfs: VFS mount complete, {} entries", count);
 
 | Task | Owner | Status | Notes |
 |------|-------|--------|-------|
-| Verify `spawn_user_process_from_bytes_full` integration | @kernel-team | Done | `userspace_shims.rs:176` |
+| Verify executable process creation and scheduler handoff | @kernel-team | Blocked | Source-level wrapper calls are not runtime proof; the current full process entry returns false |
 | Complete ELF segment mapping implementation | @mm-team | Partial | `src/proc/exec.rs:111-126` |
 | Complete stack setup implementation | @mm-team | Partial | `src/proc/exec.rs:137-158` |
 | Add boot marker for process spawn | @kernel-team | TODO | Insert after successful enqueue |
