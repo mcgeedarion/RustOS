@@ -135,8 +135,9 @@ See `docs/syscalls.md` for syscall-by-syscall status.
 |---|---|---|---|
 | `src/debug/` | partial | `debug`, `gdbstub`, `trace` | GDB RSP, trace, oops/debug console modules exist |
 | `src/kmtest/` | **real** | `kmtest` | In-kernel tests with filesystem integrity, OOM recovery, and long-running stability tests |
-| `userspace/smoke/src/main.rs` | **real** | n/a | Comprehensive POSIX syscall test suite |
-| `scripts/stability_test.sh` | **real** | n/a | Extended stability and reliability testing script |
+| `userspace/smoke/src/main.rs` | partial | n/a | Architecture-specific syscall/entry stubs and assertions exist; the kernel still cannot exec `/smoke`, so no end-to-end userspace pass is established |
+| `userspace/bench/src/main.rs` | implemented, runtime pending | n/a | Fixed warmups/iterations, `getpid` workload, monotonic timing and JSON statistics; execution and reviewed baseline remain pending |
+| `scripts/stability_test.sh` | partial | n/a | Stability script exists; the current full-kernel execution gate has not established an end-to-end reliability result |
 | `src/fault_inject/` | partial | `fault-inject` | PMM/VMM/syscall fault points exist for controlled error-path testing |
 | `scripts/ci/check-stubs.sh` | real | n/a | Local documented-stub guard |
 | `cargo xtask roadmap-check` | real | n/a | Documentation contract guard |
@@ -160,7 +161,8 @@ See `docs/ERROR_HANDLING_AUDIT.md` for detailed audit results.
 | CPIO/ELF/VFS/ext4 parser fuzzing | harnesses added, first campaign pending | Bounded CI campaigns against the production modules, retained logs/artifacts, minimized crash regressions |
 | Fault recovery in the guest | not supported yet | Catalogued fault injection, fired/recovered markers, and post-recovery filesystem/process workload success |
 | Writable filesystem and IPC workloads | not supported yet | A guest creates, writes, reads, renames and unlinks a file; IPC send/receive completes with checked exit statuses |
-| Syscall benchmark and baseline | not established | Warmups, fixed iterations, JSON statistics and environment metadata; reviewed like-for-like baseline after variance is characterized |
+| Syscall benchmark workload | implemented, runtime pending | `/bench` is staged in the initramfs and emits JSON with fixed iterations and guest environment metadata; strict smoke requires its completion marker |
+| Reviewed benchmark baseline | not established | Repeated successful runs, variance characterization, and review of an equivalent architecture/compiler/QEMU configuration |
 
 Do not upgrade any row to `real` based on source inspection, parser unit tests,
 or a workflow definition alone. Require completed executable gates and retain
