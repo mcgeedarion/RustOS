@@ -15,3 +15,4 @@ name = "smoke"
 path = "src/main.rs"
 
 [dependencies]
+raw-syscall = { path = "../raw-syscall" }
