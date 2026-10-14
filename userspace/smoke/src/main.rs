@@ -142,7 +142,22 @@ unsafe fn sys_open(path: *const u8, flags: usize, mode: usize) -> isize {
         );
         ret
     }
-    #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
+    #[cfg(target_arch = "aarch64")]
+    {
+        let ret: isize;
+        asm!(
+            "svc #0",
+            in("x8") SYS_OPENAT,
+            in("x0") -100isize, // AT_FDCWD
+            in("x1") path,
+            in("x2") flags,
+            in("x3") mode,
+            lateout("x0") ret,
+            options(nostack),
+        );
+        ret
+    }
+    #[cfg(target_arch = "riscv64")]
     {
         let ret: isize;
         asm!(
@@ -175,7 +190,19 @@ unsafe fn sys_close(fd: usize) -> isize {
         );
         ret
     }
-    #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
+    #[cfg(target_arch = "aarch64")]
+    {
+        let ret: isize;
+        asm!(
+            "svc #0",
+            in("x8") SYS_CLOSE,
+            in("x0") fd,
+            lateout("x0") ret,
+            options(nostack),
+        );
+        ret
+    }
+    #[cfg(target_arch = "riscv64")]
     {
         let ret: isize;
         asm!(
@@ -240,7 +267,22 @@ unsafe fn sys_wait4(pid: isize, status: *mut c_int, options: usize) -> isize {
         );
         ret
     }
-    #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
+    #[cfg(target_arch = "aarch64")]
+    {
+        let ret: isize;
+        asm!(
+            "svc #0",
+            in("x8") SYS_WAIT4,
+            in("x0") pid,
+            in("x1") status,
+            in("x2") options,
+            in("x3") 0, // rusage
+            lateout("x0") ret,
+            options(nostack),
+        );
+        ret
+    }
+    #[cfg(target_arch = "riscv64")]
     {
         let ret: isize;
         asm!(
@@ -379,7 +421,21 @@ unsafe fn sys_execve(path: *const u8, argv: *const usize, envp: *const usize) ->
         );
         ret
     }
-    #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
+    #[cfg(target_arch = "aarch64")]
+    {
+        let ret: isize;
+        asm!(
+            "svc #0",
+            in("x8") SYS_EXECVE,
+            in("x0") path,
+            in("x1") argv,
+            in("x2") envp,
+            lateout("x0") ret,
+            options(nostack),
+        );
+        ret
+    }
+    #[cfg(target_arch = "riscv64")]
     {
         let ret: isize;
         asm!(
@@ -420,7 +476,21 @@ unsafe fn sys_read(fd: usize, buf: *mut u8, count: usize) -> isize {
         );
         ret
     }
-    #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
+    #[cfg(target_arch = "aarch64")]
+    {
+        let ret: isize;
+        asm!(
+            "svc #0",
+            in("x8") SYS_READ,
+            in("x0") fd,
+            in("x1") buf,
+            in("x2") count,
+            lateout("x0") ret,
+            options(nostack),
+        );
+        ret
+    }
+    #[cfg(target_arch = "riscv64")]
     {
         let ret: isize;
         asm!(
@@ -439,9 +509,14 @@ unsafe fn sys_read(fd: usize, buf: *mut u8, count: usize) -> isize {
 // ── Entry point ────────────────────────────────────────────────────────────
 
 fn smoke_main() -> ! {
+    // This record is emitted only after the kernel has successfully execve'd
+    // /smoke into a running user process. It is intentionally separate from
+    // BOOT_MARK timing records emitted by the kernel.
+    write_str(1, "RUSTOS_EXEC marker=smoke_started\n");
     let pass = checks::run_tests();
 
     if pass {
+        write_str(1, "RUSTOS_EXEC marker=smoke_tests_passed\n");
         write_str(1, "SMOKE OK: userspace_smoke\n");
         unsafe { sys_exit_group(0) };
     } else {
@@ -450,39 +525,40 @@ fn smoke_main() -> ! {
     }
 }
 
+#[cfg(target_arch = "x86_64")]
 #[no_mangle]
 #[unsafe(naked)]
 unsafe extern "C" fn _start() -> ! {
-    #[cfg(target_arch = "x86_64")]
-    {
-        asm!(
-            "and rsp, -16",
-            "xor rbp, rbp",
-            "call {entry}",
-            entry = sym smoke_main,
-            options(noreturn),
-        )
-    }
-    #[cfg(target_arch = "aarch64")]
-    {
-        asm!(
-            "mov x29, #0",
-            "and sp, sp, #-16",
-            "bl {entry}",
-            entry = sym smoke_main,
-            options(noreturn),
-        )
-    }
-    #[cfg(target_arch = "riscv64")]
-    {
-        asm!(
-            "mv s0, zero",
-            "and sp, sp, -16",
-            "call {entry}",
-            entry = sym smoke_main,
-            options(noreturn),
-        )
-    }
+    core::arch::naked_asm!(
+        "and rsp, -16",
+        "xor rbp, rbp",
+        "call {entry}",
+        entry = sym smoke_main,
+    );
+}
+
+#[cfg(target_arch = "aarch64")]
+#[no_mangle]
+#[unsafe(naked)]
+unsafe extern "C" fn _start() -> ! {
+    core::arch::naked_asm!(
+        "mov x29, xzr",
+        "and sp, sp, #-16",
+        "bl {entry}",
+        entry = sym smoke_main,
+    );
+}
+
+#[cfg(target_arch = "riscv64")]
+#[no_mangle]
+#[unsafe(naked)]
+unsafe extern "C" fn _start() -> ! {
+    core::arch::naked_asm!(
+        "mv s0, zero",
+        "andi sp, sp, -16",
+        "call {entry}",
+        entry = sym smoke_main,
+    );
 }
 
 #[panic_handler]
