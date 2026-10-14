@@ -23,6 +23,22 @@ use crate::proc::scheduler;
 /// Called from the trap handler when an ecall is received from U-mode.
 pub fn handle(frame: &mut TrapFrame) {
     let nr = frame.regs[17]; // a7 = syscall number
+
+    // Save every integer register before dispatch so fork can construct a child
+    // return frame with a0=0 and resume after the ecall instruction.
+    let pid = scheduler::current_pid() as usize;
+    if pid != 0 {
+        scheduler::with_proc_mut(pid, |pcb, _| {
+            for index in 0..32 {
+                pcb.user_context.regs[index] = frame.regs[index] as usize;
+            }
+            pcb.user_context.pc = frame.pc as usize + 4;
+            pcb.user_context.sp = frame.user_sp as usize;
+            pcb.user_context.flags = frame.flags as usize;
+            pcb.pc = pcb.user_context.pc;
+            pcb.sp = pcb.user_context.sp;
+        });
+    }
     let args = [
         frame.regs[10], // a0
         frame.regs[11], // a1
