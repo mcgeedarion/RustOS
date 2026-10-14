@@ -321,3 +321,31 @@ pub fn clone_root_cow(parent_root: usize) -> usize {
 
     child_root
 }
+
+
+/// Free lower-half user page-table structures while preserving the shared
+/// upper-half kernel mappings. Leaf frames must be released by the caller.
+pub fn free_user_page_table(root_pa: usize) {
+    unsafe fn free_table(table_pa: usize, level: usize) {
+        for index in 0..TABLE_ENTRIES {
+            let entry = *pte_ptr(table_pa, index);
+            if entry & VALID == 0 {
+                continue;
+            }
+            if level > 0 && is_pointer_pte(entry) {
+                free_table(pte_to_pa(entry), level - 1);
+            }
+        }
+        crate::mm::pmm::free_page(table_pa);
+    }
+
+    unsafe {
+        for index in 0..256 {
+            let entry = *pte_ptr(root_pa, index);
+            if is_pointer_pte(entry) {
+                free_table(pte_to_pa(entry), 1);
+            }
+        }
+    }
+    crate::mm::pmm::free_page(root_pa);
+}
