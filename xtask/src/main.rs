@@ -1310,6 +1310,7 @@ fn write_smoke_metadata(
     started_unix_ms: u128,
     elapsed_ms: u128,
     result: &str,
+    timing_parser_result: &str,
     log_path: &Path,
 ) -> Result<()> {
     let contract = if full_kernel { "full_userspace_exec" } else { "minimal_boot" };
@@ -1330,6 +1331,7 @@ fn write_smoke_metadata(
             "  \"elapsed_ms\": {},\n",
             "  \"qemu_deadline_seconds\": {},\n",
             "  \"result\": \"{}\",\n",
+            "  \"timing_parser_result\": \"{}\",\n",
             "  \"serial_log\": \"{}\",\n",
             "  \"expected_markers\": \"{}\"\n",
             "}}\n"
@@ -1343,6 +1345,7 @@ fn write_smoke_metadata(
         elapsed_ms,
         timeout_seconds,
         status,
+        json_escape(timing_parser_result),
         log_name,
         smoke_marker_regex(full_kernel),
     );
@@ -1550,11 +1553,34 @@ fn run_smoke(root: &Path, opts: &BuildOpts) -> Result<()> {
     Ok(())
     })();
 
+    // Apply the appropriate timing parser to this run's actual QEMU serial log.
+    // Execution success and timing validation are independent gates: neither
+    // parser unit tests nor timing markers can substitute for userspace exit checks.
+    let timing_parser_mode = if full_kernel { "full" } else { "minimal" };
+    let mut parser_cmd = Command::new("bash");
+    parser_cmd
+        .arg(root.join("scripts/ci/parse-boot-marks.sh"))
+        .arg("--mode")
+        .arg(timing_parser_mode)
+        .arg(&log_path);
+    let timing_result = run(&mut parser_cmd)
+        .with_context(|| format!("validate real QEMU log with {timing_parser_mode} timing parser"));
+
+    let mut final_result = run_result;
+    if let Err(parser_error) = timing_result.as_ref() {
+        if final_result.is_ok() {
+            final_result = Err(anyhow!("{parser_error:#}"));
+        } else {
+            log(format!("timing parser also failed: {parser_error:#}"));
+        }
+    }
+
     let metadata_path = root.join(format!(
         "target/smoke-{}-metadata.json",
         arch_str(opts.arch)
     ));
-    let result_label = if run_result.is_ok() { "passed" } else { "failed" };
+    let result_label = if final_result.is_ok() { "passed" } else { "failed" };
+    let parser_label = if timing_result.is_ok() { "passed" } else { "failed" };
     write_smoke_metadata(
         &metadata_path,
         opts.arch,
@@ -1564,9 +1590,10 @@ fn run_smoke(root: &Path, opts: &BuildOpts) -> Result<()> {
         started_unix_ms,
         run_started.elapsed().as_millis(),
         result_label,
+        parser_label,
         &log_path,
     )?;
-    run_result
+    final_result
 }
 
 // ── initramfs / userspace build ────────────────────────────────────────────
