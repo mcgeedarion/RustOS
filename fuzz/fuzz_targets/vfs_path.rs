@@ -1,6 +1,6 @@
 #![no_main]
 
-use alloc::string::{String, ToString};
+use std::string::String;
 use libfuzzer_sys::fuzz_target;
 
 #[path = "../../src/fs/vfs/symlink.rs"]
@@ -37,7 +37,7 @@ impl production_symlink::FsOps for FuzzFs<'_> {
 
 fuzz_target!(|data: &[u8]| {
     let raw = String::from_utf8_lossy(data);
-    let path = alloc::format!("/root/{raw}");
+    let path = format!("/root/{raw}");
     let fs = FuzzFs { input: data };
     let _ = production_symlink::resolve(&fs, &path, 0);
     let _ = production_symlink::resolve(&fs, &path, 0x0002_0000);
