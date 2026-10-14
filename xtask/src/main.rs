@@ -33,7 +33,7 @@ use std::{
     path::{Path, PathBuf},
     process::{exit, Command},
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 const OS_RELEASE_CONTENT: &[u8] =
@@ -1402,12 +1402,15 @@ fn run_until_smoke_marker(
 
 fn run_smoke(root: &Path, opts: &BuildOpts) -> Result<()> {
     let mut effective_opts = opts.clone();
-    // A full-kernel smoke must include the userspace workload that proves
-    // process creation, execve, wait/reap, and exit-status handling.
+    if has_feature(&effective_opts, "userspace_boot") {
+        bail!("userspace_boot is a diagnostic-only profile and cannot be accepted as a successful smoke run");
+    }
+    // A full-kernel smoke must include the init and syscall smoke workload.
     if uses_full_kernel(&effective_opts) {
         effective_opts.initrd = true;
     }
     let opts = &effective_opts;
+    let full_kernel = uses_full_kernel(opts);
 
     ensure_qemu_for_arch(opts.arch)?;
 
@@ -1419,7 +1422,16 @@ fn run_smoke(root: &Path, opts: &BuildOpts) -> Result<()> {
     if let Some(parent) = log_path.parent() {
         fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
+    // A previous run must never satisfy this run's execution contract.
+    fs::write(&log_path, b"").with_context(|| format!("truncate {}", log_path.display()))?;
 
+    let timeout_seconds = if matches!(opts.arch, Arch::X86_64) { 60 } else { 45 };
+    let started_unix_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let run_started = Instant::now();
+    let run_result = (|| -> Result<()> {
     match opts.arch {
         Arch::X86_64 => {
             let ovmf = ensure_ovmf(root)?;
@@ -1447,7 +1459,7 @@ fn run_smoke(root: &Path, opts: &BuildOpts) -> Result<()> {
             if let Some(initrd) = initrd.as_deref() {
                 cmd.arg("-initrd").arg(initrd);
             }
-            run_until_smoke_marker(&mut cmd, &log_path, Duration::from_secs(60))?;
+            run_until_smoke_marker(&mut cmd, &log_path, Duration::from_secs(timeout_seconds), full_kernel)?;
         },
         Arch::AArch64 => {
             let fw_candidates = [
@@ -1489,7 +1501,7 @@ fn run_smoke(root: &Path, opts: &BuildOpts) -> Result<()> {
             if let Some(initrd) = initrd.as_deref() {
                 cmd.arg("-initrd").arg(initrd);
             }
-            run_until_smoke_marker(&mut cmd, &log_path, Duration::from_secs(45))?;
+            run_until_smoke_marker(&mut cmd, &log_path, Duration::from_secs(timeout_seconds), full_kernel)?;
         },
         Arch::RiscV64 => {
             // RISC-V UEFI boot via OpenSBI + OVMF
@@ -1536,6 +1548,25 @@ fn run_smoke(root: &Path, opts: &BuildOpts) -> Result<()> {
         },
     }
     Ok(())
+    })();
+
+    let metadata_path = root.join(format!(
+        "target/smoke-{}-metadata.json",
+        arch_str(opts.arch)
+    ));
+    let result_label = if run_result.is_ok() { "passed" } else { "failed" };
+    write_smoke_metadata(
+        &metadata_path,
+        opts.arch,
+        opts.profile,
+        full_kernel,
+        timeout_seconds,
+        started_unix_ms,
+        run_started.elapsed().as_millis(),
+        result_label,
+        &log_path,
+    )?;
+    run_result
 }
 
 // ── initramfs / userspace build ────────────────────────────────────────────
