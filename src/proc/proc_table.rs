@@ -120,41 +120,21 @@ pub fn thread_count_of(pid: usize) -> Option<usize> {
 /// Insert a new process.  Wraps the Pcb in a ProcLock and pushes to table.
 /// Also allocates and links the Task struct.
 pub fn enqueue(mut pcb: Pcb) {
-    // Allocate Task on heap, link back to Pcb.
-    // We store a raw pointer; the Task is freed in proc_table::remove().
-    let task_box = alloc::boxed::Box::new(Task::new(core::ptr::null_mut()));
-    let task_ptr = alloc::boxed::Box::into_raw(task_box);
-
-    // Temporarily set task_ptr to point at itself; we'll fix pcb.task below.
-    // (We need the ProcLock address to set task.pcb, but ProcLock is built
-    // after Pcb — so we leave task.pcb null and set it after ProcLock::new.)
-    pcb.task = task_ptr;
-    // Copy sched from Pcb into Task.
-    unsafe {
-        (*task_ptr).sched = pcb.sched.clone();
-    }
-    unsafe {
-        (*task_ptr).pid = pcb.pid as u32;
-    }
-
-    let pl = ProcLock::new(pcb);
-    // Fix task.pcb now that ProcLock (and hence Pcb) has a stable address
-    // inside the Arc.  Safety: task_ptr is unique (Box::into_raw), pl.inner
-    // not yet shared.
-    unsafe {
-        (*task_ptr).pcb = &mut pl.inner.lock().pid as *mut usize as *mut Pcb;
-    }
-    // More correct: get a pointer to the Pcb inside the Mutex.
-    // We use a different approach: store the Arc itself is the owner.
-    // task.pcb is set by fixing it up via the lock.
+    // Install the ProcLock first so the PCB has a stable address before the
+    // Task back-pointer is created. Constructing Task::new(null_mut()) reads
+    // through a null pointer and is undefined behavior.
+    let proc_lock = ProcLock::new(pcb);
     {
-        let mut inner = pl.inner.lock();
+        let mut inner = proc_lock.inner.lock();
+        let pcb_ptr: *mut Pcb = &mut *inner;
+        let task_ptr = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(Task::new(pcb_ptr)));
         unsafe {
-            (*task_ptr).pcb = &mut *inner as *mut Pcb;
+            (*task_ptr).sched = inner.sched.clone();
+            (*task_ptr).pid = inner.pid as u32;
         }
+        inner.task = task_ptr;
     }
-
-    PROC_TABLE.lock().push(pl);
+    PROC_TABLE.lock().push(proc_lock);
 }
 
 /// Remove a process entry from the table (called from zombify / reap).
