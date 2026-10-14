@@ -1,5 +1,7 @@
 #![no_main]
 
+extern crate alloc;
+
 use libfuzzer_sys::fuzz_target;
 
 #[path = "../../src/exec/elf.rs"]
