@@ -60,17 +60,23 @@ pub fn enter<A: UserspaceBootArch>(boot_info: &'static BootInfo) -> ! {
     crate::serial_println!("initramfs: found /init ({} bytes)", init_elf.len());
     crate::boot_mark!("BOOT_INITRAMFS_LOADED");
 
-    if let Err(error) =
-        crate::proc::exec::spawn_user_process_from_bytes("/init", init_elf, &["/init"], &[])
-    {
-        if error == crate::proc::exec::SpawnError::ExecutionUnavailable {
-            crate::serial_println!("USERSPACE_BOOT_UNSUPPORTED");
+    match crate::exec::elf::validate_executable_elf(init_elf) {
+        Ok(entry) => {
+            crate::serial_println!(
+                "userspace_boot: ELF metadata valid entry={:#x}; execution backend intentionally excluded",
+                entry
+            );
         }
-        panic!("kernel: cannot execute /init: {}", error.as_str());
+        Err(error) => {
+            panic!("kernel: invalid /init ELF metadata: {:?}", error);
+        }
     }
 
-    // A future execution backend may enqueue a task, but only the running
-    // userspace program may emit its success sentinel.
+    // This profile deliberately excludes the full MM/VFS/process execution
+    // graph. Never call the full process loader or emit PID/execution success
+    // markers from this diagnostic-only path.
+    crate::serial_println!("USERSPACE_BOOT_UNSUPPORTED");
+
     loop {
         A::idle_once();
     }
