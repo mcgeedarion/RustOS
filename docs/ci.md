@@ -94,6 +94,10 @@ bash scripts/ci/boot-regression.sh target/smoke-x86_64.log
 | x86_64 | `q35` | `OVMF_CODE` or discovered OVMF | 60s | `target/smoke-x86_64.log` and `target/smoke-x86_64-metadata.json` |
 | aarch64 | `virt` | `QEMU_EFI` or discovered AAVMF/QEMU EFI | 45s | `target/smoke-aarch64.log` and `target/smoke-aarch64-metadata.json` |
 
+
+## Coverage issue
+
+Track remaining full-kernel execution, fault recovery, writable filesystem/IPC workloads, fuzz campaign validation, and syscall benchmarking under [issue #277](https://github.com/mcgeedarion/RustOS/issues/277). Do not establish benchmark thresholds until warmups, fixed iterations, JSON statistics, environment metadata, and a reviewed like-for-like baseline exist and variance has been measured.
 ## Adding CI coverage
 
 1. Prefer adding an `xtask` subcommand or extending an existing one over adding
@@ -106,8 +110,10 @@ bash scripts/ci/boot-regression.sh target/smoke-x86_64.log
 ## Coverage boundaries and unavailable gates
 
 - **Regression Tests:** Reuses the runnable host tests and UEFI profile build matrix rather than referring to absent integration, fuzz, and benchmark scripts. This is not full-kernel or filesystem compatibility coverage.
-- **Fault Injection Engine:** Runs six host tests against the actual fault-point implementation. PMM/VMM/syscall injection is not exercised because the supported boot profiles exclude those services.
-- **Kernel fault integration:** Explicitly skipped by default. `RUSTOS_ENABLE_UNSUPPORTED_KERNEL_FAULT_GATE=true` enables a failing readiness guard, not a fake test run; replace that guard only after implementing a real harness with mandatory injected/results markers.
+- **Fault Injection Engine:** Runs host tests against the fault-point implementation and retains test logs/artifacts for 14 days. PMM/VMM/syscall injection is not exercised in a guest yet.
+- **Kernel fault integration:** Explicitly skipped by default. `RUSTOS_ENABLE_UNSUPPORTED_KERNEL_FAULT_GATE=true` enables a failing readiness guard, not a fake test run; replace that guard only after a real guest harness produces mandatory injected/recovered markers and passes post-recovery workloads.
+- **Parser Fuzz Smoke:** Bounded nightly/manual/changed-path `cargo-fuzz` campaigns target the production newc CPIO, ELF64 header/program-header, VFS symlink/path, and ext4 metadata decoders. Dictionaries, seed corpora, logs, discovered corpus/crashes, and fuzz artifacts are retained for 14 days. The first CI run is pending; a passing parser campaign would not prove full-kernel execution or filesystem write support.
+- **Full Kernel Execution Smoke:** Requires the strict userspace child protocol and timing-parser success from the same fresh QEMU log. It is expected to fail while `spawn_user_process()` returns false and valid `execve()` returns `ENOSYS`. The workflow retains serial logs, run metadata, image, kernel, init, and smoke binaries for 14 days.
 - **Panic format:** Boots the supported diagnostic profile without an initramfs and validates its real, intentional panic on x86_64 and AArch64. This does not test an OOM or full debug register-dump path.
 - **Formatting and lint:** All existing tracked Rust sources in the original kernel/workspace formatting scope remain checked. Clippy keeps `-D warnings`; missing experimental module files are not fabricated just to satisfy rustfmt's default traversal.
 - **Legacy kmtest label:** The existing separate kmtest workflow still uses boot-smoke plumbing and must not be counted as executed kernel suites. The main CI job now labels its repeat explicitly as minimal smoke.
