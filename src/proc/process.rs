@@ -49,7 +49,7 @@ extern crate alloc;
 use crate::mm::mmap::Vma;
 use crate::proc::cgroup::CgroupId;
 use crate::proc::cgroup::ROOT_CGROUP;
-use crate::proc::context::Context;
+use crate::proc::context::{Context, UserContext};
 use crate::proc::fork::SignalHandlers;
 use crate::proc::namespace::NsSet;
 use crate::proc::ptrace::PtraceState;
@@ -179,6 +179,8 @@ pub struct Pcb {
     // Kernel stack
     pub kstack_top: usize,
     pub ctx: Context,
+    /// Saved architectural userspace register frame for syscall return/fork.
+    pub user_context: UserContext,
 
     // TLS
     pub tls_base: usize,
@@ -295,6 +297,7 @@ impl Pcb {
             brk: Self::INITIAL_BRK,
             kstack_top: 0,
             ctx: Context::zero(),
+            user_context: UserContext::zero(),
             tls_base: 0,
             trapframe_pa: 0,
             trapframe_virt: 0,
