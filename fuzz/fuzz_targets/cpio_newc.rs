@@ -11,7 +11,7 @@ macro_rules! kprintln {
 mod production_cpio;
 
 fuzz_target!(|data: &[u8]| {
-    let entries: alloc::vec::Vec<_> = production_cpio::iter(data).collect();
+    let entries: Vec<_> = production_cpio::iter(data).collect();
     for entry in &entries {
         assert_eq!(entry.size, entry.data.len());
         let _ = production_cpio::find_file(data, entry.name);
