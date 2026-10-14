@@ -5,10 +5,7 @@ _Last reviewed: 2026-10-13._
 The project is working toward **M3**, but the end-to-end full-userspace gate
 is not yet supported. The default `full_kernel` feature selects the normal
 MM/VFS/process/syscall graph and UEFI entry without implying that process
-creation or image replacement is functional. At review time,
-`src/proc/exec.rs::spawn_user_process()` returns false and valid
-`execve()` requests return `ENOSYS`. The full smoke path must fail until this
-is replaced by a real executable process path.
+creation or image replacement is functional. The repository contains ELF image construction, initial-stack setup, process spawning, and an `execve` replacement path. These paths remain unverified as a complete runtime contract. The full smoke path must remain blocked until real QEMU runs prove process entry, successful exec, exact-child reaping, and zero exit status.
 
 | Milestone | Goal | Cargo feature path | CI/local sentinel | Current state |
 |---|---|---|---|---|
