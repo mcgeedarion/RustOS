@@ -111,17 +111,18 @@ impl Timer for ArchImpl {
 impl Paging for ArchImpl {
     fn map_page(cr3: usize, va: usize, pa: usize, flags: PageFlags) -> bool {
         // Translate HAL flags → native RISC-V PTE flags
-        let mut pte_flags: u64 = 0b001; // V (valid)
+        let mut pte_flags: u64 = super::paging::PTE_VALID | super::paging::PTE_READ
+            | super::paging::PTE_ACCESSED | super::paging::PTE_DIRTY;
         if flags.contains(PageFlags::WRITE) {
-            pte_flags |= 0b010; // W (writable)
+            pte_flags |= super::paging::PTE_WRITE;
         }
         if flags.contains(PageFlags::USER) {
             pte_flags |= 0b100; // U (user)
         }
         if flags.contains(PageFlags::NX) {
-            pte_flags |= 0b000; // X not set (execute disabled)
+            // NX is represented by leaving the X permission clear.
         } else {
-            pte_flags |= 0b1000; // X (executable)
+            pte_flags |= super::paging::PTE_EXEC;
         }
         super::paging::map_page(cr3, va, pa, pte_flags)
     }
@@ -151,7 +152,7 @@ impl Paging for ArchImpl {
         }
     }
     fn clone_address_space(src_cr3: usize) -> Option<usize> {
-        super::paging::clone_pgtable_cow(src_cr3)
+        Some(super::paging::clone_root_cow(src_cr3))
     }
     fn new_user_address_space() -> Option<usize> {
         use crate::mm::pmm::alloc_page;
@@ -159,7 +160,8 @@ impl Paging for ArchImpl {
         unsafe {
             core::ptr::write_bytes(pgd as *mut u8, 0, 4096);
         }
-        // Copy kernel mappings (upper half)
+        // Copy kernel mappings (upper half). user_pagetable stores root PA,
+        // while the live SATP CSR stores MODE plus the root PPN.
         let kpgd = Self::kernel_cr3();
         unsafe {
             let src = (kpgd + 256 * 8) as *const u64;
@@ -167,6 +169,9 @@ impl Paging for ArchImpl {
             core::ptr::copy_nonoverlapping(src, dst, 256);
         }
         Some(pgd)
+    }
+    fn free_page_table(root: usize) {
+        super::paging::free_user_page_table(root);
     }
 }
 
