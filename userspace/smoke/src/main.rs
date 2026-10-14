@@ -12,6 +12,8 @@
 #![no_std]
 #![no_main]
 
+extern crate raw_syscall;
+
 use core::arch::asm;
 use core::ffi::c_int;
 
@@ -23,6 +25,8 @@ mod checks;
 const SYS_WRITE: usize = 1;
 #[cfg(target_arch = "x86_64")]
 const SYS_OPEN: usize = 2;
+#[cfg(target_arch = "x86_64")]
+const SYS_LSEEK: usize = 8;
 #[cfg(target_arch = "x86_64")]
 const SYS_CLOSE: usize = 3;
 #[cfg(target_arch = "x86_64")]
@@ -37,7 +41,9 @@ const SYS_EXECVE: usize = 59;
 #[cfg(target_arch = "aarch64")]
 const SYS_WRITE: usize = 64;
 #[cfg(target_arch = "aarch64")]
-const SYS_OPEN: usize = usize::MAX; // Use openat
+const SYS_OPEN: usize = usize::MAX;
+#[cfg(target_arch = "aarch64")]
+const SYS_LSEEK: usize = 62; // Use openat
 #[cfg(target_arch = "aarch64")]
 const SYS_OPENAT: usize = 56;
 #[cfg(target_arch = "aarch64")]
@@ -53,6 +59,8 @@ const SYS_EXECVE: usize = 221;
 
 #[cfg(target_arch = "riscv64")]
 const SYS_WRITE: usize = 64;
+#[cfg(target_arch = "riscv64")]
+const SYS_LSEEK: usize = 62;
 #[cfg(target_arch = "riscv64")]
 const SYS_OPENAT: usize = 56;
 #[cfg(target_arch = "riscv64")]
@@ -193,6 +201,8 @@ unsafe fn sys_open(path: *const u8, flags: usize, mode: usize) -> isize {
 }
 
 #[inline(always)]
+unsafe fn sys_lseek(fd: usize, offset: isize, whence: usize) -> isize { raw_syscall::syscall3(SYS_LSEEK, fd, offset as usize, whence) }
+
 unsafe fn sys_unlink(path: *const u8) -> isize {
     #[cfg(target_arch = "x86_64")]
     {
@@ -379,94 +389,10 @@ unsafe fn sys_close(fd: usize) -> isize {
 }
 
 #[inline(always)]
-unsafe fn sys_fork() -> isize {
-    #[cfg(target_arch = "x86_64")]
-    {
-        let ret: isize;
-        asm!(
-            "syscall",
-            in("rax") SYS_FORK,
-            out("rcx") _,
-            out("r11") _,
-            lateout("rax") ret,
-            options(nostack),
-        );
-        ret
-    }
-    #[cfg(target_arch = "riscv64")]
-    {
-        let ret: isize;
-        asm!(
-            "ecall",
-            in("a7") SYS_FORK,
-            lateout("a0") ret,
-            options(nostack),
-        );
-        ret
-    }
-    #[cfg(target_arch = "aarch64")]
-    {
-        let ret: isize;
-        asm!(
-            "svc #0",
-            in("x8") SYS_FORK,
-            lateout("x0") ret,
-            options(nostack),
-        );
-        ret
-    }
-}
+unsafe fn sys_fork() -> isize { raw_syscall::syscall1(SYS_FORK, 0) }
 
 #[inline(always)]
-unsafe fn sys_wait4(pid: isize, status: *mut c_int, options: usize) -> isize {
-    #[cfg(target_arch = "x86_64")]
-    {
-        let ret: isize;
-        asm!(
-            "syscall",
-            in("rax") SYS_WAIT4,
-            in("rdi") pid,
-            in("rsi") status,
-            in("rdx") options,
-            in("r10") 0, // rusage
-            out("rcx") _,
-            out("r11") _,
-            lateout("rax") ret,
-            options(nostack),
-        );
-        ret
-    }
-    #[cfg(target_arch = "aarch64")]
-    {
-        let ret: isize;
-        asm!(
-            "svc #0",
-            in("x8") SYS_WAIT4,
-            in("x0") pid,
-            in("x1") status,
-            in("x2") options,
-            in("x3") 0, // rusage
-            lateout("x0") ret,
-            options(nostack),
-        );
-        ret
-    }
-    #[cfg(target_arch = "riscv64")]
-    {
-        let ret: isize;
-        asm!(
-            "ecall",
-            in("a7") SYS_WAIT4,
-            in("a0") pid,
-            in("a1") status,
-            in("a2") options,
-            in("a3") 0, // rusage
-            lateout("a0") ret,
-            options(nostack),
-        );
-        ret
-    }
-}
+unsafe fn sys_wait4(pid: isize, status: *mut c_int, options: usize) -> isize { raw_syscall::syscall4(SYS_WAIT4, pid as usize, status as usize, options, 0) }
 
 #[inline(always)]
 unsafe fn sys_exit_group(status: usize) -> ! {
@@ -573,52 +499,7 @@ fn test_errno_checks() -> bool {
 }
 
 #[inline(always)]
-unsafe fn sys_execve(path: *const u8, argv: *const usize, envp: *const usize) -> isize {
-    #[cfg(target_arch = "x86_64")]
-    {
-        let ret: isize;
-        asm!(
-            "syscall",
-            in("rax") SYS_EXECVE,
-            in("rdi") path,
-            in("rsi") argv,
-            in("rdx") envp,
-            out("rcx") _,
-            out("r11") _,
-            lateout("rax") ret,
-            options(nostack),
-        );
-        ret
-    }
-    #[cfg(target_arch = "aarch64")]
-    {
-        let ret: isize;
-        asm!(
-            "svc #0",
-            in("x8") SYS_EXECVE,
-            in("x0") path,
-            in("x1") argv,
-            in("x2") envp,
-            lateout("x0") ret,
-            options(nostack),
-        );
-        ret
-    }
-    #[cfg(target_arch = "riscv64")]
-    {
-        let ret: isize;
-        asm!(
-            "ecall",
-            in("a7") SYS_EXECVE,
-            in("a0") path,
-            in("a1") argv,
-            in("a2") envp,
-            lateout("a0") ret,
-            options(nostack),
-        );
-        ret
-    }
-}
+unsafe fn sys_execve(path: *const u8, argv: *const usize, envp: *const usize) -> isize { raw_syscall::syscall3(SYS_EXECVE, path as usize, argv as usize, envp as usize) }
 
 #[inline(always)]
 unsafe fn sys_read(fd: usize, buf: *mut u8, count: usize) -> isize {
@@ -681,10 +562,12 @@ fn smoke_main() -> ! {
     // This record is emitted only after the kernel has successfully execve'd
     // /smoke into a running user process. It is intentionally separate from
     // BOOT_MARK timing records emitted by the kernel.
+    write_str(1, "USERSPACE_SMOKE_START\n");
     write_str(1, "RUSTOS_EXEC marker=smoke_started\n");
     let pass = checks::run_tests();
 
     if pass {
+        write_str(1, "USERSPACE_SMOKE_PASS\n");
         write_str(1, "RUSTOS_EXEC marker=smoke_tests_passed\n");
         write_str(1, "SMOKE OK: userspace_smoke\n");
         unsafe { sys_exit_group(0) };
