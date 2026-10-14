@@ -1,0 +1,53 @@
+name: Full Kernel Execution Smoke
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  full-kernel-x86_64:
+    name: x86_64 full graph and userspace exec contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
+          components: rust-src, llvm-tools-preview
+
+      - name: Install QEMU and UEFI dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends \
+            clang lld llvm qemu-system-x86 ovmf mtools python3
+
+      - name: Run strict full-kernel QEMU smoke
+        run: |
+          set -o pipefail
+          cargo xtask smoke --arch x86_64 2>&1 | tee xtask-full-smoke.log
+
+      - name: Upload full-kernel execution evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-kernel-smoke-x86_64
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            xtask-full-smoke.log
+            target/smoke-x86_64.log
+            target/smoke-x86_64-metadata.json
+            initramfs.cpio
+            boot-x86_64.img
+            target/x86_64-unknown-uefi/debug/rustos.efi
+            userspace/init/target/x86_64-unknown-none/release/init
+            userspace/smoke/target/x86_64-unknown-none/release/smoke
