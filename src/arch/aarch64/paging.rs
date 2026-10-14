@@ -91,6 +91,36 @@ pub fn map_page_into(root_pa: usize, va: usize, pa: usize, flags: usize) {
     }
 }
 
+
+/// Remove a 4 KiB leaf from the supplied address space and return its physical
+/// frame base. The caller owns the frame and must release it when appropriate.
+pub fn unmap_page(root_pa: usize, va: usize) -> Option<usize> {
+    let idx = [
+        super::mem_layout::va48::l0_index(va),
+        super::mem_layout::va48::l1_index(va),
+        super::mem_layout::va48::l2_index(va),
+        super::mem_layout::va48::l3_index(va),
+    ];
+    unsafe {
+        let mut table = root_pa as *mut usize;
+        for level in 0..3 {
+            let desc = table.add(idx[level]).read_volatile();
+            if desc & pte::VALID == 0 || desc & pte::TABLE == 0 {
+                return None;
+            }
+            table = (desc & pte::ADDR_MASK) as *mut usize;
+        }
+        let slot = table.add(idx[3]);
+        let desc = slot.read_volatile();
+        if desc & pte::VALID == 0 {
+            return None;
+        }
+        slot.write_volatile(0);
+        super::hal::tlb_flush_page(va);
+        Some(desc & pte::ADDR_MASK)
+    }
+}
+
 pub fn virt_to_phys(root_pa: usize, va: usize) -> Option<usize> {
     let idx = [
         super::mem_layout::va48::l0_index(va),
