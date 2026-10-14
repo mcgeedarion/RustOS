@@ -27,10 +27,13 @@ const ELFDATA2LSB: u8 = 1; // little-endian
 const ET_EXEC: u16 = 2; // static executable
 const ET_DYN: u16 = 3; // position-independent / shared object
 const EM_X86_64: u16 = 62;
+const EM_AARCH64: u16 = 183;
+const EM_RISCV: u16 = 243;
 
 const PT_LOAD: u32 = 1;
 const PT_DYNAMIC: u32 = 2;
 const PT_INTERP: u32 = 3;
+const USER_MIN_ADDR: u64 = PAGE_SIZE;
 
 const PF_X: u32 = 0x1; // execute
 const PF_W: u32 = 0x2; // write
@@ -83,6 +86,115 @@ pub enum ElfError {
     HasInterpreter, // dynamic linker required – not yet supported
     AllocFailed,
     UnalignedSegment,
+}
+
+/// Return the maximum lower-user virtual address supported by this build.
+///
+/// This is a conservative preflight bound. It is not a substitute for checking
+/// the configured architecture page-table geometry before installing mappings.
+#[cfg(target_arch = "x86_64")]
+const USER_ADDRESS_LIMIT: u64 = 0x0000_8000_0000_0000;
+#[cfg(target_arch = "aarch64")]
+const USER_ADDRESS_LIMIT: u64 = 0x0001_0000_0000_0000;
+#[cfg(target_arch = "riscv64")]
+const USER_ADDRESS_LIMIT: u64 = 0x0000_0040_0000_0000;
+
+#[cfg(target_arch = "x86_64")]
+const TARGET_ELF_MACHINE: u16 = EM_X86_64;
+#[cfg(target_arch = "aarch64")]
+const TARGET_ELF_MACHINE: u16 = EM_AARCH64;
+#[cfg(target_arch = "riscv64")]
+const TARGET_ELF_MACHINE: u16 = EM_RISCV;
+
+/// Validate a static executable image before a process address space is changed.
+///
+/// This validates the actual bytes, not caller-supplied header/program-header
+/// copies. It rejects dynamic-linker requirements until relocation and
+/// interpreter loading are implemented. Successful validation does not map
+/// pages; the process execution path remains unavailable until an architecture
+/// backend installs segments and creates an initial userspace stack.
+pub fn validate_executable_elf(data: &[u8]) -> Result<u64, ParseError> {
+    let hdr = parse_elf_header(data)?;
+    let e_type = { hdr.e_type };
+    let e_machine = { hdr.e_machine };
+    let e_version = { hdr.e_version };
+    let e_ehsize = { hdr.e_ehsize };
+    let e_phentsize = { hdr.e_phentsize };
+    let e_phnum = { hdr.e_phnum };
+    let entry = { hdr.e_entry };
+
+    if e_type != ET_EXEC {
+        return Err(ParseError::BadType);
+    }
+    if e_machine != TARGET_ELF_MACHINE {
+        return Err(ParseError::BadMachine);
+    }
+    if e_version != 1 || hdr.e_ident[6] != 1 || e_ehsize as usize != mem::size_of::<Elf64Header>() {
+        return Err(ParseError::BadType);
+    }
+    if e_phentsize as usize != mem::size_of::<Elf64Phdr>() || e_phnum == 0 {
+        return Err(ParseError::OutOfBounds);
+    }
+    if entry < USER_MIN_ADDR || entry >= USER_ADDRESS_LIMIT {
+        return Err(ParseError::InvalidEntry);
+    }
+
+    let phdrs = parse_phdrs_with_hdr(data, &hdr).ok_or(ParseError::OutOfBounds)?;
+    let mut load_count = 0usize;
+    let mut entry_is_executable = false;
+
+    for ph in &phdrs {
+        let p_type = { ph.p_type };
+        if p_type == PT_INTERP || p_type == PT_DYNAMIC {
+            return Err(ParseError::DynamicLinkingUnsupported);
+        }
+        if p_type != PT_LOAD {
+            continue;
+        }
+
+        let p_flags = { ph.p_flags };
+        let p_offset = { ph.p_offset };
+        let p_vaddr = { ph.p_vaddr };
+        let p_filesz = { ph.p_filesz };
+        let p_memsz = { ph.p_memsz };
+        let p_align = { ph.p_align };
+
+        if p_filesz > p_memsz {
+            return Err(ParseError::InvalidSegment);
+        }
+        if p_memsz == 0 {
+            continue;
+        }
+        let file_end = p_offset.checked_add(p_filesz).ok_or(ParseError::OutOfBounds)?;
+        if file_end > data.len() as u64 {
+            return Err(ParseError::OutOfBounds);
+        }
+        let virtual_end = p_vaddr.checked_add(p_memsz).ok_or(ParseError::InvalidSegment)?;
+        if p_vaddr < USER_MIN_ADDR || virtual_end > USER_ADDRESS_LIMIT || virtual_end <= p_vaddr {
+            return Err(ParseError::InvalidSegment);
+        }
+        if p_align > 1
+            && (!p_align.is_power_of_two() || p_offset % p_align != p_vaddr % p_align)
+        {
+            return Err(ParseError::BadAlign);
+        }
+        if p_flags & (PF_W | PF_X) == (PF_W | PF_X) {
+            return Err(ParseError::InvalidSegment);
+        }
+
+        load_count += 1;
+        if p_flags & PF_X != 0 && p_vaddr <= entry && entry < virtual_end {
+            entry_is_executable = true;
+        }
+    }
+
+    if load_count == 0 {
+        return Err(ParseError::InvalidSegment);
+    }
+    if !entry_is_executable {
+        return Err(ParseError::InvalidEntry);
+    }
+    Ok(entry)
 }
 
 /// Load an ELF64 image from `data` into the current page table.
@@ -348,6 +460,9 @@ pub enum ParseError {
     BadMachine,
     BadAlign,
     OutOfBounds,
+    InvalidSegment,
+    InvalidEntry,
+    DynamicLinkingUnsupported,
 }
 
 /// Parse the 64-byte ELF header from a raw byte slice.
@@ -425,45 +540,12 @@ pub fn parse_phdrs_with_hdr(data: &[u8], hdr: &Elf64Hdr) -> Option<alloc::vec::V
 pub fn load_elf_into(
     _cr3: usize,
     data: &[u8],
-    hdr: &Elf64Hdr,
-    phdrs: &[Elf64Phdr],
+    _hdr: &Elf64Hdr,
+    _phdrs: &[Elf64Phdr],
 ) -> Result<u64, ParseError> {
-    // Metadata validation only. Actual page-table installation is not wired
-    // to this API yet.
-    if data.len() < mem::size_of::<Elf64Header>() {
-        return Err(ParseError::OutOfBounds);
-    }
-    // Walk PT_LOAD segments and confirm file offsets are in range.
-    for p in phdrs {
-        let p_type = {
-            let v = p.p_type;
-            v
-        };
-        let p_offset = {
-            let v = p.p_offset;
-            v
-        } as usize;
-        let p_filesz = {
-            let v = p.p_filesz;
-            v
-        } as usize;
-        if p_type != PT_LOAD {
-            continue;
-        }
-        if p_offset
-            .checked_add(p_filesz)
-            .map(|x| x > data.len())
-            .unwrap_or(true)
-        {
-            return Err(ParseError::OutOfBounds);
-        }
-    }
-    // Entry-point from the header.
-    let entry = {
-        let v = hdr.e_entry;
-        v
-    };
-    Ok(entry)
+    // Preflight only. The CR3 argument is not used because process page-table
+    // installation and segment mapping have not been wired into this module.
+    validate_executable_elf(data)
 }
 
 /// Compute the highest end-of-bss across all PT_LOAD segments, biased
@@ -487,7 +569,10 @@ pub fn end_of_bss(phdrs: &[Elf64Phdr], bias: u64) -> usize {
         if p_type != PT_LOAD {
             continue;
         }
-        let end = p_vaddr.wrapping_add(p_memsz).wrapping_add(bias);
+        let end = p_vaddr
+            .checked_add(p_memsz)
+            .and_then(|value| value.checked_add(bias))
+            .unwrap_or(u64::MAX);
         if end > hi {
             hi = end;
         }
