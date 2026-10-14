@@ -134,13 +134,10 @@ impl Paging for ArchImpl {
         super::paging::virt_to_phys(cr3, va)
     }
     fn kernel_cr3() -> usize {
-        super::paging::kernel_cr3()
+        super::paging::satp_to_root_pa(super::paging::kernel_satp())
     }
-    fn load_cr3(cr3: usize) {
-        unsafe {
-            asm!("csrw satp, {cr3}", cr3 = in(reg) cr3, options(nostack));
-            asm!("sfence.vma zero, zero", options(nostack));
-        }
+    fn load_cr3(root_pa: usize) {
+        super::paging::load_satp(root_pa);
     }
     fn flush_va(va: usize) {
         unsafe {
