@@ -7,6 +7,9 @@ use crate::arch::{
 };
 
 pub fn alloc_user_stack(cr3: usize, stack_top: usize, stack_bytes: usize) -> Result<usize, i32> {
+    if stack_bytes == 0 || stack_bytes % PAGE != 0 || stack_top % PAGE != 0 || stack_top < stack_bytes {
+        return Err(-22);
+    }
     let stack_bottom = stack_top - stack_bytes;
     let pte_flags = PageFlags::PRESENT | PageFlags::WRITE | PageFlags::USER | PageFlags::NX;
     let mut mapped = 0usize;
@@ -15,15 +18,25 @@ pub fn alloc_user_stack(cr3: usize, stack_top: usize, stack_bytes: usize) -> Res
         let va = stack_bottom + i * PAGE;
         match crate::mm::pmm::alloc_page() {
             Some(pa) => {
-                <Arch as Paging>::map_page(cr3, va, pa, pte_flags);
+                // User stacks must not expose stale allocator contents.
+                unsafe { core::ptr::write_bytes(pa as *mut u8, 0, PAGE); }
+                if !<Arch as Paging>::map_page(cr3, va, pa, pte_flags) {
+                    crate::mm::pmm::free_page(pa);
+                    for j in 0..mapped {
+                        let rva = stack_bottom + j * PAGE;
+                        if let Some(old_pa) = <Arch as Paging>::unmap_page(cr3, rva) {
+                            crate::mm::pmm::free_page(old_pa);
+                        }
+                    }
+                    return Err(-12);
+                }
                 mapped += 1;
             },
             None => {
                 for j in 0..mapped {
                     let rva = stack_bottom + j * PAGE;
-                    if let Some(pa) = <Arch as Paging>::virt_to_phys(cr3, rva) {
-                        <Arch as Paging>::unmap_page(rva);
-                        crate::mm::pmm::free_page(pa);
+                    if let Some(old_pa) = <Arch as Paging>::unmap_page(cr3, rva) {
+                        crate::mm::pmm::free_page(old_pa);
                     }
                 }
                 return Err(-12);
