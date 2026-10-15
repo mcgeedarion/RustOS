@@ -236,7 +236,8 @@ pub fn syscall_setup() {
     unsafe {
         let efer = rdmsr(MSR_EFER);
         wrmsr(MSR_EFER, efer | 1);
-        wrmsr(MSR_STAR, 0x001B_0008u64 << 32);
+        // SYSRETQ computes CS=STAR[63:48]+16 (0x23) and SS=+8 (0x1B).
+        wrmsr(MSR_STAR, 0x0013_0008u64 << 32);
         wrmsr(MSR_LSTAR, syscall_asm_entry as u64);
         // FMASK: clear IF (bit 9), TF (bit 8), DF (bit 10), AC (bit 18), NT (bit 14),
         // IOPL.
