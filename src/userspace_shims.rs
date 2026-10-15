@@ -57,6 +57,12 @@ pub mod proc {
             Err(SpawnError::ExecutionUnavailable)
         }
 
+        /// Validate bounded ELF64 metadata in the diagnostic-only boot profile.
+        /// The return value indicates whether PT_INTERP is present.
+        pub fn validate_executable_elf(data: &[u8]) -> Result<bool, String> {
+            validate_elf64(data)
+        }
+
         /// Validate bounded ELF64 header/segment metadata, not executable mappings.
         fn validate_elf64(data: &[u8]) -> Result<bool, String> {
             if data.len() < 64 {
