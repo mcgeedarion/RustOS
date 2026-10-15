@@ -12,8 +12,8 @@
 //!   All other GPRs  zeroed for a clean ABI start state
 //!
 //! ## Segment selectors (from GDT / STAR MSR — see gdt.rs)
-//!   CS  ← 0x1B  (GDT[3] | RPL3 — 64-bit user code)
-//!   SS  ← 0x23  (GDT[4] | RPL3 — user data / stack)
+//!   CS  ← 0x23  (GDT[4] | RPL3 — 64-bit user code)
+//!   SS  ← 0x1B  (GDT[3] | RPL3 — user data / stack)
 //!
 //! ## Safety
 //! The caller must ensure:
