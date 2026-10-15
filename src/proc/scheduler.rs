@@ -1021,6 +1021,20 @@ pub fn wake_pid(pid: usize) {
     }
 }
 
+/// Block the current process and hand control to the scheduler.
+///
+/// A blocked syscall must save any restart state before calling this helper;
+/// callers resume through their architecture-specific saved user context.
+pub fn sleep_current() {
+    block_current();
+}
+
+/// Remove a process-table entry after its resources have been released.
+/// Callers must only reap tasks that are no longer runnable, normally zombies.
+pub fn remove_proc(pid: usize) {
+    proc_table::remove(pid);
+}
+
 pub fn suspend_current_until_child_exec(_child_pid: usize) {
     block_current();
 }
