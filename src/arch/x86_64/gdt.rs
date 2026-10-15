@@ -8,8 +8,8 @@
 //!    0    0x00       Null (required by architecture)
 //!    1    0x08       Kernel code  DPL=0, L=1 (64-bit code segment)
 //!    2    0x10       Kernel data  DPL=0, writable
-//!    3    0x18       User code    DPL=3, L=1  → SYSRET target CS  (0x1B|RPL3)
-//!    4    0x20       User data    DPL=3       → SYSRET target SS  (0x23|RPL3)
+//!    3    0x18       User data    DPL=3       → SYSRET target SS  (0x1B|RPL3)
+//!    4    0x20       User code    DPL=3, L=1  → SYSRET target CS  (0x23|RPL3)
 //!    5    0x28       TSS low  ─┐  16-byte (two-slot) system descriptor
 //!    6    0x30       TSS high ─┘
 //! ```
@@ -76,9 +76,9 @@ pub const SELECTOR_KERNEL_CS: u16 = 0x08;
 /// Kernel data segment selector (RPL=0).
 pub const SELECTOR_KERNEL_DS: u16 = 0x10;
 /// User code segment selector (RPL=3) — set on SYSRET.
-pub const SELECTOR_USER_CS: u16 = 0x1B;
+pub const SELECTOR_USER_CS: u16 = 0x23;
 /// User data segment selector (RPL=3) — set on SYSRET.
-pub const SELECTOR_USER_DS: u16 = 0x23;
+pub const SELECTOR_USER_DS: u16 = 0x1B;
 /// TSS selector (RPL=0).
 pub const SELECTOR_TSS: u16 = 0x28;
 
@@ -226,8 +226,8 @@ unsafe fn fill_gdt(gdt: &mut [u64; 7], tss_ptr: *const Tss) {
     gdt[0] = 0; // null
     gdt[1] = KCODE64; // 0x08 kernel CS
     gdt[2] = KDATA; // 0x10 kernel DS
-    gdt[3] = UCODE64; // 0x18 user CS
-    gdt[4] = UDATA; // 0x20 user DS
+    gdt[3] = UDATA; // 0x18 user DS
+    gdt[4] = UCODE64; // 0x20 user CS
     let tss_base = tss_ptr as u64;
     let tss_limit = (core::mem::size_of::<Tss>() - 1) as u32;
     let (lo, hi) = tss_descriptor(tss_base, tss_limit);
