@@ -60,15 +60,15 @@ pub fn enter<A: UserspaceBootArch>(boot_info: &'static BootInfo) -> ! {
     crate::serial_println!("initramfs: found /init ({} bytes)", init_elf.len());
     crate::boot_mark!("BOOT_INITRAMFS_LOADED");
 
-    match crate::exec::elf::validate_executable_elf(init_elf) {
-        Ok(entry) => {
+    match crate::proc::exec::validate_executable_elf(init_elf) {
+        Ok(has_interpreter) => {
             crate::serial_println!(
-                "userspace_boot: ELF metadata valid entry={:#x}; execution backend intentionally excluded",
-                entry
+                "userspace_boot: ELF metadata valid has_interpreter={}; execution backend intentionally excluded",
+                has_interpreter
             );
         }
         Err(error) => {
-            panic!("kernel: invalid /init ELF metadata: {:?}", error);
+            panic!("kernel: invalid /init ELF metadata: {}", error);
         }
     }
 
