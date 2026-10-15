@@ -9,6 +9,8 @@ use super::{sys_exit_group, sys_fork, sys_wait4, write_str};
 #[cfg(any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "riscv64"))]
 use core::ffi::c_int;
 
+const ENOENT: isize = -2;
+
 pub(super) fn run_tests() -> bool {
     let mut pass = true;
 
