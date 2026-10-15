@@ -124,6 +124,10 @@ unsafe fn sys_close(_fd: usize) -> isize {
     })
 }
 
+unsafe fn sys_lseek(_fd: usize, _offset: isize, _whence: usize) -> isize {
+    0
+}
+
 unsafe fn sys_read(fd: usize, buf: *mut u8, count: usize) -> isize {
     MOCK.with(|state| {
         let mut state = state.borrow_mut();
