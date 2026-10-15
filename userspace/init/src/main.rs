@@ -18,8 +18,9 @@
 #![no_std]
 #![no_main]
 
-extern crate raw_syscall;
 #![allow(clippy::missing_safety_doc)]
+
+extern crate raw_syscall;
 
 use core::arch::{asm, naked_asm};
 
