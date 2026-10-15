@@ -16,10 +16,10 @@
 //!
 //! ## Segment selector arithmetic
 //!
-//! `MSR_STAR = 0x001B_0008 << 32`
-//! - SYSCALL kernel CS  = STAR\[47:32\]       = 0x08  → GDT\[1\]
-//! - SYSRET  user   CS  = STAR\[63:48\] \| 3  = 0x1B  → GDT\[3\] + RPL3
-//! - SYSRET  user   SS  = STAR\[63:48\]+8\|3  = 0x23  → GDT\[4\] + RPL3
+//! `MSR_STAR = 0x0013_0008 << 32`
+//! - SYSCALL kernel CS = STAR[47:32] = 0x08; kernel SS = 0x10
+//! - SYSRETQ user CS = STAR[63:48] + 16 = 0x23, GDT[4] + RPL3
+//! - SYSRETQ user SS = STAR[63:48] + 8 = 0x1B, GDT[3] + RPL3
 //!
 //! ## Task State Segment
 //!
