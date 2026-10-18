@@ -162,7 +162,12 @@ pub fn read_sectors(ns: usize, lba: u64, count: u32, buf: &mut [u8]) -> Result<(
     if buf.len() < needed {
         return Err("buffer too small");
     }
-    if count == 0 || lba.checked_add(count as u64).filter(|end| *end <= info.sector_count).is_none() {
+    if count == 0
+        || lba
+            .checked_add(count as u64)
+            .filter(|end| *end <= info.sector_count)
+            .is_none()
+    {
         return Err("invalid sector range");
     }
     if needed > MAX_DMA_TRANSFER {
@@ -705,8 +710,14 @@ mod tests {
 
     #[test]
     fn namespace_lba_size_accepts_512_and_4096() {
-        assert_eq!(namespace_sector_size(&namespace_with_lba_format(0, 0, 9)), Some(512));
-        assert_eq!(namespace_sector_size(&namespace_with_lba_format(1, 1, 12)), Some(4096));
+        assert_eq!(
+            namespace_sector_size(&namespace_with_lba_format(0, 0, 9)),
+            Some(512)
+        );
+        assert_eq!(
+            namespace_sector_size(&namespace_with_lba_format(1, 1, 12)),
+            Some(4096)
+        );
     }
 
     #[test]
@@ -726,7 +737,10 @@ mod tests {
         #[cfg(target_pointer_width = "32")]
         assert!(transfer_len(u32::MAX, u32::MAX).is_err());
         #[cfg(target_pointer_width = "64")]
-        assert_eq!(transfer_len(u32::MAX, u32::MAX), Ok((u32::MAX as usize) * (u32::MAX as usize)));
+        assert_eq!(
+            transfer_len(u32::MAX, u32::MAX),
+            Ok((u32::MAX as usize) * (u32::MAX as usize))
+        );
     }
 }
 
