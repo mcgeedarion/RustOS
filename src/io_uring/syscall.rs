@@ -69,12 +69,12 @@ pub fn sys_io_uring_setup(entries: u32, params_va: usize) -> isize {
     }
 
     let mut params = IoUringParams::default();
-    if copy_from_user(params_va, unsafe {
+    if copy_from_user(unsafe {
         core::slice::from_raw_parts_mut(
             &mut params as *mut _ as *mut u8,
             core::mem::size_of::<IoUringParams>(),
         )
-    })
+    }, params_va)
     .is_err()
     {
         return -14;
