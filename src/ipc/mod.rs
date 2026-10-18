@@ -146,7 +146,7 @@ pub fn sys_ipc_recv(endpoint: u64, buf_va: usize, buf_len: usize) -> isize {
     };
 
     let n = msg.len().min(buf_len);
-    if crate::uaccess::copy_to_user(buf_va, msg.as_ptr(), n).is_err() {
+    if crate::uaccess::copy_to_user(buf_va, &msg[..n]).is_err() {
         return -14;
     }
     n as isize
@@ -163,7 +163,7 @@ pub fn sys_ipc_send(endpoint: u64, buf_va: usize, buf_len: usize) -> isize {
     }
 
     let mut msg = alloc::vec![0u8; buf_len];
-    if crate::uaccess::copy_from_user(msg.as_mut_ptr(), buf_va, buf_len).is_err() {
+    if crate::uaccess::copy_from_user(&mut msg, buf_va).is_err() {
         return -14;
     }
 
