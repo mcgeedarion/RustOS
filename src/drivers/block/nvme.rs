@@ -156,11 +156,11 @@ pub fn disk_info(idx: usize) -> Option<DiskInfo> {
 
 pub fn read_sectors(ns: usize, lba: u64, count: u32, buf: &mut [u8]) -> Result<(), &'static str> {
     let info = disk_info(ns).ok_or("invalid namespace")?;
-    let needed = count as usize * info.sector_size as usize;
+    let needed = (count as usize).checked_mul(info.sector_size as usize).ok_or("transfer size overflow")?;
     if buf.len() < needed {
         return Err("buffer too small");
     }
-    io_rw(ns as u32 + 1, lba, count, buf.as_mut_ptr() as u64, false)
+    io_rw(ns as u32 + 1, lba, count, info.sector_size, buf.as_mut_ptr() as u64, false)
 }
 
 pub fn write_sectors(ns: usize, lba: u64, count: u32, buf: &[u8]) -> Result<(), &'static str> {
@@ -169,7 +169,7 @@ pub fn write_sectors(ns: usize, lba: u64, count: u32, buf: &[u8]) -> Result<(), 
     if buf.len() < needed {
         return Err("buffer too small");
     }
-    io_rw(ns as u32 + 1, lba, count, buf.as_ptr() as u64, true)
+    io_rw(ns as u32 + 1, lba, count, info.sector_size, buf.as_ptr() as u64, true)
 }
 
 // ── BlockDev impl
@@ -430,10 +430,21 @@ unsafe fn _init(bar0: u64) {
     }
     let id_ns = core::slice::from_raw_parts(dma_pa as *const u8, 4096);
     let nsze = *(id_ns.as_ptr() as *const u64);
-    let flbas = id_ns[26] & 0x0F;
-    let lbaf_off = 128 + flbas as usize * 4;
+    let flbas = (id_ns[26] & 0x0F) as usize;
+    let nlbaf = id_ns[25] as usize;
+    if flbas > nl baf || flbas >= 16 {
+        log::error!("nvme: invalid namespace LBA format index");
+        return;
+    }
+    let lbaf_off = 128 + flbas * 4;
     let lbads = id_ns[lbaf_off + 2] as u32;
-    let sector_size = 1u32 << lbads;
+    let sector_size = match 1u32.checked_shl(lbads) {
+        Some(size @ (512 | 4096)) => size,
+        _ => {
+            log::error!("nvme: unsupported namespace logical block size");
+            return;
+        }
+    };
 
     // IDENTIFY CONTROLLER.
     core::ptr::write_bytes(dma_pa as *mut u8, 0, 4096);
@@ -461,14 +472,14 @@ unsafe fn _init(bar0: u64) {
 // ── IO path
 // ───────────────────────────────────────────────────────────────────
 
-fn io_rw(nsid: u32, lba: u64, count: u32, buf_phys: u64, write: bool) -> Result<(), &'static str> {
+fn io_rw(nsid: u32, lba: u64, count: u32, sector_size: u32, buf_phys: u64, write: bool) -> Result<(), &'static str> {
     if count == 0 {
         return Err("zero-length io");
     }
     if (buf_phys & 0xFFF) != 0 {
         return Err("buffer not page aligned");
     }
-    let byte_len = count as usize * 512;
+    let byte_len = (count as usize).checked_mul(sector_size as usize).ok_or("transfer size overflow")?;
     let cid = next_cid();
     let opcode = if write { IO_WRITE } else { IO_READ };
 
