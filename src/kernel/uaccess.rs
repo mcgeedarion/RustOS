@@ -659,7 +659,7 @@ pub fn copyout_str(user_addr: usize, s: &str, user_len: usize) -> UaccessResult<
     let to_copy = bytes.len().min(user_len.saturating_sub(1));
 
     if to_copy > 0 {
-        copy_to_user(user_addr, bytes.as_ptr(), to_copy)?;
+        copy_to_user(user_addr, &bytes[..to_copy])?;
     }
 
     // Write NUL terminator if there is room.
