@@ -34,9 +34,6 @@ const LANDLOCK_ACCESS_FS_TRUNCATE: u64 = 1 << 14;
 const ACCESS_FS_MASK: u64 = (1u64 << 16) - 1;
 
 #[repr(C)]
-unsafe impl crate::kernel::uaccess::UserPod for RulesetAttr {}
-unsafe impl crate::kernel::uaccess::UserPod for PathBeneathAttr {}
-
 #[derive(Clone, Copy, Default)]
 struct RulesetAttr {
     handled_access_fs: u64,
@@ -48,6 +45,9 @@ struct PathBeneathAttr {
     allowed_access: u64,
     parent_fd: i32,
 }
+
+unsafe impl crate::kernel::uaccess::UserPod for RulesetAttr {}
+unsafe impl crate::kernel::uaccess::UserPod for PathBeneathAttr {}
 
 #[derive(Clone, Copy, Default)]
 struct Ruleset {
