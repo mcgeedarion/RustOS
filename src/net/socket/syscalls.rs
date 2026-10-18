@@ -59,13 +59,13 @@ pub fn sys_sendmsg(fd: usize, msg_va: usize, _flags: u32) -> isize {
 
 pub fn sys_recvmsg(fd: usize, msg_va: usize, flags: u32) -> isize {
     let mut hdr = [0u8; 48];
-    copy_from_user(msg_va, &mut hdr);
+    copy_from_user(&mut hdr, msg_va);
     let iov_ptr = usize::from_ne_bytes(hdr[16..24].try_into().unwrap_or([0; 8]));
     let iov_len = usize::from_ne_bytes(hdr[24..32].try_into().unwrap_or([0; 8]));
     let mut total = 0isize;
     for i in 0..iov_len {
         let mut iov = [0u8; 16];
-        copy_from_user(iov_ptr + i * 16, &mut iov);
+        copy_from_user(&mut iov, iov_ptr + i * 16);
         let base = usize::from_ne_bytes(iov[0..8].try_into().unwrap_or([0; 8]));
         let len = usize::from_ne_bytes(iov[8..16].try_into().unwrap_or([0; 8]));
         let mut buf = alloc::vec![0u8; len];
