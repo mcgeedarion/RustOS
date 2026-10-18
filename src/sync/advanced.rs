@@ -195,6 +195,10 @@ impl<T> RwLock<T> {
 
     /// Try to acquire an exclusive write lock without blocking.
     pub fn try_write(&self) -> Option<RwLockWriteGuard<'_, T>> {
+        if self.write_waiters.load(Ordering::Acquire) != 0 {
+            return None;
+        }
+
         if self.state.compare_exchange(
             0,
             RWLOCK_WRITER,
@@ -482,6 +486,45 @@ mod tests {
 
         let r = rwlock.read();
         assert_eq!(*r, 100);
+    }
+
+    #[test]
+    fn test_rwlock_try_operations_respect_exclusivity() {
+        let rwlock = RwLock::new(7);
+
+        let read = rwlock.try_read().expect("uncontended read should succeed");
+        assert_eq!(*read, 7);
+        assert!(rwlock.try_write().is_none());
+        drop(read);
+
+        let mut write = rwlock.try_write().expect("uncontended write should succeed");
+        *write = 11;
+        assert!(rwlock.try_read().is_none());
+        assert!(rwlock.try_write().is_none());
+        drop(write);
+
+        assert_eq!(*rwlock.read(), 11);
+    }
+
+    #[test]
+    fn test_rwlock_serializes_concurrent_writers() {
+        let lock = std::sync::Arc::new(RwLock::new(0usize));
+        let workers: Vec<_> = (0..4)
+            .map(|_| {
+                let lock = std::sync::Arc::clone(&lock);
+                std::thread::spawn(move || {
+                    for _ in 0..1_000 {
+                        *lock.write() += 1;
+                    }
+                })
+            })
+            .collect();
+
+        for worker in workers {
+            worker.join().expect("writer thread should finish");
+        }
+
+        assert_eq!(*lock.read(), 4_000);
     }
 
     #[test]
