@@ -5,15 +5,14 @@
 //! user virtual addresses.
 //!
 //! # Safety contract
-//! All functions in this module assume they are called from a kernel context
-//! (after a syscall/trap entry) where the current address space is the user
-//! process's page table.  The caller must ensure that the user virtual address
-//! makes sense for the current task; these functions only guarantee that a
-//! fault will produce `EFAULT` rather than a kernel panic.
+//! Slice-based copy APIs prove the kernel-side buffer is valid. User addresses
+//! are validated against the current architecture's user range before access.
+//! AArch64 and RISC-V currently fail closed for data copies until architecture-
+//! specific fault recovery is implemented; do not treat those paths as usable.
 //!
 //! # Architecture notes
-//! * **aarch64** — ARM64 user access is controlled by PAN (Privileged Access Never).  The initial
-//!   AArch64 bring-up keeps this path explicit until exception-table fault fixups land.
+//! * **aarch64** — data copies fail closed until PAN management and exception-table fault fixups land.
+//! * **riscv64** — data copies fail closed until SUM management and page-fault fixups land.
 //! * **x86_64** — SMAP (`CR4.SMAP`) is assumed to be enabled.  Every access bracket wraps the copy
 //!   loop between `STAC` / `CLAC` to temporarily allow supervisor access to user pages.  SMEP
 //!   prevents execution from user pages regardless.
@@ -77,9 +76,8 @@ pub fn validate_user_ptr(addr: usize, len: usize) -> bool {
 
 /// Executes `f` inside an architecture-specific "user access window".
 ///
-/// On aarch64 this is controlled by PAN (Privileged Access Never).
-/// On x86_64 this is a `STAC … CLAC` bracket (enables supervisor access to
-/// user pages when `CR4.SMAP` is set).
+/// On x86_64 this is a `STAC … CLAC` bracket with page-fault recovery.
+/// AArch64 and RISC-V currently return `EFAULT` without executing the closure.
 ///
 /// The closure `f` is expected to do raw pointer reads/writes.  If a page
 /// fault occurs inside `f` the architecture's trap handler will set a
