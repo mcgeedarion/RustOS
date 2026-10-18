@@ -80,7 +80,7 @@ impl<T> SpinLock<T> {
         if serving == next {
             if self
                 .next_ticket
-                .compare_exchange(next, next + 1, Ordering::AcqRel, Ordering::Relaxed)
+                .compare_exchange(next, next.wrapping_add(1), Ordering::AcqRel, Ordering::Relaxed)
                 .is_ok()
             {
                 return Some(SpinLockGuard { lock: self });
