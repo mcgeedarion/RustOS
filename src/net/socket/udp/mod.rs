@@ -36,7 +36,9 @@ pub fn sys_sendto(
     _dest_len: u32,
 ) -> isize {
     let mut buf = alloc::vec![0u8; len];
-    copy_from_user(&mut buf, buf_va);
+    if copy_from_user(&mut buf, buf_va).is_err() {
+        return -14;
+    }
 
     let (dst_ip, dst_port) = {
         let sockets = SOCKETS.lock();
@@ -47,7 +49,10 @@ pub fn sys_sendto(
             Some(SockAddr::V4 { ip, port }) => (ip, port),
             _ => {
                 drop(sockets);
-                read_sockaddr_in(dest_va).unwrap_or((0, 0))
+                let Some((ip, port)) = read_sockaddr_in(dest_va) else {
+                    return -14;
+                };
+                (ip, port)
             },
         }
     };
@@ -99,13 +104,19 @@ pub fn sys_recvfrom(
     let n = data.len().min(len);
     let mut out = alloc::vec![0u8; n];
     out.copy_from_slice(&data[..n]);
-    copy_to_user(buf_va, &out);
+    if copy_to_user(buf_va, &out).is_err() {
+        return -14;
+    }
     if src_addr_va != 0 {
-        write_sockaddr_in(src_addr_va, src_ip, src_port);
+        if !write_sockaddr_in(src_addr_va, src_ip, src_port) {
+            return -14;
+        }
     }
     if src_len_va != 0 {
         let sz: u32 = 16;
-        copy_to_user(src_len_va, &sz.to_ne_bytes());
+        if copy_to_user(src_len_va, &sz.to_ne_bytes()).is_err() {
+            return -14;
+        }
     }
     n as isize
 }
