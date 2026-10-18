@@ -119,7 +119,7 @@ pub fn sys_wait4(target_pid: isize, wstatus_va: usize, options: i32, rusage_va: 
                         -1 => true,
                         0 => p.pgid as usize == caller_pgid,
                         n if n > 0 => p.pid as usize == n as usize,
-                        n => n.checked_neg().map(|group| p.pgid as usize == group as usize).unwrap_or(false),
+                        n => checked_wait_group(n).map(|group| p.pgid as usize == group).unwrap_or(false),
                     }
                 })
                 .map(|p| p.pid as usize)
@@ -367,6 +367,24 @@ pub fn sys_waitid(idtype: i32, id: i32, infop: usize, options: i32) -> isize {
         if signal::has_pending_signal(caller) {
             return -4; // EINTR
         }
+    }
+}
+
+#[inline]
+fn checked_wait_group(selector: isize) -> Option<usize> {
+    selector.checked_neg().map(|group| group as usize)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::checked_wait_group;
+
+    #[test]
+    fn wait_group_selector_handles_signed_boundaries() {
+        assert_eq!(checked_wait_group(-1), Some(1));
+        assert_eq!(checked_wait_group(-42), Some(42));
+        assert_eq!(checked_wait_group(isize::MIN), None);
+        assert_eq!(checked_wait_group(0), Some(0));
     }
 }
 
