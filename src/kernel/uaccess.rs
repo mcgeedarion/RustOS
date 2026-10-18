@@ -273,7 +273,12 @@ pub fn copy_to_user(dst: usize, src: &[u8]) -> UaccessResult {
 /// # Safety
 /// For nonzero len, dst must point to len writable kernel bytes. src must be a
 /// user virtual address in the current task's address space.
-pub unsafe fn copy_from_user_raw_result(dst: *mut u8, src: usize, len: usize) -> UaccessResult {
+pub unsafe fn copy_from_user_raw_result(
+    dst: *mut u8,
+    src: usize,
+    len: usize,
+) -> UaccessResult {
+    // SAFETY: the caller guarantees the kernel destination is valid.
     unsafe { copy_from_user_bytes(dst, src, len) }
 }
 
@@ -282,7 +287,12 @@ pub unsafe fn copy_from_user_raw_result(dst: *mut u8, src: usize, len: usize) ->
 /// # Safety
 /// For nonzero len, src must point to len readable kernel bytes. dst must be a
 /// user virtual address in the current task's address space.
-pub unsafe fn copy_to_user_raw_result(dst: usize, src: *const u8, len: usize) -> UaccessResult {
+pub unsafe fn copy_to_user_raw_result(
+    dst: usize,
+    src: *const u8,
+    len: usize,
+) -> UaccessResult {
+    // SAFETY: the caller guarantees the kernel source is valid.
     unsafe { copy_to_user_bytes(dst, src, len) }
 }
 
@@ -293,6 +303,7 @@ pub unsafe fn copy_to_user_raw_result(dst: usize, src: *const u8, len: usize) ->
 /// For nonzero len, dst must point to len writable kernel bytes and src must
 /// be a user virtual address in the current task's address space.
 pub unsafe fn copy_from_user_raw(dst: *mut u8, src: *const u8, len: usize) -> usize {
+    // SAFETY: guaranteed by this function's caller contract.
     if unsafe { copy_from_user_bytes(dst, src as usize, len) }.is_ok() {
         len
     } else {
@@ -307,6 +318,7 @@ pub unsafe fn copy_from_user_raw(dst: *mut u8, src: *const u8, len: usize) -> us
 /// For nonzero len, src must point to len readable kernel bytes and dst must
 /// be a user virtual address in the current task's address space.
 pub unsafe fn copy_to_user_raw(dst: *mut u8, src: *const u8, len: usize) -> usize {
+    // SAFETY: guaranteed by this function's caller contract.
     if unsafe { copy_to_user_bytes(dst as usize, src, len) }.is_ok() {
         len
     } else {
@@ -573,7 +585,10 @@ impl<T: UserPod> UserSlice<T> {
             .len
             .checked_mul(mem::size_of::<T>())
             .ok_or(UaccessError::Fault)?;
-        if unsafe { copy_from_user_raw(dst.as_mut_ptr() as *mut u8, self.base as *const u8, byte_len) } == byte_len {
+        if unsafe {
+            copy_from_user_raw(dst.as_mut_ptr() as *mut u8, self.base as *const u8, byte_len)
+        } == byte_len
+        {
             Ok(())
         } else {
             Err(UaccessError::Fault)
@@ -591,7 +606,10 @@ impl<T: UserPod> UserSlice<T> {
             .len
             .checked_mul(mem::size_of::<T>())
             .ok_or(UaccessError::Fault)?;
-        if unsafe { copy_to_user_raw(self.base as *mut u8, src.as_ptr() as *const u8, byte_len) } == byte_len {
+        if unsafe {
+            copy_to_user_raw(self.base as *mut u8, src.as_ptr() as *const u8, byte_len)
+        } == byte_len
+        {
             Ok(())
         } else {
             Err(UaccessError::Fault)
@@ -723,7 +741,10 @@ mod tests {
     #[test]
     fn invalid_user_ranges_return_fault_without_dereferencing() {
         let mut byte = [0u8; 1];
-        assert_eq!(copy_from_user(&mut byte, USER_ADDR_MAX), Err(UaccessError::Fault));
+        assert_eq!(
+            copy_from_user(&mut byte, USER_ADDR_MAX),
+            Err(UaccessError::Fault)
+        );
         assert_eq!(copy_to_user(USER_ADDR_MAX, &[1]), Err(UaccessError::Fault));
     }
 
