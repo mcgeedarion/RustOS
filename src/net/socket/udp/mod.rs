@@ -36,7 +36,7 @@ pub fn sys_sendto(
     _dest_len: u32,
 ) -> isize {
     let mut buf = alloc::vec![0u8; len];
-    copy_from_user(buf_va, &mut buf);
+    copy_from_user(&mut buf, buf_va);
 
     let (dst_ip, dst_port) = {
         let sockets = SOCKETS.lock();
