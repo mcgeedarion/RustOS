@@ -346,7 +346,10 @@ impl_user_pod!(u8, i8, u16, i16, u32, i32, u64, i64, u128, i128, usize, isize, f
 /// let fd: u32 = get_user(user_ptr)?;
 /// ```
 pub fn get_user<T: UserPod>(user_addr: usize) -> UaccessResult<T> {
-    if user_addr == 0 || user_addr % mem::align_of::<T>() != 0 || !user_access_ok(user_addr, mem::size_of::<T>()) {
+    if user_addr == 0
+        || user_addr % mem::align_of::<T>() != 0
+        || !user_access_ok(user_addr, mem::size_of::<T>())
+    {
         return Err(UaccessError::Fault);
     }
 
