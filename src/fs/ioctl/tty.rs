@@ -23,7 +23,7 @@ pub fn tty_ioctl(fd: usize, req: usize, arg: usize) -> isize {
         },
         TIOCSPGRP => {
             let mut buf = [0u8; 4];
-            copy_from_user(arg, &mut buf);
+            copy_from_user(&mut buf, arg);
 
             let pgid = u32::from_ne_bytes(buf) as usize;
             crate::drivers::platform::tty::set_foreground_pgid(pgid)
