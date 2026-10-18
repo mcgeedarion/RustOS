@@ -274,7 +274,7 @@ pub fn copy_to_user(dst: usize, src: &[u8]) -> UaccessResult {
 /// For nonzero len, dst must point to len writable kernel bytes. src must be a
 /// user virtual address in the current task's address space.
 pub unsafe fn copy_from_user_raw_result(dst: *mut u8, src: usize, len: usize) -> UaccessResult {
-    copy_from_user_bytes(dst, src, len)
+    unsafe { copy_from_user_bytes(dst, src, len) }
 }
 
 /// Raw-pointer user-copy variant preserving the Result contract.
@@ -283,7 +283,7 @@ pub unsafe fn copy_from_user_raw_result(dst: *mut u8, src: usize, len: usize) ->
 /// For nonzero len, src must point to len readable kernel bytes. dst must be a
 /// user virtual address in the current task's address space.
 pub unsafe fn copy_to_user_raw_result(dst: usize, src: *const u8, len: usize) -> UaccessResult {
-    copy_to_user_bytes(dst, src, len)
+    unsafe { copy_to_user_bytes(dst, src, len) }
 }
 
 /// Raw-pointer compatibility entry point for callers that can uphold the
@@ -326,7 +326,7 @@ impl_user_pod!(u8, i8, u16, i16, u32, i32, u64, i64, u128, i128, usize, isize, f
 /// let fd: u32 = get_user(user_ptr)?;
 /// ```
 pub fn get_user<T: UserPod>(user_addr: usize) -> UaccessResult<T> {
-    if user_addr == 0 || !user_access_ok(user_addr, mem::size_of::<T>()) {
+    if user_addr == 0 || user_addr % mem::align_of::<T>() != 0 || !user_access_ok(user_addr, mem::size_of::<T>()) {
         return Err(UaccessError::Fault);
     }
 
@@ -532,10 +532,8 @@ impl<T: UserPod> UserSlice<T> {
         if index >= self.len {
             return Err(UaccessError::Fault);
         }
-        let addr = self
-            .base
-            .checked_add(index * mem::size_of::<T>())
-            .ok_or(UaccessError::Fault)?;
+        let offset = index.checked_mul(mem::size_of::<T>()).ok_or(UaccessError::Fault)?;
+        let addr = self.base.checked_add(offset).ok_or(UaccessError::Fault)?;
         get_user::<T>(addr)
     }
 
@@ -588,7 +586,8 @@ impl<T: UserPod> UserSlice<T> {
         if start.checked_add(new_len)? > self.len {
             return None;
         }
-        let new_base = self.base.checked_add(start * mem::size_of::<T>())?;
+        let offset = start.checked_mul(mem::size_of::<T>())?;
+        let new_base = self.base.checked_add(offset)?;
         Some(Self::new(new_base, new_len))
     }
 }
@@ -695,6 +694,24 @@ pub fn clear_user(dst: usize, len: usize) -> UaccessResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zero_length_slice_copies_do_not_access_user_memory() {
+        assert!(copy_from_user(&mut [], 0).is_ok());
+        assert!(copy_to_user(0, &[]).is_ok());
+    }
+
+    #[test]
+    fn typed_user_access_rejects_misalignment() {
+        assert_eq!(get_user::<u32>(0x1001), Err(UaccessError::Fault));
+        assert_eq!(put_user::<u32>(0x1001, 1), Err(UaccessError::Fault));
+    }
+
+    #[test]
+    fn user_slice_arithmetic_rejects_overflow() {
+        let s: UserSlice<u64> = UserSlice::new(usize::MAX - 7, usize::MAX);
+        assert!(s.sub_slice(usize::MAX, 1).is_none());
+    }
 
     #[test]
     fn access_ok_basic() {
