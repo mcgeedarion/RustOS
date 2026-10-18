@@ -93,7 +93,7 @@ fn read_loff(va: usize) -> Option<i64> {
         return None;
     }
     let mut buf = [0u8; 8];
-    crate::uaccess::copy_from_user(va, &mut buf).ok()?;
+    crate::uaccess::copy_from_user(&mut buf, va).ok()?;
     Some(i64::from_ne_bytes(buf))
 }
 
