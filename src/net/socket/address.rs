@@ -12,7 +12,7 @@ pub fn next_ephemeral() -> u16 {
 
 pub fn read_sockaddr_in(va: usize) -> Option<(u16, u32)> {
     let mut buf = [0u8; 8];
-    copy_from_user(&mut buf, va);
+    copy_from_user(&mut buf, va).ok()?;
     if u16::from_be_bytes([buf[0], buf[1]]) != 2 {
         return None;
     }
@@ -35,20 +35,20 @@ pub fn read_sockaddr_in6(va: usize) -> Option<(u16, ipv6::Addr6, u32, u32)> {
     Some((port, addr, flowinfo, scope_id))
 }
 
-pub fn write_sockaddr_in(va: usize, ip: u32, port: u16) {
+pub fn write_sockaddr_in(va: usize, ip: u32, port: u16) -> bool {
     if va == 0 {
-        return;
+        return true;
     }
     let mut buf = [0u8; 16];
     buf[0..2].copy_from_slice(&2u16.to_be_bytes());
     buf[2..4].copy_from_slice(&port.to_be_bytes());
     buf[4..8].copy_from_slice(&ip.to_be_bytes());
-    copy_to_user(va, &buf);
+    copy_to_user(va, &buf).is_ok()
 }
 
-pub fn write_sockaddr_in6(va: usize, ip: &ipv6::Addr6, port: u16, flowinfo: u32, scope_id: u32) {
+pub fn write_sockaddr_in6(va: usize, ip: &ipv6::Addr6, port: u16, flowinfo: u32, scope_id: u32) -> bool {
     if va == 0 {
-        return;
+        return true;
     }
     let mut buf = [0u8; 28];
     buf[0..2].copy_from_slice(&10u16.to_be_bytes());
@@ -56,5 +56,5 @@ pub fn write_sockaddr_in6(va: usize, ip: &ipv6::Addr6, port: u16, flowinfo: u32,
     buf[4..8].copy_from_slice(&flowinfo.to_be_bytes());
     buf[8..24].copy_from_slice(ip);
     buf[24..28].copy_from_slice(&scope_id.to_be_bytes());
-    copy_to_user(va, &buf);
+    copy_to_user(va, &buf).is_ok()
 }
