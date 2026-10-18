@@ -214,3 +214,29 @@ The following files received focused inspection. This is not a claim that every 
 3. Run the documented formatting, clippy, build matrix, focused regressions, fuzz smoke, and QEMU tests. Record each command, target/profile, commit SHA, and result.
 4. For unsafe code and hardware paths, add tests for invalid inputs, overflow, lifecycle cleanup, concurrency, and architecture-specific ABI behavior.
 5. Update each file's coverage status and append findings rather than assuming unlisted files are clean.
+
+
+## Remediation status (2026-10-18)
+
+The initial findings above were addressed on `main` with the following status. This section records code changes, not a claim that validation passed.
+
+| Finding | Status | Remediation |
+|---|---|---|
+| RUSTOS-AUDIT-001 | Fixed at API boundary | Replaced safe raw-pointer copy entry points with slice-based `copy_from_user` / `copy_to_user`. Raw-pointer variants are explicitly `unsafe` and carry caller contracts. Updated syscall call sites to use slices where practical. |
+| RUSTOS-AUDIT-002 | Fixed at API boundary | Added an unsafe `UserPod` contract for all-bit-pattern-valid types. `get_user`, `put_user`, `UserPtr`, `UserSlice`, BPF attributes, and Landlock attributes are constrained to that contract. Typed reads and writes reject misalignment. |
+| RUSTOS-AUDIT-003 | Fixed with bounded staging | NVMe reads/writes now stage through a contiguous, page-aligned 2 MiB DMA allocation instead of passing arbitrary caller pointers to the controller. CPU accesses use architecture-specific physical-to-virtual mappings. Requests beyond the staging capacity or namespace bounds are rejected. |
+| RUSTOS-AUDIT-004 | Fixed | NVMe transfer byte counts use the selected namespace logical block size and checked arithmetic. |
+| RUSTOS-AUDIT-005 | Fixed | Namespace LBA format index/count and shift are validated. Only supported 512-byte and 4096-byte logical blocks are accepted. Pure regression tests cover valid and invalid metadata. |
+| RUSTOS-AUDIT-006 | Fixed in code, target test pending | Removed compiler options that falsely declared IRQ-mask assembly to preserve memory/flags. Added lock tests and a bare-metal AArch64 nested IRQ-save regression test. |
+| RUSTOS-AUDIT-007 | Mitigated by disabling unsupported behavior | RISC-V no longer redirects execution to a signal handler without a restorable frame. Signal delivery remains disabled until signal-frame, restorer, and `rt_sigreturn` support are implemented together. |
+| RUSTOS-AUDIT-008 | Fixed | Corrected ignore patterns and removed tracked `target/`, `target-xtask/`, `boot-x86_64.img`, and `rustup-init.exe` artifacts from the repository. |
+| RUSTOS-AUDIT-009 | Mitigated fail-closed | AArch64 user-memory copies now return `EFAULT` until PAN handling and exception fault fixups exist. RISC-V copies also fail closed. This prevents the prior unsafe path but means these architectures do not yet have functional syscall user-copy support. |
+| RUSTOS-AUDIT-010 | Fixed in source and CI configuration | Added the Sv39 user-space ceiling and added RISC-V UEFI to the build matrix. The result of that CI build is still required before calling the architecture build verified. |
+| RUSTOS-AUDIT-011 | Fixed | `wait4` rejects `isize::MIN` with `EINVAL`, uses checked negative-selector conversion, and includes selector boundary regression tests. |
+
+### Validation status
+
+- No successful formatting, clippy, architecture build, QEMU, or hardware NVMe run has been confirmed as part of this remediation yet.
+- GitHub Actions runs triggered by the commits are pending or queued at the time of this update.
+- Findings 007 and 009 are explicit safe-disable mitigations, not complete feature implementations.
+- This remains an initial focused audit of the listed findings, not a line-by-line certification of all 470 Rust source files or the full repository.
