@@ -157,7 +157,7 @@ pub fn sys_clock_gettime(clockid: u32, timespec_va: usize) -> isize {
     let mut buf = [0u8; 16];
     buf[0..8].copy_from_slice(&ts.tv_sec.to_le_bytes());
     buf[8..16].copy_from_slice(&(ts.tv_nsec as i64).to_le_bytes());
-    if !copy_to_user(timespec_va, &buf) {
+    if copy_to_user(timespec_va, &buf).is_err() {
         return -14;
     }
     0
