@@ -16,7 +16,7 @@ pub fn pipe_fionread(fd: usize, arg: usize) -> isize {
 
 pub fn set_nonblock(fd: usize, arg: usize) -> isize {
     let mut buf = [0u8; 4];
-    crate::uaccess::copy_from_user(arg, &mut buf);
+    crate::uaccess::copy_from_user(&mut buf, arg);
     let v = u32::from_ne_bytes(buf);
     crate::fs::vfs::vfs_set_nonblock(fd, v != 0);
     0
