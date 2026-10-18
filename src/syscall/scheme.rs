@@ -117,7 +117,7 @@ fn copy_scheme_name(name_ptr: usize, name_len: usize) -> Result<String, SchemeSy
         return Err(SchemeSysError::BadAddress);
     }
     let mut bytes = alloc::vec![0u8; name_len];
-    crate::uaccess::copy_from_user(bytes.as_mut_ptr(), name_ptr, name_len)
+    crate::uaccess::copy_from_user(&mut bytes, name_ptr)
         .map_err(|_| SchemeSysError::BadAddress)?;
     core::str::from_utf8(&bytes)
         .map(String::from)
