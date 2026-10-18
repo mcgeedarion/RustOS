@@ -124,11 +124,11 @@ fn copy_from_user<T: Copy + Default>(addr: usize) -> Result<T, isize> {
         return Err(EFAULT);
     }
     let mut value = T::default();
-    crate::uaccess::copy_from_user(
+    unsafe { crate::uaccess::copy_from_user_raw_result(
         &mut value as *mut T as *mut u8,
         addr,
         core::mem::size_of::<T>(),
-    )
+    ) }
     .map_err(|_| EFAULT)?;
     Ok(value)
 }
