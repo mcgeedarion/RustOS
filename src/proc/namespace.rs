@@ -199,7 +199,7 @@ pub fn sys_sethostname(name_va: usize, len: usize) -> isize {
         return -22;
     } // EINVAL
     let mut buf = alloc::vec![0u8; len];
-    if copy_from_user(name_va, &mut buf).is_err() {
+    if copy_from_user(&mut buf, name_va).is_err() {
         return -14;
     } // EFAULT
     if buf.contains(&0) {
