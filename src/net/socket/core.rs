@@ -61,7 +61,7 @@ pub fn sys_bind(fd: usize, addr_va: usize, _addrlen: u32) -> isize {
     };
     if domain == AF_UNIX {
         let mut path_buf = [0u8; 108];
-        copy_from_user(addr_va + 2, &mut path_buf);
+        copy_from_user(&mut path_buf, addr_va + 2);
         let end = path_buf.iter().position(|&b| b == 0).unwrap_or(108);
         let path = String::from_utf8_lossy(&path_buf[..end]).into_owned();
         return unix_bind(fd, path);
