@@ -207,6 +207,27 @@ fn irq_flags_and_disable() -> bool {
         );
         flags & (1 << 9) != 0
     }
+
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        let daif: usize;
+        core::arch::asm!(
+            "mrs {daif}, daif",
+            "msr daifset, #2",
+            daif = out(reg) daif,
+            options(nostack, nomem)
+        );
+        // DAIF.I (bit 7) is set when IRQs are masked.
+        daif & (1 << 7) == 0
+    }
+
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    {
+        // This lock's IRQ masking is currently implemented for the supported
+        // x86_64 and AArch64 targets. Keep other targets buildable without
+        // claiming that local interrupts were disabled.
+        false
+    }
 }
 
 #[inline]
@@ -214,5 +235,10 @@ fn irq_enable() {
     #[cfg(target_arch = "x86_64")]
     unsafe {
         core::arch::asm!("sti", options(nostack, preserves_flags));
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        core::arch::asm!("msr daifclr, #2", options(nostack, nomem));
     }
 }
