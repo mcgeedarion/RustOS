@@ -61,7 +61,9 @@ pub fn sys_bind(fd: usize, addr_va: usize, _addrlen: u32) -> isize {
     };
     if domain == AF_UNIX {
         let mut path_buf = [0u8; 108];
-        copy_from_user(&mut path_buf, addr_va + 2);
+        if copy_from_user(&mut path_buf, addr_va + 2).is_err() {
+            return -14;
+        }
         let end = path_buf.iter().position(|&b| b == 0).unwrap_or(108);
         let path = String::from_utf8_lossy(&path_buf[..end]).into_owned();
         return unix_bind(fd, path);
@@ -142,11 +144,15 @@ pub fn sys_accept(fd: usize, addr_va: usize, addrlen_va: usize) -> isize {
     }
     let (peer_ip, peer_port) = tcp::peer_addr(new_id as u64).unwrap_or((0, 0));
     if addr_va != 0 {
-        write_sockaddr_in(addr_va, peer_ip, peer_port);
+        if !write_sockaddr_in(addr_va, peer_ip, peer_port) {
+            return -14;
+        }
     }
     if addrlen_va != 0 {
         let sz: u32 = 16;
-        copy_to_user(addrlen_va, &sz.to_ne_bytes());
+        if copy_to_user(addrlen_va, &sz.to_ne_bytes()).is_err() {
+            return -14;
+        }
     }
     let mut sockets = SOCKETS.lock();
     for (i, slot) in sockets.iter_mut().enumerate() {
@@ -208,10 +214,14 @@ pub fn sys_getsockname(fd: usize, addr_va: usize, addrlen_va: usize) -> isize {
     match &s.local {
         Some(SockAddr::V4 { ip, port }) => {
             drop(sockets);
-            write_sockaddr_in(addr_va, *ip, *port);
+            if !write_sockaddr_in(addr_va, *ip, *port) {
+                return -14;
+            }
             if addrlen_va != 0 {
                 let sz: u32 = 16;
-                copy_to_user(addrlen_va, &sz.to_ne_bytes());
+                if copy_to_user(addrlen_va, &sz.to_ne_bytes()).is_err() {
+                    return -14;
+                }
             }
         },
         Some(SockAddr::V6 {
@@ -221,7 +231,9 @@ pub fn sys_getsockname(fd: usize, addr_va: usize, addrlen_va: usize) -> isize {
             scope_id,
         }) => {
             drop(sockets);
-            write_sockaddr_in6(addr_va, ip, *port, *flowinfo, *scope_id);
+            if !write_sockaddr_in6(addr_va, ip, *port, *flowinfo, *scope_id) {
+                return -14;
+            }
             if addrlen_va != 0 {
                 let sz: u32 = 28;
                 copy_to_user(addrlen_va, &sz.to_ne_bytes());
