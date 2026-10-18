@@ -1,1 +1,7 @@
-(docs/M3_M5_ROADMAP.md)
+# Cargo build artifacts
+/target/
+/target-xtask/
+
+# Editor and OS metadata
+.DS_Store
+*.swp
