@@ -100,6 +100,9 @@ pub fn sys_waitpid(target_pid: isize, wstatus_va: usize, options: i32) -> isize 
 }
 
 pub fn sys_wait4(target_pid: isize, wstatus_va: usize, options: i32, rusage_va: usize) -> isize {
+    if target_pid == isize::MIN {
+        return -22; // EINVAL: absolute process-group selector is not representable.
+    }
     let caller = scheduler::current_pid();
     let caller_pgid = scheduler::with_proc(caller, |p| p.pgid).unwrap_or(caller);
 
