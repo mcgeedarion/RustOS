@@ -138,7 +138,7 @@ pub fn sys_io_uring_setup(entries: u32, params_va: usize) -> isize {
             core::mem::size_of::<IoUringParams>(),
         )
     };
-    if !copy_to_user(params_va, params_bytes) {
+    if copy_to_user(params_va, params_bytes).is_err() {
         ring::free_ring(ring_idx);
         crate::fs::vfs::close_fd(fd);
         return -14;
