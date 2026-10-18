@@ -4,11 +4,11 @@ RustOS is an experimental Rust operating-system kernel and workspace. The curren
 
 ## Current state
 
-- **Default Cargo feature set:** `full_kernel`, which expands to `uefi_boot` and `userspace_boot` in `Cargo.toml`.
+- **Default Cargo feature set:** `full_kernel`, which expands to `uefi_boot` in `Cargo.toml`. It does not enable `userspace_boot`.
 - **Supported validation path:** use `cargo xtask ...` commands instead of raw Cargo so target triples, features, initrd embedding, ESP staging, and QEMU smoke markers stay consistent.
 - **Primary architecture:** `x86_64` UEFI.
 - **Secondary architecture:** `aarch64` UEFI/bare-metal bring-up.
-- **Boot profiles:** `boot_minimal` remains the lean firmware-handoff and idle-loop path; `userspace_boot` remains a transitional handoff profile with `userspace_shims`.
+- **Boot profiles:** `boot_minimal` is the lean firmware-handoff and idle-loop path; `userspace_boot` is a diagnostic profile that validates initramfs/ELF inputs but does not execute userspace programs.
 - **Full kernel graph:** MM, VFS/filesystems, process, syscall, IPC, networking, security, driver, debug, and test modules are present for integration, but many subsystems remain partial or experimental unless documented otherwise in `docs/status.md`.
 
 ## Repository layout
@@ -47,6 +47,8 @@ cargo xtask check --arch x86_64
 cargo xtask smoke --arch x86_64
 ```
 
+These commands validate the selected build and smoke-boot contract. A successful build or boot marker does **not** establish end-to-end userspace execution; see `docs/acceptance-criteria.md`.
+
 Useful commands:
 
 | Command | Description |
@@ -55,7 +57,7 @@ Useful commands:
 | `cargo xtask check --arch x86_64` | Type-check the canonical kernel target/profile. |
 | `cargo xtask image --arch x86_64` | Build and stage a UEFI ESP disk image. |
 | `cargo xtask run --arch x86_64` | Build, image, and boot under QEMU. |
-| `cargo xtask smoke --arch x86_64` | Boot under QEMU and require a serial success marker. |
+| `cargo xtask smoke --arch x86_64` | Boot under QEMU and require the configured serial success contract. |
 | `cargo xtask debug --arch x86_64` | Launch QEMU with a GDB server on `tcp::1234`. |
 | `cargo xtask build-init --arch x86_64` | Build early userspace `/init` and pack `initramfs.cpio`. |
 | `cargo xtask test` | Run host-side Rust tests. |
@@ -69,18 +71,18 @@ Use `cargo xtask help` for the full command reference.
 
 | Feature/profile | Purpose |
 | --- | --- |
-| `full_kernel` | Default feature; currently expands to `uefi_boot` and `userspace_boot`. |
-| `uefi_boot` | Build as a UEFI loader/application and enable `boot_minimal`. |
+| `full_kernel` | Default feature; expands to `uefi_boot` and selects the full subsystem graph because neither slim profile is enabled. |
+| `uefi_boot` | Build as a UEFI loader/application; does not enable either slim subsystem profile by itself. |
 | `boot_minimal` | Firmware handoff, `BootInfo`, early console, boot marker, and idle loop. |
-| `userspace_boot` | Transitional userspace handoff with initramfs support and thin fs/proc shims. |
-| `release-boot` | Size-oriented boot profile/feature for lean artifacts. |
+| `userspace_boot` | Diagnostic profile with initramfs lookup and ELF validation. It reports execution as unavailable and excludes the full MM/VFS/scheduler graph. |
+| `release-boot` | Size-oriented build profile for lean artifacts. |
 | `kmtest` | Optional in-kernel test harness. |
 | `fault-inject` | Compile-time fault-injection hooks for selected PMM, VMM, and syscall paths. |
 | `debug`, `gdbstub`, `trace` | Debugging, GDB remote serial protocol, and trace-drain support. |
 | `boot_debug` | Verbose boot logging gate; keep disabled for timing-sensitive smoke/perf runs. |
 | `syscall-trace` | Optional per-syscall counters and hardware-cycle timing. |
 
-Examples:
+The slim profiles are selected explicitly and should be tested independently:
 
 ```sh
 cargo xtask build --arch x86_64 --profile release-boot
@@ -97,11 +99,13 @@ Build early userspace and pack an initramfs:
 cargo xtask build-init --arch x86_64
 ```
 
-Boot with the userspace handoff path and initramfs:
+Boot with the diagnostic userspace handoff path and initramfs:
 
 ```sh
 cargo xtask run --arch x86_64 --features userspace_boot --initrd
 ```
+
+The diagnostic profile validates the archive and ELF metadata. It does not execute `/init`; full userspace execution remains blocked pending the process/address-space/scheduler integration and end-to-end QEMU acceptance gate.
 
 ## Documentation map
 
