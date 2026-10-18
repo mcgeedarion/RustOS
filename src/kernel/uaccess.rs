@@ -252,11 +252,7 @@ mod arch_x86_64 {
 ///
 /// # Panics
 /// Never panics; all error conditions are returned via `Result`.
-pub unsafe fn copy_from_user(dst: *mut u8, src: usize, len: usize) -> UaccessResult {
-    // SAFETY: caller guarantees dst points to len writable kernel bytes.
-    if len != 0 && dst.is_null() {
-        return Err(UaccessError::Fault);
-    }
+pub fn copy_from_user(dst: *mut u8, src: usize, len: usize) -> UaccessResult {
     if len == 0 {
         return Ok(());
     }
@@ -293,11 +289,7 @@ pub unsafe fn copy_from_user(dst: *mut u8, src: usize, len: usize) -> UaccessRes
 /// * `dst` is NULL.
 /// * `[dst, dst + len)` extends outside user virtual address space.
 /// * A hardware page fault occurs (e.g. unmapped or read-only page).
-pub unsafe fn copy_to_user(dst: usize, src: *const u8, len: usize) -> UaccessResult {
-    // SAFETY: caller guarantees src points to len readable kernel bytes.
-    if len != 0 && src.is_null() {
-        return Err(UaccessError::Fault);
-    }
+pub fn copy_to_user(dst: usize, src: *const u8, len: usize) -> UaccessResult {
     if len == 0 {
         return Ok(());
     }
@@ -327,6 +319,16 @@ pub unsafe fn copy_to_user(dst: usize, src: *const u8, len: usize) -> UaccessRes
     }
 }
 
+/// Types for which every possible byte pattern is a valid value.
+///
+/// Implementations are restricted to primitive integer and floating-point
+/// types. Do not implement this trait for bool, char, references, or enums.
+pub trait UserPod: Copy {}
+macro_rules! impl_user_pod {
+    ($($ty:ty),+ $(,)?) => { $(impl UserPod for $ty {})+ };
+}
+impl_user_pod!(u8, i8, u16, i16, u32, i32, u64, i64, u128, i128, usize, isize, f32, f64);
+
 /// Reads a single value of type `T` from user space.
 ///
 /// The user address must be naturally aligned to `align_of::<T>()`.
@@ -336,10 +338,7 @@ pub unsafe fn copy_to_user(dst: usize, src: *const u8, len: usize) -> UaccessRes
 /// ```no_run
 /// let fd: u32 = get_user(user_ptr)?;
 /// ```
-/// # Safety
-/// The bytes at user_addr must be a valid representation of T. In particular,
-/// Copy does not imply that every possible bit pattern is valid.
-pub unsafe fn get_user<T: Copy>(user_addr: usize) -> UaccessResult<T> {
+pub fn get_user<T: UserPod>(user_addr: usize) -> UaccessResult<T> {
     if user_addr == 0 || !user_access_ok(user_addr, mem::size_of::<T>()) {
         return Err(UaccessError::Fault);
     }
@@ -368,10 +367,7 @@ pub unsafe fn get_user<T: Copy>(user_addr: usize) -> UaccessResult<T> {
 /// ```no_run
 /// put_user(user_ptr, 42u32)?;
 /// ```
-/// # Safety
-/// The caller must ensure the user address is valid for this process and that
-/// the architecture-specific user-access mechanism is active.
-pub unsafe fn put_user<T: Copy>(user_addr: usize, val: T) -> UaccessResult {
+pub fn put_user<T: UserPod>(user_addr: usize, val: T) -> UaccessResult {
     if user_addr == 0 || !user_access_ok(user_addr, mem::size_of::<T>()) {
         return Err(UaccessError::Fault);
     }
