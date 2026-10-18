@@ -158,9 +158,7 @@ pub fn disk_info(idx: usize) -> Option<DiskInfo> {
 
 pub fn read_sectors(ns: usize, lba: u64, count: u32, buf: &mut [u8]) -> Result<(), &'static str> {
     let info = disk_info(ns).ok_or("invalid namespace")?;
-    let needed = (count as usize)
-        .checked_mul(info.sector_size as usize)
-        .ok_or("transfer size overflow")?;
+    let needed = transfer_len(count, info.sector_size)?;
     if buf.len() < needed {
         return Err("buffer too small");
     }
@@ -275,6 +273,31 @@ fn wire_nvme_msix() {
     });
 
     log::info!("nvme: MSI-X wired to vector {:#x}", NVME_IRQ_VECTOR);
+}
+
+fn transfer_len(count: u32, sector_size: u32) -> Result<usize, &'static str> {
+    (count as usize)
+        .checked_mul(sector_size as usize)
+        .ok_or("transfer size overflow")
+}
+
+/// Parse the selected logical-block format from an IDENTIFY NAMESPACE buffer.
+/// Only 512-byte and 4096-byte logical blocks are currently supported.
+fn namespace_sector_size(id_ns: &[u8]) -> Option<u32> {
+    if id_ns.len() < 4096 {
+        return None;
+    }
+    let flbas = (id_ns[26] & 0x0F) as usize;
+    let nlbaf = id_ns[25] as usize;
+    if flbas > nlbaf || flbas >= 16 {
+        return None;
+    }
+    let lbaf_off = 128usize.checked_add(flbas.checked_mul(4)?)?;
+    let lbads = *id_ns.get(lbaf_off.checked_add(2)?)? as u32;
+    match 1u32.checked_shl(lbads) {
+        Some(size @ (512 | 4096)) => Some(size),
+        _ => None,
+    }
 }
 
 // ── PRP helpers
@@ -464,18 +487,10 @@ unsafe fn _init(bar0: u64) {
     }
     let id_ns = core::slice::from_raw_parts(dma_pa as *const u8, 4096);
     let nsze = *(id_ns.as_ptr() as *const u64);
-    let flbas = (id_ns[26] & 0x0F) as usize;
-    let nlbaf = id_ns[25] as usize;
-    if flbas > nl baf || flbas >= 16 {
-        log::error!("nvme: invalid namespace LBA format index");
-        return;
-    }
-    let lbaf_off = 128 + flbas * 4;
-    let lbads = id_ns[lbaf_off + 2] as u32;
-    let sector_size = match 1u32.checked_shl(lbads) {
-        Some(size @ (512 | 4096)) => size,
-        _ => {
-            log::error!("nvme: unsupported namespace logical block size");
+    let sector_size = match namespace_sector_size(id_ns) {
+        Some(size) => size,
+        None => {
+            log::error!("nvme: invalid or unsupported namespace LBA format");
             return;
         }
     };
@@ -513,7 +528,7 @@ fn io_rw(nsid: u32, lba: u64, count: u32, sector_size: u32, buf_phys: u64, write
     if (buf_phys & 0xFFF) != 0 {
         return Err("buffer not page aligned");
     }
-    let byte_len = (count as usize).checked_mul(sector_size as usize).ok_or("transfer size overflow")?;
+    let byte_len = transfer_len(count, sector_size)?;
     let cid = next_cid();
     let opcode = if write { IO_WRITE } else { IO_READ };
 
@@ -676,6 +691,41 @@ unsafe fn mmio_read64(base: u64, off: usize) -> u64 {
 unsafe fn mmio_write64(base: u64, off: usize, val: u64) {
     write_volatile((base as usize + off) as *mut u32, val as u32);
     write_volatile((base as usize + off + 4) as *mut u32, (val >> 32) as u32);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{namespace_sector_size, transfer_len};
+
+    fn namespace_with_lba_format(index: u8, max_index: u8, lbads: u8) -> [u8; 4096] {
+        let mut ns = [0u8; 4096];
+        ns[25] = max_index;
+        ns[26] = index;
+        ns[128 + index as usize * 4 + 2] = lbads;
+        ns
+    }
+
+    #[test]
+    fn namespace_lba_size_accepts_512_and_4096() {
+        assert_eq!(namespace_sector_size(&namespace_with_lba_format(0, 0, 9)), Some(512));
+        assert_eq!(namespace_sector_size(&namespace_with_lba_format(1, 1, 12)), Some(4096));
+    }
+
+    #[test]
+    fn namespace_lba_size_rejects_invalid_index_and_shift() {
+        assert_eq!(namespace_sector_size(&namespace_with_lba_format(2, 1, 9)), None);
+        assert_eq!(namespace_sector_size(&namespace_with_lba_format(0, 0, 31)), None);
+        assert_eq!(namespace_sector_size(&namespace_with_lba_format(0, 0, 32)), None);
+        assert_eq!(namespace_sector_size(&namespace_with_lba_format(0, 0, 255)), None);
+        assert_eq!(namespace_sector_size(&[0u8; 128]), None);
+    }
+
+    #[test]
+    fn transfer_len_checks_overflow_and_block_sizes() {
+        assert_eq!(transfer_len(4, 512), Ok(2048));
+        assert_eq!(transfer_len(2, 4096), Ok(8192));
+        assert!(transfer_len(u32::MAX, u32::MAX).is_err());
+    }
 }
 
 fn alloc_dma(size: usize, align: usize) -> Option<u64> {
