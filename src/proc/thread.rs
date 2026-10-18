@@ -104,7 +104,7 @@ pub fn sys_arch_prctl(code: usize, addr: usize) -> isize {
         ARCH_GET_FS => {
             let base = scheduler::with_proc(pid, |p| p.tls_base).unwrap_or(0);
             // FIX: copy_to_user returns bool, not Result. Was .is_err().
-            if !copy_to_user(addr, &base.to_ne_bytes()) {
+            if copy_to_user(addr, &base.to_ne_bytes()).is_err() {
                 return -14;
             }
             0
@@ -114,7 +114,7 @@ pub fn sys_arch_prctl(code: usize, addr: usize) -> isize {
         },
         ARCH_GET_GS => {
             // FIX: same bool vs Result mismatch.
-            if !copy_to_user(addr, &0usize.to_ne_bytes()) {
+            if copy_to_user(addr, &0usize.to_ne_bytes()).is_err() {
                 return -14;
             }
             0
