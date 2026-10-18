@@ -203,7 +203,7 @@ fn irq_flags_and_disable() -> bool {
             "pop {f}",
             "cli",
             f = out(reg) flags,
-            options(nostack, preserves_flags)
+            options(nostack)
         );
         flags & (1 << 9) != 0
     }
@@ -234,11 +234,52 @@ fn irq_flags_and_disable() -> bool {
 fn irq_enable() {
     #[cfg(target_arch = "x86_64")]
     unsafe {
-        core::arch::asm!("sti", options(nostack, preserves_flags));
+        core::arch::asm!("sti", options(nostack));
     }
 
     #[cfg(target_arch = "aarch64")]
     unsafe {
         core::arch::asm!("msr daifclr, #2", options(nostack));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{IrqSpinLock, SpinLock};
+
+    #[test]
+    fn spinlock_guard_releases_lock() {
+        let lock = SpinLock::new(1usize);
+        {
+            let mut guard = lock.lock();
+            *guard += 1;
+            assert_eq!(*guard, 2);
+        }
+        assert!(!lock.is_locked());
+        assert_eq!(*lock.lock(), 2);
+    }
+
+    #[test]
+    fn irq_spinlock_guard_releases_lock() {
+        let lock = IrqSpinLock::new(7usize);
+        {
+            let mut guard = lock.lock_irqsave();
+            *guard += 1;
+            assert_eq!(*guard, 8);
+        }
+        assert!(lock.try_lock_irqsave().is_some());
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    #[test]
+    fn nested_irq_save_does_not_reenable_interrupts_early() {
+        use super::{irq_enable, irq_flags_and_disable};
+
+        let outer_was_enabled = irq_flags_and_disable();
+        let inner_was_enabled = irq_flags_and_disable();
+        if outer_was_enabled {
+            irq_enable();
+        }
+        assert!(!inner_was_enabled);
     }
 }
