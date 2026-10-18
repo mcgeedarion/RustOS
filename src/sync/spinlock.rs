@@ -215,7 +215,7 @@ fn irq_flags_and_disable() -> bool {
             "mrs {daif}, daif",
             "msr daifset, #2",
             daif = out(reg) daif,
-            options(nostack, nomem)
+            options(nostack)
         );
         // DAIF.I (bit 7) is set when IRQs are masked.
         daif & (1 << 7) == 0
@@ -239,6 +239,6 @@ fn irq_enable() {
 
     #[cfg(target_arch = "aarch64")]
     unsafe {
-        core::arch::asm!("msr daifclr, #2", options(nostack, nomem));
+        core::arch::asm!("msr daifclr, #2", options(nostack));
     }
 }
