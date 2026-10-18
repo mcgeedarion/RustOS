@@ -12,7 +12,7 @@ pub fn sys_send(fd: usize, buf_va: usize, len: usize, _flags: u32) -> isize {
         return 0;
     }
     let mut buf = alloc::vec![0u8; len];
-    if copy_from_user(buf.as_mut_ptr(), buf_va, len).is_err() {
+    if copy_from_user(&mut buf, buf_va).is_err() {
         return -14; // EFAULT
     }
     super::poll::socket_write(fd, &buf)
@@ -28,7 +28,7 @@ pub fn sys_recv(fd: usize, buf_va: usize, len: usize, flags: u32) -> isize {
     if n <= 0 {
         return n;
     }
-    if copy_to_user(buf_va, buf.as_ptr(), n as usize).is_err() {
+    if copy_to_user(buf_va, &buf[..n as usize]).is_err() {
         return -14; // EFAULT
     }
     n
@@ -37,17 +37,17 @@ pub fn sys_recv(fd: usize, buf_va: usize, len: usize, flags: u32) -> isize {
 pub fn sys_sendmsg(fd: usize, msg_va: usize, _flags: u32) -> isize {
     // Read msghdr: {*name, namelen, *iov, iovlen, ...}
     let mut hdr = [0u8; 48];
-    copy_from_user(msg_va, &mut hdr);
+    copy_from_user(&mut hdr, msg_va);
     let iov_ptr = usize::from_ne_bytes(hdr[16..24].try_into().unwrap_or([0; 8]));
     let iov_len = usize::from_ne_bytes(hdr[24..32].try_into().unwrap_or([0; 8]));
     let mut total = 0isize;
     for i in 0..iov_len {
         let mut iov = [0u8; 16];
-        copy_from_user(iov_ptr + i * 16, &mut iov);
+        copy_from_user(&mut iov, iov_ptr + i * 16);
         let base = usize::from_ne_bytes(iov[0..8].try_into().unwrap_or([0; 8]));
         let len = usize::from_ne_bytes(iov[8..16].try_into().unwrap_or([0; 8]));
         let mut buf = alloc::vec![0u8; len];
-        copy_from_user(base, &mut buf);
+        copy_from_user(&mut buf, base);
         let r = super::poll::socket_write(fd, &buf);
         if r < 0 {
             return r;
