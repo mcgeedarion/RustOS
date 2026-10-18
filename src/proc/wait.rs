@@ -119,7 +119,9 @@ pub fn sys_wait4(target_pid: isize, wstatus_va: usize, options: i32, rusage_va: 
                         -1 => true,
                         0 => p.pgid as usize == caller_pgid,
                         n if n > 0 => p.pid as usize == n as usize,
-                        n => checked_wait_group(n).map(|group| p.pgid as usize == group).unwrap_or(false),
+                        n => checked_wait_group(n)
+                            .map(|group| p.pgid as usize == group)
+                            .unwrap_or(false),
                     }
                 })
                 .map(|p| p.pid as usize)
