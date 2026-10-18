@@ -7,7 +7,7 @@ pub fn sioc_ioctl(req: usize, arg: usize) -> isize {
         SIOCGIFNAME => {
             // arg is ifreq: first 16 bytes = ifr_name, next bytes = ifr_ifindex
             let mut ifr = [0u8; 40];
-            copy_from_user(arg, &mut ifr);
+            copy_from_user(&mut ifr, arg);
             let idx = u32::from_ne_bytes(ifr[16..20].try_into().unwrap_or([0; 4]));
             let name: &[u8] = if idx == 1 { b"eth0\0" } else { b"lo\0" };
             ifr[..name.len()].copy_from_slice(name);
@@ -16,7 +16,7 @@ pub fn sioc_ioctl(req: usize, arg: usize) -> isize {
         },
         SIOCGIFFLAGS => {
             let mut ifr = [0u8; 40];
-            copy_from_user(arg, &mut ifr);
+            copy_from_user(&mut ifr, arg);
             // IFF_UP | IFF_RUNNING | IFF_BROADCAST | IFF_MULTICAST
             let flags: u16 = 0x1043;
             ifr[16..18].copy_from_slice(&flags.to_ne_bytes());
@@ -26,7 +26,7 @@ pub fn sioc_ioctl(req: usize, arg: usize) -> isize {
         SIOCSIFFLAGS => 0,
         SIOCGIFADDR => {
             let mut ifr = [0u8; 40];
-            copy_from_user(arg, &mut ifr);
+            copy_from_user(&mut ifr, arg);
             // sockaddr_in at ifr_addr (offset 16): family=AF_INET, port=0, addr=our IP
             ifr[16..18].copy_from_slice(&2u16.to_ne_bytes());
             ifr[18..20].copy_from_slice(&0u16.to_ne_bytes());
@@ -70,7 +70,7 @@ pub fn sioc_ioctl(req: usize, arg: usize) -> isize {
         SIOCGIFCONF => {
             // ifconf: ifc_len(i32) + ifc_buf ptr
             let mut ifc = [0u8; 16];
-            copy_from_user(arg, &mut ifc);
+            copy_from_user(&mut ifc, arg);
             let buf_va = usize::from_ne_bytes(ifc[8..16].try_into().unwrap_or([0; 8]));
             // Write one ifreq for eth0
             if buf_va != 0 {
@@ -95,6 +95,6 @@ pub fn sioc_ioctl(req: usize, arg: usize) -> isize {
 
 pub fn read_ifname(arg: usize) -> [u8; 16] {
     let mut buf = [0u8; 16];
-    copy_from_user(arg, &mut buf);
+    copy_from_user(&mut buf, arg);
     buf
 }
