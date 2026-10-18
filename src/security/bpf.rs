@@ -75,11 +75,11 @@ fn copy_attr<T: Copy + Default>(attr: usize, size: u32) -> Result<T, isize> {
         return Err(EINVAL);
     }
     let mut value = T::default();
-    crate::uaccess::copy_from_user(
+    unsafe { crate::uaccess::copy_from_user_raw_result(
         &mut value as *mut T as *mut u8,
         attr,
         core::mem::size_of::<T>(),
-    )
+    ) }
     .map_err(|_| EFAULT)?;
     Ok(value)
 }
@@ -89,7 +89,7 @@ fn copy_user_bytes(addr: u64, len: usize) -> Result<Vec<u8>, isize> {
         return Err(EFAULT);
     }
     let mut bytes = alloc::vec![0u8; len];
-    crate::uaccess::copy_from_user(bytes.as_mut_ptr(), addr as usize, len).map_err(|_| EFAULT)?;
+    crate::uaccess::copy_from_user(&mut bytes, addr as usize).map_err(|_| EFAULT)?;
     Ok(bytes)
 }
 
@@ -97,7 +97,7 @@ fn put_user_bytes(addr: u64, bytes: &[u8]) -> Result<(), isize> {
     if bytes.is_empty() || addr == 0 {
         return Err(EFAULT);
     }
-    crate::uaccess::copy_to_user(addr as usize, bytes.as_ptr(), bytes.len()).map_err(|_| EFAULT)
+    crate::uaccess::copy_to_user(addr as usize, bytes).map_err(|_| EFAULT)
 }
 
 fn find_entry(map: &BpfMap, key: &[u8]) -> Option<usize> {
