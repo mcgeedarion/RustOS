@@ -378,7 +378,7 @@ pub fn sys_fcntl(fd: usize, cmd: i32, arg: usize) -> isize {
             let mut buf = [0u8; 32];
             let lock_ty = FD_LOCKS.lock().get(&bfd).copied().unwrap_or(F_UNLCK);
             buf[0..2].copy_from_slice(&lock_ty.to_le_bytes());
-            if !copy_to_user(arg, &buf) {
+            if copy_to_user(arg, &buf).is_err() {
                 return -14;
             }
             0
