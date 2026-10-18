@@ -79,11 +79,7 @@ fn read_cstr_bytes_safe(addr: usize) -> Option<Vec<u8>> {
     for offset in 0..MAX_CSTR_LEN {
         let current = addr.checked_add(offset)?;
         let mut byte = 0u8;
-        if crate::kernel::uaccess::copy_from_user(
-            &mut byte as *mut u8,
-            current,
-            1,
-        )
+        if crate::kernel::uaccess::copy_from_user(core::slice::from_mut(&mut byte).as_mut(), current)
         .is_err()
         {
             return None;
@@ -117,11 +113,7 @@ fn read_cstr_vector_safe(
         let offset = index.checked_mul(pointer_size).ok_or(EFAULT)?;
         let pointer_addr = addr.checked_add(offset).ok_or(EFAULT)?;
         let mut raw = [0u8; core::mem::size_of::<usize>()];
-        if crate::kernel::uaccess::copy_from_user(
-            raw.as_mut_ptr(),
-            pointer_addr,
-            pointer_size,
-        )
+        if crate::kernel::uaccess::copy_from_user(&mut raw, pointer_addr)
         .is_err()
         {
             return Err(EFAULT);
