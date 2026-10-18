@@ -167,7 +167,7 @@ pub fn sys_fcntl_lock(inode_id: u64, cmd: i32, flock_uptr: usize) -> isize {
     let pid = current_pid();
 
     let mut fl = Flock::default();
-    if copy_from_user(flock_uptr as *const Flock, &mut fl).is_err() {
+    if copy_from_user(unsafe { core::slice::from_raw_parts_mut((&mut fl as *mut Flock).cast::<u8>(), core::mem::size_of::<Flock>()) }, flock_uptr as usize).is_err() {
         return -14; // EFAULT
     }
 
@@ -185,14 +185,14 @@ pub fn sys_fcntl_lock(inode_id: u64, cmd: i32, flock_uptr: usize) -> isize {
                     out.l_start = e.start as i64;
                     out.l_len = (e.end - e.start) as i64;
                     out.l_pid = e.pid as u32;
-                    let _ = copy_to_user(flock_uptr as *mut Flock, &out);
+                    let _ = copy_to_user(flock_uptr as usize, unsafe { core::slice::from_raw_parts((&out as *const Flock).cast::<u8>(), core::mem::size_of::<Flock>()) });
                     return 0;
                 }
             }
         }
         // No conflicting lock.
         fl.l_type = F_UNLCK;
-        let _ = copy_to_user(flock_uptr as *mut Flock, &fl);
+        let _ = copy_to_user(flock_uptr as usize, unsafe { core::slice::from_raw_parts((&fl as *const Flock).cast::<u8>(), core::mem::size_of::<Flock>()) });
         return 0;
     }
 
