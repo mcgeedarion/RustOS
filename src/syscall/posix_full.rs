@@ -4,7 +4,7 @@
 
 #[inline]
 fn copy_bytes_to_user(dst: usize, bytes: &[u8]) -> bool {
-    crate::uaccess::copy_to_user(dst, bytes.as_ptr(), bytes.len()).is_ok()
+    crate::uaccess::copy_to_user(dst, bytes).is_ok()
 }
 
 fn read_user_str(addr: usize, max_len: usize) -> Result<String, ()> {
@@ -322,7 +322,7 @@ pub(super) fn sys_capget_impl(_hdr_va: usize, data_va: usize) -> isize {
     // struct __user_cap_data_struct: two u32 effective/permitted/inheritable pairs.
     if data_va != 0 {
         let full = [0xFFu8; 24]; // all caps set in effective + permitted
-        let _ = crate::uaccess::copy_to_user(data_va, full.as_ptr(), full.len());
+        let _ = crate::uaccess::copy_to_user(data_va, &full);
     }
     0
 }
