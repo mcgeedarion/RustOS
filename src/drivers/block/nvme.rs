@@ -123,7 +123,7 @@ struct NvmeCtrl {
     iosq_phys: u64,
     iocq_phys: u64,
     dma_phys: u64,
-    /// 4 KiB page used as scratch space for PRP lists.
+    /// 2 MiB page-aligned staging region used for data DMA.
     prp_list_phys: u64,
     asq_tail: usize,
     acq_head: usize,
@@ -192,7 +192,12 @@ pub fn write_sectors(ns: usize, lba: u64, count: u32, buf: &[u8]) -> Result<(), 
     if buf.len() < needed {
         return Err("buffer too small");
     }
-    if count == 0 || lba.checked_add(count as u64).filter(|end| *end <= info.sector_count).is_none() {
+    if count == 0
+        || lba
+            .checked_add(count as u64)
+            .filter(|end| *end <= info.sector_count)
+            .is_none()
+    {
         return Err("invalid sector range");
     }
     if needed > MAX_DMA_TRANSFER {
