@@ -230,7 +230,7 @@ pub fn sys_setdomainname(name_va: usize, len: usize) -> isize {
         return 0;
     }
     let mut buf = alloc::vec![0u8; len];
-    if copy_from_user(name_va, &mut buf).is_err() {
+    if copy_from_user(&mut buf, name_va).is_err() {
         return -14;
     }
     if buf.contains(&0) {
