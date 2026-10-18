@@ -406,7 +406,7 @@ pub fn futex_lock_pi(addr: usize) -> isize {
             let word2 = u32::from_ne_bytes(wb2);
             if (word2 & FUTEX_TID_MASK) == 0 {
                 let new_word = tid as u32;
-                if !copy_to_user(addr, &new_word.to_ne_bytes()) {
+                if copy_to_user(addr, &new_word.to_ne_bytes()).is_err() {
                     return -14;
                 }
                 chain.remove(&key);
@@ -434,7 +434,7 @@ pub fn futex_lock_pi(addr: usize) -> isize {
             } // owner released, retry
 
             let flagged = word3 | FUTEX_WAITERS;
-            if !copy_to_user(addr, &flagged.to_ne_bytes()) {
+            if copy_to_user(addr, &flagged.to_ne_bytes()).is_err() {
                 return -14;
             }
 
