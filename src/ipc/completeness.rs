@@ -190,7 +190,7 @@ fn test_futex_basic_wait_wake() -> TestResult {
 
     // Set futex to 0
     let zero: u32 = 0;
-    if !copy_to_user(futex_addr, &zero.to_ne_bytes()) {
+    if copy_to_user(futex_addr, &zero.to_ne_bytes()).is_err() {
         return TestResult::fail("futex_basic_wait_wake", "Failed to write futex word");
     }
 
