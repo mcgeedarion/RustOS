@@ -736,6 +736,26 @@ mod tests {
     }
 
     #[test]
+    fn dma_cpu_address_uses_architecture_mapping() {
+        let physical = 0x1000u64;
+        #[cfg(target_arch = "x86_64")]
+        assert_eq!(
+            super::dma_virt(physical),
+            crate::arch::x86_64::mem_layout::higher_half::phys_to_virt(physical)
+        );
+        #[cfg(target_arch = "aarch64")]
+        assert_eq!(
+            super::dma_virt(physical),
+            crate::arch::aarch64::mem_layout::va48::phys_to_virt(physical as usize)
+        );
+        #[cfg(target_arch = "riscv64")]
+        assert_eq!(
+            super::dma_virt(physical),
+            crate::arch::riscv64::mem_layout::va39::phys_to_virt(physical as usize)
+        );
+    }
+
+    #[test]
     fn transfer_len_checks_overflow_and_block_sizes() {
         assert_eq!(transfer_len(4, 512), Ok(2048));
         assert_eq!(transfer_len(2, 4096), Ok(8192));
@@ -755,14 +775,17 @@ mod tests {
 /// dereference the kernel direct-map address on architectures that use one.
 #[inline]
 fn dma_virt(phys: u64) -> usize {
-    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    #[cfg(target_arch = "x86_64")]
     {
-        crate::mm::phys::phys_to_virt(phys as usize)
+        crate::arch::x86_64::mem_layout::higher_half::phys_to_virt(phys)
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        crate::arch::aarch64::mem_layout::va48::phys_to_virt(phys as usize)
     }
     #[cfg(target_arch = "riscv64")]
     {
-        // The current RISC-V paging implementation uses identity mappings.
-        phys as usize
+        crate::arch::riscv64::mem_layout::va39::phys_to_virt(phys as usize)
     }
 }
 
