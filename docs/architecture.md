@@ -41,8 +41,9 @@ The crate root intentionally selects one of three module graphs:
 
 | Feature selection | Active path | Current purpose |
 |---|---|---|
-| `boot_minimal` without `userspace_boot` | first-stage boot only | firmware handoff, `BootInfo`, early console, boot marker, idle loop |
-| `userspace_boot` | boot plus thin shims | diagnostic-only handoff checks; never counts as a full userspace execution pass |
+| `boot_minimal` only | first-stage boot only | firmware handoff, `BootInfo`, early console, boot marker, idle loop |
+| `userspace_boot` only | initramfs/ELF diagnostics | validates image metadata, then reports execution unavailable; never counts as a full userspace execution pass |
+| both slim features | rejected | the kernel crate emits a compile-time error to prevent ambiguous module selection |
 | `full_kernel` / Cargo defaults | full kernel graph with UEFI entry | compiles mm/fs/proc/net/security/drivers/syscalls; end-to-end userspace execution remains blocked |
 
 `full_kernel` is the default and enables `uefi_boot` without selecting `boot_minimal`.
