@@ -75,36 +75,6 @@ pub fn validate_user_ptr(addr: usize, len: usize) -> bool {
     addr != 0 && user_access_ok(addr, len)
 }
 
-/// Thin wrapper around [`copy_to_user`] that returns the number of bytes
-/// copied (success = `len`, failure = `0`). Matches the contract used by
-/// `crate::mm::UserBuffer::write_bytes`.
-///
-/// # Safety
-/// `src` must point to `len` bytes of readable kernel memory; `dst` must
-/// reference a validated user-space range of at least `len` bytes.
-#[inline]
-pub unsafe fn copy_to_user_raw(dst: *mut u8, src: *const u8, len: usize) -> usize {
-    match copy_to_user(dst as usize, src, len) {
-        Ok(()) => len,
-        Err(_) => 0,
-    }
-}
-
-/// Thin wrapper around [`copy_from_user`] that returns the number of
-/// bytes copied (success = `len`, failure = `0`). Matches the contract
-/// used by `crate::mm::UserBuffer::read_bytes`.
-///
-/// # Safety
-/// `dst` must point to `len` bytes of writable kernel memory; `src` must
-/// reference a validated user-space range of at least `len` bytes.
-#[inline]
-pub unsafe fn copy_from_user_raw(dst: *mut u8, src: *const u8, len: usize) -> usize {
-    match copy_from_user(dst, src as usize, len) {
-        Ok(()) => len,
-        Err(_) => 0,
-    }
-}
-
 /// Executes `f` inside an architecture-specific "user access window".
 ///
 /// On aarch64 this is controlled by PAN (Privileged Access Never).
@@ -219,7 +189,7 @@ mod arch_x86_64 {
 ///
 /// # Panics
 /// Never panics; all error conditions are returned via `Result`.
-pub fn copy_from_user(dst: *mut u8, src: usize, len: usize) -> UaccessResult {
+unsafe fn copy_from_user_bytes(dst: *mut u8, src: usize, len: usize) -> UaccessResult {
     if len == 0 {
         return Ok(());
     }
@@ -256,7 +226,7 @@ pub fn copy_from_user(dst: *mut u8, src: usize, len: usize) -> UaccessResult {
 /// * `dst` is NULL.
 /// * `[dst, dst + len)` extends outside user virtual address space.
 /// * A hardware page fault occurs (e.g. unmapped or read-only page).
-pub fn copy_to_user(dst: usize, src: *const u8, len: usize) -> UaccessResult {
+unsafe fn copy_to_user_bytes(dst: usize, src: *const u8, len: usize) -> UaccessResult {
     if len == 0 {
         return Ok(());
     }
@@ -284,6 +254,38 @@ pub fn copy_to_user(dst: usize, src: *const u8, len: usize) -> UaccessResult {
             }
         })
     }
+}
+
+/// Copies user memory into a safe kernel slice.
+pub fn copy_from_user(dst: &mut [u8], src: usize) -> UaccessResult {
+    // The mutable slice proves the kernel destination is valid for its length.
+    unsafe { copy_from_user_bytes(dst.as_mut_ptr(), src, dst.len()) }
+}
+
+/// Copies a safe kernel slice into user memory.
+pub fn copy_to_user(dst: usize, src: &[u8]) -> UaccessResult {
+    // The shared slice proves the kernel source is valid for its length.
+    unsafe { copy_to_user_bytes(dst, src.as_ptr(), src.len()) }
+}
+
+/// Raw-pointer compatibility entry point for callers that can uphold the
+/// kernel-buffer validity contract. Prefer the slice-based API above.
+///
+/// # Safety
+/// For nonzero len, dst must point to len writable kernel bytes and src must
+/// be a user virtual address in the current task's address space.
+pub unsafe fn copy_from_user_raw(dst: *mut u8, src: *const u8, len: usize) -> usize {
+    if copy_from_user_bytes(dst, src as usize, len).is_ok() { len } else { 0 }
+}
+
+/// Raw-pointer compatibility entry point for callers that can uphold the
+/// kernel-buffer validity contract. Prefer the slice-based API above.
+///
+/// # Safety
+/// For nonzero len, src must point to len readable kernel bytes and dst must
+/// be a user virtual address in the current task's address space.
+pub unsafe fn copy_to_user_raw(dst: *mut u8, src: *const u8, len: usize) -> usize {
+    if copy_to_user_bytes(dst as usize, src, len).is_ok() { len } else { 0 }
 }
 
 /// Types for which every possible byte pattern is a valid value.
@@ -544,7 +546,7 @@ impl<T: UserPod> UserSlice<T> {
             .len
             .checked_mul(mem::size_of::<T>())
             .ok_or(UaccessError::Fault)?;
-        copy_from_user(dst.as_mut_ptr() as *mut u8, self.base, byte_len)
+        unsafe { copy_from_user_raw(dst.as_mut_ptr() as *mut u8, self.base as *const u8, byte_len) }.then_some(()).ok_or(UaccessError::Fault)
     }
 
     /// Bulk-copies `src` into the user slice.
@@ -558,7 +560,7 @@ impl<T: UserPod> UserSlice<T> {
             .len
             .checked_mul(mem::size_of::<T>())
             .ok_or(UaccessError::Fault)?;
-        copy_to_user(self.base, src.as_ptr() as *const u8, byte_len)
+        unsafe { copy_to_user_raw(self.base as *mut u8, src.as_ptr() as *const u8, byte_len) }.then_some(()).ok_or(UaccessError::Fault)
     }
 
     /// Returns a sub-slice `[start, start + new_len)` of this slice.
