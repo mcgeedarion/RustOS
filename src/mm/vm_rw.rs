@@ -42,7 +42,7 @@ fn read_iovecs(iov_va: usize, count: usize) -> Result<Vec<UserIovec>, isize> {
     let bytes = count.checked_mul(size_of::<UserIovec>()).ok_or(EINVAL)?;
     let mut iovecs = Vec::with_capacity(count);
     unsafe { iovecs.set_len(count) };
-    crate::uaccess::copy_from_user(iovecs.as_mut_ptr() as *mut u8, iov_va, bytes)
+    unsafe { crate::uaccess::copy_from_user_raw_result(iovecs.as_mut_ptr() as *mut u8, iov_va, bytes) }
         .map_err(|_| EFAULT)?;
 
     let mut total = 0usize;
@@ -93,9 +93,9 @@ fn copy_between_iovecs(dst: &[UserIovec], src: &[UserIovec]) -> Result<isize, is
         if n == 0 {
             break;
         }
-        crate::uaccess::copy_from_user(bounce.as_mut_ptr(), src[si].base + soff, n)
+        crate::uaccess::copy_from_user(&mut bounce[..n], src[si].base + soff)
             .map_err(|_| EFAULT)?;
-        crate::uaccess::copy_to_user(dst[di].base + doff, bounce.as_ptr(), n)
+        crate::uaccess::copy_to_user(dst[di].base + doff, &bounce[..n])
             .map_err(|_| EFAULT)?;
         copied += n;
         doff += n;
