@@ -268,6 +268,24 @@ pub fn copy_to_user(dst: usize, src: &[u8]) -> UaccessResult {
     unsafe { copy_to_user_bytes(dst, src.as_ptr(), src.len()) }
 }
 
+/// Raw-pointer user-copy variant preserving the Result contract.
+///
+/// # Safety
+/// For nonzero len, dst must point to len writable kernel bytes. src must be a
+/// user virtual address in the current task's address space.
+pub unsafe fn copy_from_user_raw_result(dst: *mut u8, src: usize, len: usize) -> UaccessResult {
+    copy_from_user_bytes(dst, src, len)
+}
+
+/// Raw-pointer user-copy variant preserving the Result contract.
+///
+/// # Safety
+/// For nonzero len, src must point to len readable kernel bytes. dst must be a
+/// user virtual address in the current task's address space.
+pub unsafe fn copy_to_user_raw_result(dst: usize, src: *const u8, len: usize) -> UaccessResult {
+    copy_to_user_bytes(dst, src, len)
+}
+
 /// Raw-pointer compatibility entry point for callers that can uphold the
 /// kernel-buffer validity contract. Prefer the slice-based API above.
 ///
