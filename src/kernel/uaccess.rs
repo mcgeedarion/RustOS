@@ -293,7 +293,11 @@ pub unsafe fn copy_to_user_raw_result(dst: usize, src: *const u8, len: usize) ->
 /// For nonzero len, dst must point to len writable kernel bytes and src must
 /// be a user virtual address in the current task's address space.
 pub unsafe fn copy_from_user_raw(dst: *mut u8, src: *const u8, len: usize) -> usize {
-    if copy_from_user_bytes(dst, src as usize, len).is_ok() { len } else { 0 }
+    if unsafe { copy_from_user_bytes(dst, src as usize, len) }.is_ok() {
+        len
+    } else {
+        0
+    }
 }
 
 /// Raw-pointer compatibility entry point for callers that can uphold the
@@ -303,7 +307,11 @@ pub unsafe fn copy_from_user_raw(dst: *mut u8, src: *const u8, len: usize) -> us
 /// For nonzero len, src must point to len readable kernel bytes and dst must
 /// be a user virtual address in the current task's address space.
 pub unsafe fn copy_to_user_raw(dst: *mut u8, src: *const u8, len: usize) -> usize {
-    if copy_to_user_bytes(dst as usize, src, len).is_ok() { len } else { 0 }
+    if unsafe { copy_to_user_bytes(dst as usize, src, len) }.is_ok() {
+        len
+    } else {
+        0
+    }
 }
 
 /// Types for which every possible byte pattern is a valid value.
@@ -357,7 +365,10 @@ pub fn get_user<T: UserPod>(user_addr: usize) -> UaccessResult<T> {
 /// put_user(user_ptr, 42u32)?;
 /// ```
 pub fn put_user<T: UserPod>(user_addr: usize, val: T) -> UaccessResult {
-    if user_addr == 0 || !user_access_ok(user_addr, mem::size_of::<T>()) {
+    if user_addr == 0
+        || user_addr % mem::align_of::<T>() != 0
+        || !user_access_ok(user_addr, mem::size_of::<T>())
+    {
         return Err(UaccessError::Fault);
     }
 
@@ -707,6 +718,13 @@ mod tests {
     fn zero_length_slice_copies_do_not_access_user_memory() {
         assert!(copy_from_user(&mut [], 0).is_ok());
         assert!(copy_to_user(0, &[]).is_ok());
+    }
+
+    #[test]
+    fn invalid_user_ranges_return_fault_without_dereferencing() {
+        let mut byte = [0u8; 1];
+        assert_eq!(copy_from_user(&mut byte, USER_ADDR_MAX), Err(UaccessError::Fault));
+        assert_eq!(copy_to_user(USER_ADDR_MAX, &[1]), Err(UaccessError::Fault));
     }
 
     #[test]
