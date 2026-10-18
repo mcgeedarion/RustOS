@@ -23,7 +23,7 @@ pub fn read_sockaddr_in(va: usize) -> Option<(u16, u32)> {
 
 pub fn read_sockaddr_in6(va: usize) -> Option<(u16, ipv6::Addr6, u32, u32)> {
     let mut buf = [0u8; 28];
-    copy_from_user(va, &mut buf);
+    copy_from_user(&mut buf, va);
     if u16::from_be_bytes([buf[0], buf[1]]) != 10 {
         return None;
     }
