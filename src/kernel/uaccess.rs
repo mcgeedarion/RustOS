@@ -544,10 +544,8 @@ impl<T: UserPod> UserSlice<T> {
         if index >= self.len {
             return Err(UaccessError::Fault);
         }
-        let addr = self
-            .base
-            .checked_add(index * mem::size_of::<T>())
-            .ok_or(UaccessError::Fault)?;
+        let offset = index.checked_mul(mem::size_of::<T>()).ok_or(UaccessError::Fault)?;
+        let addr = self.base.checked_add(offset).ok_or(UaccessError::Fault)?;
         put_user::<T>(addr, val)
     }
 
@@ -562,7 +560,11 @@ impl<T: UserPod> UserSlice<T> {
             .len
             .checked_mul(mem::size_of::<T>())
             .ok_or(UaccessError::Fault)?;
-        unsafe { copy_from_user_raw(dst.as_mut_ptr() as *mut u8, self.base as *const u8, byte_len) }.then_some(()).ok_or(UaccessError::Fault)
+        if unsafe { copy_from_user_raw(dst.as_mut_ptr() as *mut u8, self.base as *const u8, byte_len) } == byte_len {
+            Ok(())
+        } else {
+            Err(UaccessError::Fault)
+        }
     }
 
     /// Bulk-copies `src` into the user slice.
@@ -576,7 +578,11 @@ impl<T: UserPod> UserSlice<T> {
             .len
             .checked_mul(mem::size_of::<T>())
             .ok_or(UaccessError::Fault)?;
-        unsafe { copy_to_user_raw(self.base as *mut u8, src.as_ptr() as *const u8, byte_len) }.then_some(()).ok_or(UaccessError::Fault)
+        if unsafe { copy_to_user_raw(self.base as *mut u8, src.as_ptr() as *const u8, byte_len) } == byte_len {
+            Ok(())
+        } else {
+            Err(UaccessError::Fault)
+        }
     }
 
     /// Returns a sub-slice `[start, start + new_len)` of this slice.
