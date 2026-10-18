@@ -287,7 +287,7 @@ fn namespace_sector_size(id_ns: &[u8]) -> Option<u32> {
     }
     let flbas = (id_ns[26] & 0x0F) as usize;
     let nlbaf = id_ns[25] as usize;
-    if flbas > nlbaf || flbas >= 16 {
+    if nlbaf >= 16 || flbas > nlbaf || flbas >= 16 {
         return None;
     }
     let lbaf_off = 128usize.checked_add(flbas.checked_mul(4)?)?;
@@ -712,6 +712,7 @@ mod tests {
     #[test]
     fn namespace_lba_size_rejects_invalid_index_and_shift() {
         assert_eq!(namespace_sector_size(&namespace_with_lba_format(2, 1, 9)), None);
+        assert_eq!(namespace_sector_size(&namespace_with_lba_format(0, 255, 9)), None);
         assert_eq!(namespace_sector_size(&namespace_with_lba_format(0, 0, 31)), None);
         assert_eq!(namespace_sector_size(&namespace_with_lba_format(0, 0, 32)), None);
         assert_eq!(namespace_sector_size(&namespace_with_lba_format(0, 0, 255)), None);
