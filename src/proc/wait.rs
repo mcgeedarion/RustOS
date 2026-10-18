@@ -372,6 +372,9 @@ pub fn sys_waitid(idtype: i32, id: i32, infop: usize, options: i32) -> isize {
 
 #[inline]
 fn checked_wait_group(selector: isize) -> Option<usize> {
+    if selector >= -1 {
+        return None;
+    }
     selector.checked_neg().map(|group| group as usize)
 }
 
@@ -381,10 +384,11 @@ mod tests {
 
     #[test]
     fn wait_group_selector_handles_signed_boundaries() {
-        assert_eq!(checked_wait_group(-1), Some(1));
+        assert_eq!(checked_wait_group(-2), Some(2));
         assert_eq!(checked_wait_group(-42), Some(42));
+        assert_eq!(checked_wait_group(-1), None);
+        assert_eq!(checked_wait_group(0), None);
         assert_eq!(checked_wait_group(isize::MIN), None);
-        assert_eq!(checked_wait_group(0), Some(0));
     }
 }
 
