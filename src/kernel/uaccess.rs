@@ -31,6 +31,11 @@ const USER_ADDR_MAX: usize = 0x0000_8000_0000_0000;
 #[cfg(target_arch = "x86_64")]
 const USER_ADDR_MAX: usize = 0x0000_8000_0000_0000;
 
+/// Sv39 user virtual addresses occupy the lower 38 bits. This matches the
+/// current RISC-V page-table mode; update this alongside any paging-mode change.
+#[cfg(target_arch = "riscv64")]
+const USER_ADDR_MAX: usize = 1usize << 38;
+
 /// Errors returned by uaccess operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(i32)]
@@ -247,7 +252,11 @@ mod arch_x86_64 {
 ///
 /// # Panics
 /// Never panics; all error conditions are returned via `Result`.
-pub fn copy_from_user(dst: *mut u8, src: usize, len: usize) -> UaccessResult {
+pub unsafe fn copy_from_user(dst: *mut u8, src: usize, len: usize) -> UaccessResult {
+    // SAFETY: caller guarantees dst points to len writable kernel bytes.
+    if len != 0 && dst.is_null() {
+        return Err(UaccessError::Fault);
+    }
     if len == 0 {
         return Ok(());
     }
@@ -284,7 +293,11 @@ pub fn copy_from_user(dst: *mut u8, src: usize, len: usize) -> UaccessResult {
 /// * `dst` is NULL.
 /// * `[dst, dst + len)` extends outside user virtual address space.
 /// * A hardware page fault occurs (e.g. unmapped or read-only page).
-pub fn copy_to_user(dst: usize, src: *const u8, len: usize) -> UaccessResult {
+pub unsafe fn copy_to_user(dst: usize, src: *const u8, len: usize) -> UaccessResult {
+    // SAFETY: caller guarantees src points to len readable kernel bytes.
+    if len != 0 && src.is_null() {
+        return Err(UaccessError::Fault);
+    }
     if len == 0 {
         return Ok(());
     }
@@ -323,7 +336,10 @@ pub fn copy_to_user(dst: usize, src: *const u8, len: usize) -> UaccessResult {
 /// ```no_run
 /// let fd: u32 = get_user(user_ptr)?;
 /// ```
-pub fn get_user<T: Copy>(user_addr: usize) -> UaccessResult<T> {
+/// # Safety
+/// The bytes at user_addr must be a valid representation of T. In particular,
+/// Copy does not imply that every possible bit pattern is valid.
+pub unsafe fn get_user<T: Copy>(user_addr: usize) -> UaccessResult<T> {
     if user_addr == 0 || !user_access_ok(user_addr, mem::size_of::<T>()) {
         return Err(UaccessError::Fault);
     }
@@ -352,7 +368,10 @@ pub fn get_user<T: Copy>(user_addr: usize) -> UaccessResult<T> {
 /// ```no_run
 /// put_user(user_ptr, 42u32)?;
 /// ```
-pub fn put_user<T: Copy>(user_addr: usize, val: T) -> UaccessResult {
+/// # Safety
+/// The caller must ensure the user address is valid for this process and that
+/// the architecture-specific user-access mechanism is active.
+pub unsafe fn put_user<T: Copy>(user_addr: usize, val: T) -> UaccessResult {
     if user_addr == 0 || !user_access_ok(user_addr, mem::size_of::<T>()) {
         return Err(UaccessError::Fault);
     }
