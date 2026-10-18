@@ -56,6 +56,9 @@ struct ElemAttr {
     flags: u64,
 }
 
+unsafe impl crate::kernel::uaccess::UserPod for MapCreateAttr {}
+unsafe impl crate::kernel::uaccess::UserPod for ElemAttr {}
+
 #[derive(Clone)]
 struct BpfMap {
     map_type: u32,
@@ -67,7 +70,7 @@ struct BpfMap {
 
 static MAPS: Mutex<KernelFastMap<usize, BpfMap>> = Mutex::new(KernelFastMap::new());
 
-fn copy_attr<T: Copy + Default>(attr: usize, size: u32) -> Result<T, isize> {
+fn copy_attr<T: crate::kernel::uaccess::UserPod + Default>(attr: usize, size: u32) -> Result<T, isize> {
     if attr == 0 {
         return Err(EFAULT);
     }
