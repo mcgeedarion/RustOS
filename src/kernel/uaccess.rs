@@ -399,7 +399,7 @@ pub struct UserPtr<T> {
 
 // UserPtr is not Send/Sync — it is tied to the current task's address space.
 
-impl<T: Copy> UserPtr<T> {
+impl<T: UserPod> UserPtr<T> {
     /// Creates a new `UserPtr` wrapping a raw user virtual address.
     ///
     /// Does **not** validate the address yet; validation happens on
@@ -492,7 +492,7 @@ pub struct UserSlice<T> {
     _marker: core::marker::PhantomData<*mut T>,
 }
 
-impl<T: Copy> UserSlice<T> {
+impl<T: UserPod> UserSlice<T> {
     /// Creates a new `UserSlice` over `[base, base + len * size_of::<T>())`.
     ///
     /// The address range is validated immediately.  Construct succeeds even if
