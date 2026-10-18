@@ -181,7 +181,7 @@ pub fn read_sectors(ns: usize, lba: u64, count: u32, buf: &mut [u8]) -> Result<(
     let dma_phys = CTRL.lock().as_ref().ok_or("nvme not initialised")?.dma_phys;
     io_rw(ns as u32 + 1, lba, count, info.sector_size, dma_phys, false)?;
     unsafe {
-        core::ptr::copy_nonoverlapping(dma_phys as *const u8, buf.as_mut_ptr(), needed);
+        core::ptr::copy_nonoverlapping(dma_virt(dma_phys) as *const u8, buf.as_mut_ptr(), needed);
     }
     Ok(())
 }
@@ -207,7 +207,7 @@ pub fn write_sectors(ns: usize, lba: u64, count: u32, buf: &[u8]) -> Result<(), 
     let _dma_guard = DMA_BUFFER_LOCK.lock();
     let dma_phys = CTRL.lock().as_ref().ok_or("nvme not initialised")?.dma_phys;
     unsafe {
-        core::ptr::copy_nonoverlapping(buf.as_ptr(), dma_phys as *mut u8, needed);
+        core::ptr::copy_nonoverlapping(buf.as_ptr(), dma_virt(dma_phys) as *mut u8, needed);
     }
     io_rw(ns as u32 + 1, lba, count, info.sector_size, dma_phys, true)
 }
@@ -349,7 +349,7 @@ unsafe fn build_prps(
     if list_entries > 511 {
         return Err("transfer too large for single PRP list page");
     }
-    let list = list_page_phys as *mut u64;
+    let list = dma_virt(list_page_phys) as *mut u64;
     for n in 0..list_entries {
         let page_phys = buf_phys + ((n + 1) * PAGE) as u64;
         write_volatile(list.add(n), page_phys);
@@ -483,7 +483,7 @@ unsafe fn _init(bar0: u64) {
         .as_ref()
         .expect("nvme: controller not initialized")
         .dma_phys;
-    core::ptr::write_bytes(dma_pa as *mut u8, 0, 4096);
+    core::ptr::write_bytes(dma_virt(dma_pa) as *mut u8, 0, 4096);
     let mut cmd = SqEntry::default();
     cmd.cdw0 = (ADM_IDENTIFY as u32) | (next_cid() << 16);
     cmd.nsid = 1;
@@ -493,8 +493,8 @@ unsafe fn _init(bar0: u64) {
     if admin_complete().is_err() {
         return;
     }
-    let id_ns = core::slice::from_raw_parts(dma_pa as *const u8, 4096);
-    let nsze = *(id_ns.as_ptr() as *const u64);
+    let id_ns = core::slice::from_raw_parts(dma_virt(dma_pa) as *const u8, 4096);
+    let nsze = u64::from_le_bytes(id_ns[0..8].try_into().unwrap_or([0; 8]));
     let sector_size = match namespace_sector_size(id_ns) {
         Some(size) => size,
         None => {
@@ -513,7 +513,7 @@ unsafe fn _init(bar0: u64) {
     if admin_complete().is_err() {
         return;
     }
-    let id_ctrl = core::slice::from_raw_parts(dma_pa as *const u8, 4096);
+    let id_ctrl = core::slice::from_raw_parts(dma_virt(dma_pa) as *const u8, 4096);
     let mut model = [0u8; 40];
     for i in 0..40 {
         model[i] = id_ctrl[24 + i];
@@ -561,7 +561,7 @@ fn io_rw(nsid: u32, lba: u64, count: u32, sector_size: u32, buf_phys: u64, write
     let mut ctrl = CTRL.lock();
     let c = ctrl.as_mut().ok_or("nvme not initialised")?;
 
-    let entry = (c.iosq_phys as usize + c.iosq_tail * 64) as *mut SqEntry;
+    let entry = (dma_virt(c.iosq_phys) + c.iosq_tail * 64) as *mut SqEntry;
     unsafe {
         entry.write_volatile(cmd);
     }
@@ -583,7 +583,7 @@ fn io_rw(nsid: u32, lba: u64, count: u32, sector_size: u32, buf_phys: u64, write
             // Fall through to CQE check below.
         }
 
-        let cqe = unsafe { &*((c.iocq_phys as usize + c.iocq_head * 16) as *const CqEntry) };
+        let cqe = unsafe { &*((dma_virt(c.iocq_phys) + c.iocq_head * 16) as *const CqEntry) };
         fence(Ordering::Acquire);
 
         if (cqe.status & 1) as u8 == c.iocq_phase {
@@ -616,7 +616,7 @@ fn admin_submit(cmd: SqEntry) {
     let c = ctrl
         .as_mut()
         .expect("nvme: controller not initialized in admin_submit");
-    let entry = (c.asq_phys as usize + c.asq_tail * 64) as *mut SqEntry;
+    let entry = (dma_virt(c.asq_phys) + c.asq_tail * 64) as *mut SqEntry;
     unsafe {
         entry.write_volatile(cmd);
     }
@@ -643,7 +643,7 @@ fn admin_complete() -> Result<(), &'static str> {
             // Fall through to CQE check.
         }
 
-        let cqe = unsafe { &*((c.acq_phys as usize + c.acq_head * 16) as *const CqEntry) };
+        let cqe = unsafe { &*((dma_virt(c.acq_phys) + c.acq_head * 16) as *const CqEntry) };
         fence(Ordering::Acquire);
 
         if (cqe.status & 1) as u8 == c.acq_phase {
@@ -749,11 +749,28 @@ mod tests {
     }
 }
 
+/// Convert a DMA physical address to the CPU's virtual mapping.
+///
+/// The NVMe controller must receive the physical address, while the CPU must
+/// dereference the kernel direct-map address on architectures that use one.
+#[inline]
+fn dma_virt(phys: u64) -> usize {
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    {
+        crate::mm::phys::phys_to_virt(phys as usize)
+    }
+    #[cfg(target_arch = "riscv64")]
+    {
+        // The current RISC-V paging implementation uses identity mappings.
+        phys as usize
+    }
+}
+
 fn alloc_dma(size: usize, align: usize) -> Option<u64> {
     let pages = (size + 0xFFF) / 0x1000;
     let phys = crate::mm::pmm::alloc_pages_aligned(pages, align)?.as_ptr() as u64;
     unsafe {
-        core::ptr::write_bytes(phys as *mut u8, 0, pages * 0x1000);
+        core::ptr::write_bytes(dma_virt(phys) as *mut u8, 0, pages * 0x1000);
     }
     Some(phys)
 }
