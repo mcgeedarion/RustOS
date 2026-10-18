@@ -17,11 +17,6 @@
 //! `kernel` modules compile under all supported profiles because early boot,
 //! panic handling, and BootInfo parsing are needed everywhere.
 
-// The slim profiles select different module graphs and cannot be combined.
-// Reject ambiguous builds instead of silently letting userspace_boot win.
-#[cfg(all(feature = "boot_minimal", feature = "userspace_boot"))]
-compile_error!("features `boot_minimal` and `userspace_boot` are mutually exclusive");
-
 #![cfg_attr(not(test), no_std)]
 #![cfg_attr(not(test), no_main)]
 // P2-4: Removed crate-wide #![allow(dead_code)] so rustc can surface
@@ -29,6 +24,12 @@ compile_error!("features `boot_minimal` and `userspace_boot` are mutually exclus
 // individual items where the suppression is intentional.
 #![allow(unused_imports)]
 #![cfg_attr(not(test), feature(alloc_error_handler))]
+
+// The slim profiles select different module graphs and cannot be combined.
+// Reject ambiguous builds instead of silently letting userspace_boot win.
+#[cfg(all(feature = "boot_minimal", feature = "userspace_boot"))]
+compile_error!("features `boot_minimal` and `userspace_boot` are mutually exclusive");
+
 
 extern crate alloc;
 
