@@ -8,7 +8,7 @@ use alloc::boxed::Box;
 use core::cell::UnsafeCell;
 use core::marker::PhantomData;
 use core::ptr::NonNull;
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
 /// Ticket Lock Implementation
 ///
@@ -89,16 +89,20 @@ impl<'a> Drop for TicketLockGuard<'a> {
     }
 }
 
-/// Reader-Writer Lock (Multiple Readers, Single Writer)
+/// Reader-writer lock with an atomic state word.
 ///
-/// Allows multiple concurrent readers or a single exclusive writer.
-/// Writers have priority to prevent starvation.
+/// The high bit marks an active writer; the remaining bits count active
+/// readers. A single atomic state transition prevents a reader from entering
+/// while a writer is acquiring the lock, and vice versa. Waiting writers block
+/// new readers to avoid writer starvation.
 pub struct RwLock<T: ?Sized> {
-    readers: AtomicUsize,
-    writer: AtomicBool,
+    state: AtomicUsize,
     write_waiters: AtomicUsize,
     data: UnsafeCell<T>,
 }
+
+const RWLOCK_WRITER: usize = 1usize << (usize::BITS - 1);
+const RWLOCK_READERS: usize = !RWLOCK_WRITER;
 
 unsafe impl<T: ?Sized + Send> Send for RwLock<T> {}
 unsafe impl<T: ?Sized + Send + Sync> Sync for RwLock<T> {}
@@ -106,96 +110,121 @@ unsafe impl<T: ?Sized + Send + Sync> Sync for RwLock<T> {}
 impl<T> RwLock<T> {
     pub const fn new(data: T) -> Self {
         Self {
-            readers: AtomicUsize::new(0),
-            writer: AtomicBool::new(false),
+            state: AtomicUsize::new(0),
             write_waiters: AtomicUsize::new(0),
             data: UnsafeCell::new(data),
         }
     }
 
-    /// Acquire read lock
+    /// Acquire a shared read lock.
     pub fn read(&self) -> RwLockReadGuard<'_, T> {
-        // If there are waiting writers, block new readers to prevent starvation
-        while self.write_waiters.load(Ordering::Acquire) > 0 || self.writer.load(Ordering::Acquire)
-        {
-            core::hint::spin_loop();
-        }
+        loop {
+            while self.write_waiters.load(Ordering::Acquire) != 0 {
+                core::hint::spin_loop();
+            }
 
-        self.readers.fetch_add(1, Ordering::Acquire);
+            let state = self.state.load(Ordering::Acquire);
+            if state & RWLOCK_WRITER != 0 || state & RWLOCK_READERS == RWLOCK_READERS {
+                core::hint::spin_loop();
+                continue;
+            }
 
-        RwLockReadGuard {
-            data: unsafe { &*self.data.get() },
-            readers: &self.readers,
+            if self.state.compare_exchange_weak(
+                state,
+                state + 1,
+                Ordering::Acquire,
+                Ordering::Relaxed,
+            ).is_ok() {
+                return RwLockReadGuard {
+                    data: unsafe { &*self.data.get() },
+                    state: &self.state,
+                };
+            }
         }
     }
 
-    /// Acquire write lock
+    /// Acquire an exclusive write lock.
     pub fn write(&self) -> RwLockWriteGuard<'_, T> {
-        self.write_waiters.fetch_add(1, Ordering::Relaxed);
+        self.write_waiters.fetch_add(1, Ordering::AcqRel);
 
-        // Wait until no readers and no other writer
-        while self.readers.load(Ordering::Acquire) > 0 || self.writer.load(Ordering::Acquire) {
+        loop {
+            if self.state.compare_exchange_weak(
+                0,
+                RWLOCK_WRITER,
+                Ordering::Acquire,
+                Ordering::Relaxed,
+            ).is_ok() {
+                self.write_waiters.fetch_sub(1, Ordering::Release);
+                return RwLockWriteGuard {
+                    data: unsafe { &mut *self.data.get() },
+                    state: &self.state,
+                };
+            }
             core::hint::spin_loop();
         }
-
-        self.write_waiters.fetch_sub(1, Ordering::Relaxed);
-        self.writer.store(true, Ordering::Release);
-
-        RwLockWriteGuard {
-            data: unsafe { &mut *self.data.get() },
-            writer: &self.writer,
-        }
     }
 
-    /// Try to acquire read lock
+    /// Try to acquire a shared read lock without blocking.
     pub fn try_read(&self) -> Option<RwLockReadGuard<'_, T>> {
-        if self.write_waiters.load(Ordering::Acquire) > 0 || self.writer.load(Ordering::Acquire) {
+        if self.write_waiters.load(Ordering::Acquire) != 0 {
             return None;
         }
 
-        self.readers.fetch_add(1, Ordering::Acquire);
+        loop {
+            let state = self.state.load(Ordering::Acquire);
+            if state & RWLOCK_WRITER != 0 || state & RWLOCK_READERS == RWLOCK_READERS {
+                return None;
+            }
+            if self.write_waiters.load(Ordering::Acquire) != 0 {
+                return None;
+            }
 
-        Some(RwLockReadGuard {
-            data: unsafe { &*self.data.get() },
-            readers: &self.readers,
-        })
+            if self.state.compare_exchange_weak(
+                state,
+                state + 1,
+                Ordering::Acquire,
+                Ordering::Relaxed,
+            ).is_ok() {
+                return Some(RwLockReadGuard {
+                    data: unsafe { &*self.data.get() },
+                    state: &self.state,
+                });
+            }
+        }
     }
 
-    /// Try to acquire write lock
+    /// Try to acquire an exclusive write lock without blocking.
     pub fn try_write(&self) -> Option<RwLockWriteGuard<'_, T>> {
-        if self.readers.load(Ordering::Acquire) > 0 || self.writer.load(Ordering::Acquire) {
-            return None;
+        if self.state.compare_exchange(
+            0,
+            RWLOCK_WRITER,
+            Ordering::Acquire,
+            Ordering::Relaxed,
+        ).is_ok() {
+            Some(RwLockWriteGuard {
+                data: unsafe { &mut *self.data.get() },
+                state: &self.state,
+            })
+        } else {
+            None
         }
-
-        if self
-            .writer
-            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
-            .is_err()
-        {
-            return None;
-        }
-
-        Some(RwLockWriteGuard {
-            data: unsafe { &mut *self.data.get() },
-            writer: &self.writer,
-        })
     }
 
-    /// Get mutable reference without locking (requires exclusive access to RwLock itself)
+    /// Get mutable reference without locking (requires exclusive access to the lock).
     pub fn get_mut(&mut self) -> &mut T {
         unsafe { &mut *self.data.get() }
     }
 
-    /// Consume the lock and return the inner data
+    /// Consume the lock and return the inner data.
     pub fn into_inner(self) -> T {
         self.data.into_inner()
     }
 }
 
-/// Read guard for RwLock
+/// Read guard for RwLock.
 pub struct RwLockReadGuard<'a, T: ?Sized> {
     data: &'a T,
-    readers: &'a AtomicUsize,
+    state: &'a AtomicUsize,
 }
 
 impl<'a, T: ?Sized> core::ops::Deref for RwLockReadGuard<'a, T> {
@@ -207,14 +236,14 @@ impl<'a, T: ?Sized> core::ops::Deref for RwLockReadGuard<'a, T> {
 
 impl<'a, T: ?Sized> Drop for RwLockReadGuard<'a, T> {
     fn drop(&mut self) {
-        self.readers.fetch_sub(1, Ordering::Release);
+        self.state.fetch_sub(1, Ordering::Release);
     }
 }
 
-/// Write guard for RwLock
+/// Write guard for RwLock.
 pub struct RwLockWriteGuard<'a, T: ?Sized> {
     data: &'a mut T,
-    writer: &'a AtomicBool,
+    state: &'a AtomicUsize,
 }
 
 impl<'a, T: ?Sized> core::ops::Deref for RwLockWriteGuard<'a, T> {
@@ -232,7 +261,7 @@ impl<'a, T: ?Sized> core::ops::DerefMut for RwLockWriteGuard<'a, T> {
 
 impl<'a, T: ?Sized> Drop for RwLockWriteGuard<'a, T> {
     fn drop(&mut self) {
-        self.writer.store(false, Ordering::Release);
+        self.state.store(0, Ordering::Release);
     }
 }
 
