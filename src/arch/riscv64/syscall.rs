@@ -15,6 +15,10 @@
 //!
 //! The syscall number is passed in a7, and arguments are in a0-a5.
 //! Return value is in a0.
+//!
+//! User signal-handler delivery is intentionally disabled on RISC-V until the
+//! ABI-compatible signal frame, executable restorer trampoline, and rt_sigreturn
+//! register restoration are implemented as one tested path.
 
 use crate::arch::api::TrapFrame;
 use crate::proc::scheduler;
@@ -77,37 +81,9 @@ pub fn handle(frame: &mut TrapFrame) {
         crate::smp::percpu::PERCPU_BLOCKS[cpu].in_syscall -= 1;
     }
 
-    // Deliver any pending signals before returning to user mode.
-    check_and_deliver_signals(frame);
-}
-
-/// Check and deliver pending signals to the current thread.
-fn check_and_deliver_signals(frame: &mut TrapFrame) {
-    let pid = scheduler::current_pid();
-    if pid == 0 {
-        return;
-    }
-
-    // Check for pending signals
-    if let Some((signo, handler)) = crate::proc::signal::get_pending_signal(pid) {
-        // Set up signal frame and redirect execution to signal handler
-        setup_signal_frame(frame, signo, handler);
-    }
-}
-
-/// Set up a signal frame on the user stack.
-fn setup_signal_frame(frame: &mut TrapFrame, signo: u32, handler: usize) {
-    // Allocate space on user stack for signal frame
-    let user_sp = frame.user_sp;
-
-    // Create signal frame (simplified - would need proper struct)
-    // Signal frame contains: saved context, signal info, trampoline code
-
-    // Update frame to execute signal handler
-    frame.pc = handler as u64;
-    frame.regs[10] = signo as u64; // First arg = signal number
-
-    // Would also set up rt_sigreturn trampoline for returning from handler
+    // Signal delivery is disabled on this architecture until the complete
+    // user signal frame/restorer/rt_sigreturn ABI is implemented. Do not
+    // redirect PC to a handler without saving a restorable context.
 }
 
 /// Syscall return - restore user registers and return via sret.
