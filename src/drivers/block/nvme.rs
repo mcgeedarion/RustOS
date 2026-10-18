@@ -183,9 +183,7 @@ pub fn read_sectors(ns: usize, lba: u64, count: u32, buf: &mut [u8]) -> Result<(
 
 pub fn write_sectors(ns: usize, lba: u64, count: u32, buf: &[u8]) -> Result<(), &'static str> {
     let info = disk_info(ns).ok_or("invalid namespace")?;
-    let needed = (count as usize)
-        .checked_mul(info.sector_size as usize)
-        .ok_or("transfer size overflow")?;
+    let needed = transfer_len(count, info.sector_size)?;
     if buf.len() < needed {
         return Err("buffer too small");
     }
@@ -724,7 +722,10 @@ mod tests {
     fn transfer_len_checks_overflow_and_block_sizes() {
         assert_eq!(transfer_len(4, 512), Ok(2048));
         assert_eq!(transfer_len(2, 4096), Ok(8192));
+        #[cfg(target_pointer_width = "32")]
         assert!(transfer_len(u32::MAX, u32::MAX).is_err());
+        #[cfg(target_pointer_width = "64")]
+        assert_eq!(transfer_len(u32::MAX, u32::MAX), Ok((u32::MAX as usize) * (u32::MAX as usize)));
     }
 }
 
