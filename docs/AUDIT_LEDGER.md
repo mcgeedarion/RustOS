@@ -141,6 +141,51 @@ Severity scale:
   - Verify a clean checkout can regenerate build outputs using the documented build command.
   - Confirm no required generated output is consumed from a tracked `target/` path.
 
+### RUSTOS-AUDIT-009: AArch64 user-access code clears the wrong control bit and does not recover from user faults
+
+- **Severity:** Critical
+- **Location:** `src/kernel/uaccess.rs:139-170`, with the architecture dispatch at `src/kernel/uaccess.rs:120-136`
+- **Reproduction:**
+  1. On AArch64, call `copy_from_user` or `copy_to_user` with an unmapped user address.
+  2. The helper modifies `SCTLR_EL1` using `sctlr & !0x40000`; the mask is bit 18, not bit 22, and PAN is not controlled by that SCTLR bit.
+  3. The AArch64 path then returns `Ok(result)` without checking a per-CPU fault-fixup state. A real translation fault may take the kernel's normal fault path instead of being converted to `EFAULT`.
+- **Root cause:** The code conflates PAN state with an SCTLR bit and its fault-recovery contract is not implemented in the AArch64 helper. The module documentation itself says exception-table fault fixups have not landed, while the public copy APIs claim faults become errors.
+- **Proposed correction:** Implement AArch64 user access using the architecturally correct PAN mechanism for the supported exception level, with a guaranteed restoration path. Add exception-table/fault fixups that redirect faults occurring inside the copy window and return `UaccessError::Fault`. Until fault fixups are implemented, do not expose this path as fault-safe; fail closed or keep affected syscall operations unavailable.
+- **Regression tests:**
+  - AArch64 QEMU tests for valid reads/writes, unmapped pages, read-only destinations, page-boundary crossing, and invalid top-half addresses.
+  - Verify each invalid access returns `EFAULT` and the kernel continues running.
+  - Verify the original PAN/interrupt state is restored on success and fault paths.
+  - Review generated assembly against the ARM architecture manual.
+
+### RUSTOS-AUDIT-010: RISC-V build references an undefined user-address limit
+
+- **Severity:** High
+- **Location:** `src/kernel/uaccess.rs:21-31`, `src/kernel/uaccess.rs:39-54`, and unconditional module export at `src/kernel/mod.rs:23`
+- **Reproduction:**
+  1. Build the full kernel for `riscv64` with the module graph enabled.
+  2. `USER_ADDR_MAX` is defined only under `target_arch = "aarch64"` and `target_arch = "x86_64"`, but `user_access_ok` and `USER_SPACE_END` reference it without an architecture-specific RISC-V definition.
+  3. Since `kernel::uaccess` is exported unconditionally, the RISC-V compilation path reaches these references.
+- **Root cause:** The user/kernel virtual-address split was added only for x86_64 and AArch64, while the source tree still includes a RISC-V architecture path.
+- **Proposed correction:** Define the RISC-V user address ceiling from the actual Sv39/Sv48/Sv57 paging configuration, or centralize the bound in the architecture paging API. Do not guess a limit that disagrees with the active page-table mode.
+- **Regression tests:**
+  - Compile the full kernel for every claimed architecture, including RISC-V, in CI.
+  - Unit-test the last valid user address, the first kernel address, wraparound ranges, and addresses outside the selected paging mode.
+  - Assert the exported `USER_SPACE_END` matches the architecture's paging configuration.
+
+### RUSTOS-AUDIT-011: `wait4` can overflow when interpreting the most-negative PID selector
+
+- **Severity:** Medium
+- **Location:** `src/proc/wait.rs:102-120`
+- **Reproduction:**
+  1. Invoke `wait4` / `waitpid` with the selector value `isize::MIN` and any valid status pointer.
+  2. The negative-selector branch evaluates `-n` to obtain a process-group ID.
+  3. The absolute value of the minimum signed integer is not representable in `isize`, so this can overflow or produce a nonsensical selector depending on build overflow settings.
+- **Root cause:** A syscall-controlled signed integer is negated without checked arithmetic.
+- **Proposed correction:** Use `checked_neg()` or `checked_abs()` and return a defined error for an unrepresentable selector. Keep `-1` and `0` special cases separate as they are now.
+- **Regression tests:**
+  - Test selectors `-1`, `0`, positive PID, ordinary negative process-group ID, and `isize::MIN`.
+  - Confirm the minimum value never panics and never matches an unintended process group.
+
 ## Related files inspected in this pass
 
 The following files received focused inspection. This is not a claim that every line in each file has been proven correct.
