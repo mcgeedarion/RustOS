@@ -34,9 +34,9 @@ fn read_mask(mask_va: usize, sigset_size: usize) -> Result<u64, isize> {
     if mask_va == 0 || sigset_size != SIGSET_BYTES {
         return Err(EINVAL);
     }
-    let mut mask = 0u64;
-    crate::uaccess::copy_from_user(unsafe { core::slice::from_raw_parts_mut((&mut mask as *mut u64).cast::<u8>(), SIGSET_BYTES) }, mask_va)
-        .map_err(|_| EFAULT)?;
+    let mut mask_bytes = [0u8; SIGSET_BYTES];
+    crate::uaccess::copy_from_user(&mut mask_bytes, mask_va).map_err(|_| EFAULT)?;
+    let mut mask = u64::from_ne_bytes(mask_bytes);
     // Linux silently ignores SIGKILL/SIGSTOP in signalfd masks because those
     // signals cannot be blocked or consumed through signalfd.
     mask &= !(1u64 << (9 - 1));
