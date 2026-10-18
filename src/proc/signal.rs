@@ -623,7 +623,7 @@ pub fn sys_rt_sigreturn_aarch64(frame: &mut crate::arch::aarch64::interrupts::Ex
     let sp = frame.sp_el0 as usize;
     let sf_size = core::mem::size_of::<SigFrameAarch64>();
     let mut bytes = alloc::vec![0u8; sf_size];
-    if !copy_from_user(sp, &mut bytes) {
+    if copy_from_user(&mut bytes, sp).is_err() {
         return;
     }
     let magic = u64::from_ne_bytes(bytes[0..8].try_into().unwrap_or([0; 8]));
