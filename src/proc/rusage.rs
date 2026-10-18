@@ -64,7 +64,7 @@ pub fn sys_getrusage(who: i32, usage_va: usize) -> isize {
 
     // Fields 40..144 (ru_ixrss through ru_nivcsw) remain zero.
 
-    if copy_to_user(usage_va, buf.as_ptr(), buf.len()).is_err() {
+    if copy_to_user(usage_va, buf).is_err() {
         return -14; // EFAULT
     }
     0
