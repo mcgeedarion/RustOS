@@ -2,6 +2,8 @@
 
 The slim profiles must build independently of the full MM, VFS, and scheduler.
 Compilation is a separate contract from boot success or userspace execution.
+The `boot_minimal` and `userspace_boot` features are mutually exclusive;
+enabling both is rejected at compile time.
 
 ## Supported selections
 
