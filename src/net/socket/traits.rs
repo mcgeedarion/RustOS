@@ -18,7 +18,7 @@ pub fn sys_setsockopt(
         return -9;
     };
     let mut val = [0u8; 4];
-    copy_from_user(optval_va, &mut val);
+    copy_from_user(&mut val, optval_va);
     let v = u32::from_ne_bytes(val);
     match (level, optname) {
         (SOL_SOCKET, SO_REUSEADDR) => {
