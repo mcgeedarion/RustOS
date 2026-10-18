@@ -34,6 +34,9 @@ const LANDLOCK_ACCESS_FS_TRUNCATE: u64 = 1 << 14;
 const ACCESS_FS_MASK: u64 = (1u64 << 16) - 1;
 
 #[repr(C)]
+unsafe impl crate::kernel::uaccess::UserPod for RulesetAttr {}
+unsafe impl crate::kernel::uaccess::UserPod for PathBeneathAttr {}
+
 #[derive(Clone, Copy, Default)]
 struct RulesetAttr {
     handled_access_fs: u64,
@@ -119,7 +122,7 @@ impl LsmHooks for LandlockLsm {
     }
 }
 
-fn copy_from_user<T: Copy + Default>(addr: usize) -> Result<T, isize> {
+fn copy_from_user<T: crate::kernel::uaccess::UserPod + Default>(addr: usize) -> Result<T, isize> {
     if addr == 0 {
         return Err(EFAULT);
     }
