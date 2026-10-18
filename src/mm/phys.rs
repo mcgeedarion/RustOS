@@ -19,9 +19,11 @@ const _: () = assert!(
 
 cfg_if::cfg_if! {
     if #[cfg(target_arch = "aarch64")] {
-        pub const PHYS_OFFSET: usize = 0xFFFF_0000_0000_0000;
+        pub const PHYS_OFFSET: usize = crate::arch::aarch64::mem_layout::va48::PHYS_OFFSET;
     } else if #[cfg(target_arch = "x86_64")] {
-        pub const PHYS_OFFSET: usize = 0xFFFF_8880_0000_0000;
+        pub const PHYS_OFFSET: usize = crate::arch::x86_64::mem_layout::higher_half::PHYS_OFFSET;
+    } else if #[cfg(target_arch = "riscv64")] {
+        pub const PHYS_OFFSET: usize = crate::arch::riscv64::mem_layout::va39::PHYS_OFFSET;
     } else {
         compile_error!("unsupported architecture: add PHYS_OFFSET for this target");
     }
