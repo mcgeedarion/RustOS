@@ -34,10 +34,10 @@ pub(super) fn resolve_at_path_for_stubs(dirfd: i32, path_va: usize) -> Result<St
 
 // copy helpers used by ptrace
 fn copy_to_user(dst_va: usize, src: &[u8]) -> Result<(), ()> {
-    crate::uaccess::copy_to_user(dst_va, src.as_ptr(), src.len()).map_err(|_| ())
+    crate::uaccess::copy_to_user(dst_va, src).map_err(|_| ())
 }
 fn copy_from_user(dst: &mut [u8], src_va: usize) -> Result<(), ()> {
-    crate::uaccess::copy_from_user(dst.as_mut_ptr(), src_va, dst.len()).map_err(|_| ())
+    crate::uaccess::copy_from_user(dst, src_va).map_err(|_| ())
 }
 
 /// NR 79  getcwd(buf_va, size)
