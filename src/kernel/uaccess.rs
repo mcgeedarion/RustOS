@@ -126,9 +126,12 @@ where
 {
     #[cfg(target_arch = "aarch64")]
     {
-        // ARM64 user access is controlled by PAN (Privileged Access Never).
-        // Enable user access by clearing PAN bit in SCTLR_EL1, then restore it.
-        run_with_pan_disabled(f)
+        // Fail closed until an exception-table/fault-fixup path exists.
+        // Disabling PAN alone cannot convert translation faults into EFAULT,
+        // and the previous SCTLR_EL1 bit manipulation did not control PAN.
+        // Never execute an unchecked user pointer dereference on this target.
+        let _ = f;
+        Err(UaccessError::Fault)
     }
     #[cfg(target_arch = "x86_64")]
     {
@@ -141,44 +144,8 @@ where
     }
 }
 
-/// AArch64-specific helper to enable/disable PAN around user access
-#[cfg(target_arch = "aarch64")]
-#[inline]
-unsafe fn run_with_pan_disabled<F, T>(f: F) -> UaccessResult<T>
-where
-    F: FnOnce() -> T,
-{
-    // Read current SCTLR_EL1 value
-    let mut sctlr: u64;
-    core::arch::asm!(
-        "mrs {sctlr}, sctlr_el1",
-        sctlr = out(reg) sctlr,
-        options(nostack, preserves_flags),
-    );
-
-    // Clear PAN bit (bit 22 = 0x40000) to allow user access
-    let sctlr_no_pan = sctlr & !0x40000u64;
-    if sctlr_no_pan != sctlr {
-        core::arch::asm!(
-            "msr sctlr_el1, {sctlr}",
-            "isb",
-            sctlr = in(reg) sctlr_no_pan,
-            options(nostack, preserves_flags),
-        );
-    }
-
-    let result = f();
-
-    // Restore original SCTLR_EL1 (re-enable PAN if it was set)
-    core::arch::asm!(
-        "msr sctlr_el1, {sctlr}",
-        "isb",
-        sctlr = in(reg) sctlr,
-        options(nostack, preserves_flags),
-    );
-
-    Ok(result)
-}
+// AArch64 user access intentionally fails closed until PAN handling and
+// exception-table fault recovery are implemented together.
 
 #[cfg(target_arch = "x86_64")]
 mod arch_x86_64 {
