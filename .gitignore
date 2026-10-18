@@ -5,3 +5,7 @@
 # Editor and OS metadata
 .DS_Store
 *.swp
+
+# Generated images and downloaded tool installers
+/boot-x86_64.img
+/rustup-init.exe
