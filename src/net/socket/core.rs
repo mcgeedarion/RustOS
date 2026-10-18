@@ -181,7 +181,9 @@ pub fn sys_connect(fd: usize, addr_va: usize, _addrlen: u32) -> isize {
     };
     if domain == AF_UNIX {
         let mut path_buf = [0u8; 108];
-        copy_from_user(&mut path_buf, addr_va + 2);
+        if copy_from_user(&mut path_buf, addr_va + 2).is_err() {
+            return -14;
+        }
         let end = path_buf.iter().position(|&b| b == 0).unwrap_or(108);
         let path = String::from_utf8_lossy(&path_buf[..end]).into_owned();
         return unix_connect(fd, &path);
@@ -236,7 +238,9 @@ pub fn sys_getsockname(fd: usize, addr_va: usize, addrlen_va: usize) -> isize {
             }
             if addrlen_va != 0 {
                 let sz: u32 = 28;
-                copy_to_user(addrlen_va, &sz.to_ne_bytes());
+                if copy_to_user(addrlen_va, &sz.to_ne_bytes()).is_err() {
+                    return -14;
+                }
             }
         },
         _ => {},
@@ -255,7 +259,9 @@ pub fn sys_getpeername(fd: usize, addr_va: usize, addrlen_va: usize) -> isize {
             write_sockaddr_in(addr_va, *ip, *port);
             if addrlen_va != 0 {
                 let sz: u32 = 16;
-                copy_to_user(addrlen_va, &sz.to_ne_bytes());
+                if copy_to_user(addrlen_va, &sz.to_ne_bytes()).is_err() {
+                    return -14;
+                }
             }
         },
         Some(SockAddr::V6 {
@@ -268,7 +274,9 @@ pub fn sys_getpeername(fd: usize, addr_va: usize, addrlen_va: usize) -> isize {
             write_sockaddr_in6(addr_va, ip, *port, *flowinfo, *scope_id);
             if addrlen_va != 0 {
                 let sz: u32 = 28;
-                copy_to_user(addrlen_va, &sz.to_ne_bytes());
+                if copy_to_user(addrlen_va, &sz.to_ne_bytes()).is_err() {
+                    return -14;
+                }
             }
         },
         _ => {},
