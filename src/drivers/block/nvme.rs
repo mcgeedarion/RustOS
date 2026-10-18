@@ -45,6 +45,8 @@ const CSTS_CFS: u32 = 1 << 1;
 
 const ADMIN_DEPTH: usize = 64;
 const IO_DEPTH: usize = 64;
+const MAX_DMA_TRANSFER: usize = 2 * 1024 * 1024;
+static DMA_BUFFER_LOCK: Mutex<()> = Mutex::new(());
 
 const ADM_CREATE_IOSQ: u8 = 0x01;
 const ADM_CREATE_IOCQ: u8 = 0x05;
@@ -156,20 +158,52 @@ pub fn disk_info(idx: usize) -> Option<DiskInfo> {
 
 pub fn read_sectors(ns: usize, lba: u64, count: u32, buf: &mut [u8]) -> Result<(), &'static str> {
     let info = disk_info(ns).ok_or("invalid namespace")?;
-    let needed = (count as usize).checked_mul(info.sector_size as usize).ok_or("transfer size overflow")?;
+    let needed = (count as usize)
+        .checked_mul(info.sector_size as usize)
+        .ok_or("transfer size overflow")?;
     if buf.len() < needed {
         return Err("buffer too small");
     }
-    io_rw(ns as u32 + 1, lba, count, info.sector_size, buf.as_mut_ptr() as u64, false)
+    if count == 0 || lba.checked_add(count as u64).filter(|end| *end <= info.sector_count).is_none() {
+        return Err("invalid sector range");
+    }
+    if needed > MAX_DMA_TRANSFER {
+        return Err("transfer exceeds DMA staging buffer");
+    }
+
+    // NVMe DMA must use a stable, page-aligned physical buffer, not an
+    // arbitrary caller-provided virtual pointer. Serialize access to the
+    // controller's shared staging region.
+    let _dma_guard = DMA_BUFFER_LOCK.lock();
+    let dma_phys = CTRL.lock().as_ref().ok_or("nvme not initialised")?.dma_phys;
+    io_rw(ns as u32 + 1, lba, count, info.sector_size, dma_phys, false)?;
+    unsafe {
+        core::ptr::copy_nonoverlapping(dma_phys as *const u8, buf.as_mut_ptr(), needed);
+    }
+    Ok(())
 }
 
 pub fn write_sectors(ns: usize, lba: u64, count: u32, buf: &[u8]) -> Result<(), &'static str> {
     let info = disk_info(ns).ok_or("invalid namespace")?;
-    let needed = count as usize * info.sector_size as usize;
+    let needed = (count as usize)
+        .checked_mul(info.sector_size as usize)
+        .ok_or("transfer size overflow")?;
     if buf.len() < needed {
         return Err("buffer too small");
     }
-    io_rw(ns as u32 + 1, lba, count, info.sector_size, buf.as_ptr() as u64, true)
+    if count == 0 || lba.checked_add(count as u64).filter(|end| *end <= info.sector_count).is_none() {
+        return Err("invalid sector range");
+    }
+    if needed > MAX_DMA_TRANSFER {
+        return Err("transfer exceeds DMA staging buffer");
+    }
+
+    let _dma_guard = DMA_BUFFER_LOCK.lock();
+    let dma_phys = CTRL.lock().as_ref().ok_or("nvme not initialised")?.dma_phys;
+    unsafe {
+        core::ptr::copy_nonoverlapping(buf.as_ptr(), dma_phys as *mut u8, needed);
+    }
+    io_rw(ns as u32 + 1, lba, count, info.sector_size, dma_phys, true)
 }
 
 // ── BlockDev impl
@@ -321,7 +355,7 @@ unsafe fn _init(bar0: u64) {
         .expect("nvme: DMA allocation failed for IO submission queue");
     let iocq = alloc_dma(IO_DEPTH * 16, 4096)
         .expect("nvme: DMA allocation failed for IO completion queue");
-    let dma = alloc_dma(4096, 4096).expect("nvme: DMA allocation failed for scratch buffer");
+    let dma = alloc_dma(MAX_DMA_TRANSFER, 4096).expect("nvme: DMA allocation failed for staging buffer");
     // Dedicated 4 KiB page for PRP lists.
     let prp_list = alloc_dma(4096, 4096).expect("nvme: DMA allocation failed for PRP list");
 
