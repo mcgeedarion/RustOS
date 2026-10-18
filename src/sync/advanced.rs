@@ -129,12 +129,16 @@ impl<T> RwLock<T> {
                 continue;
             }
 
-            if self.state.compare_exchange_weak(
-                state,
-                state + 1,
-                Ordering::Acquire,
-                Ordering::Relaxed,
-            ).is_ok() {
+            if self
+                .state
+                .compare_exchange_weak(
+                    state,
+                    state + 1,
+                    Ordering::Acquire,
+                    Ordering::Relaxed,
+                )
+                .is_ok()
+            {
                 return RwLockReadGuard {
                     data: unsafe { &*self.data.get() },
                     state: &self.state,
@@ -148,12 +152,16 @@ impl<T> RwLock<T> {
         self.write_waiters.fetch_add(1, Ordering::AcqRel);
 
         loop {
-            if self.state.compare_exchange_weak(
-                0,
-                RWLOCK_WRITER,
-                Ordering::Acquire,
-                Ordering::Relaxed,
-            ).is_ok() {
+            if self
+                .state
+                .compare_exchange_weak(
+                    0,
+                    RWLOCK_WRITER,
+                    Ordering::Acquire,
+                    Ordering::Relaxed,
+                )
+                .is_ok()
+            {
                 self.write_waiters.fetch_sub(1, Ordering::Release);
                 return RwLockWriteGuard {
                     data: unsafe { &mut *self.data.get() },
