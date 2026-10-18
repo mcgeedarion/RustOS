@@ -53,7 +53,7 @@ impl TicketLock {
             // We can acquire if we're the next ticket
             if self
                 .next_ticket
-                .compare_exchange(expected, expected + 1, Ordering::Relaxed, Ordering::Relaxed)
+                .compare_exchange(expected, expected.wrapping_add(1), Ordering::Relaxed, Ordering::Relaxed)
                 .is_ok()
             {
                 return Some(current);
