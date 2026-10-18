@@ -305,11 +305,7 @@ pub fn dispatch_driver_bind(bdf: u32, cap_flags: u32) -> isize {
 pub fn dispatch_dma_alloc(handle: u64, size: usize, align: usize, phys_out: usize) -> isize {
     match sys_dma_alloc(DriverHandle(handle), size, align) {
         Ok((user_va, phys_addr)) => {
-            if crate::uaccess::copy_to_user(
-                phys_out,
-                &phys_addr.to_ne_bytes() as *const u8,
-                core::mem::size_of::<usize>(),
-            )
+            if crate::uaccess::copy_to_user(phys_out, &phys_addr.to_ne_bytes())
             .is_err()
             {
                 -14
