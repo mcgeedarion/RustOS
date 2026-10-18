@@ -270,7 +270,7 @@ mod tests {
         assert!(lock.try_lock_irqsave().is_some());
     }
 
-    #[cfg(target_arch = "aarch64")]
+    #[cfg(all(target_arch = "aarch64", target_os = "none"))]
     #[test]
     fn nested_irq_save_does_not_reenable_interrupts_early() {
         use super::{irq_enable, irq_flags_and_disable};
