@@ -404,12 +404,12 @@ fn push_sigframe_x86(
         si_addr: info.addr as u64,
         sig_mask: sigmask_for(scheduler::current_pid()),
     };
-    if !copy_to_user(user_rsp, unsafe {
+    if copy_to_user(user_rsp, unsafe {
         core::slice::from_raw_parts(
             &sf as *const _ as *const u8,
             core::mem::size_of::<SigFrameX86>(),
         )
-    }) {
+    }).is_err() {
         return false;
     }
     frame.rsp = user_rsp;
@@ -444,12 +444,12 @@ fn push_sigframe_aarch64(
         sig_mask: sigmask_for(scheduler::current_pid()),
         restorer: sa.restorer as u64,
     };
-    if !copy_to_user(sp, unsafe {
+    if copy_to_user(sp, unsafe {
         core::slice::from_raw_parts(
             &sf as *const _ as *const u8,
             core::mem::size_of::<SigFrameAarch64>(),
         )
-    }) {
+    }).is_err() {
         return false;
     }
     frame.sp_el0 = sp as u64;
@@ -557,7 +557,7 @@ pub fn check_and_deliver(frame: &mut crate::arch::x86_64::syscall::SyscallFrame)
 pub fn sys_rt_sigreturn(frame: &mut crate::arch::x86_64::syscall::SyscallFrame) {
     let sp = frame.rsp;
     let mut bytes = [0u8; core::mem::size_of::<SigFrameX86>()];
-    if !copy_from_user(sp, &mut bytes) {
+    if copy_from_user(&mut bytes, sp).is_err() {
         return;
     }
     let sf: SigFrameX86 = unsafe { core::mem::transmute(bytes) };
