@@ -12,7 +12,7 @@ pub fn next_ephemeral() -> u16 {
 
 pub fn read_sockaddr_in(va: usize) -> Option<(u16, u32)> {
     let mut buf = [0u8; 8];
-    copy_from_user(va, &mut buf);
+    copy_from_user(&mut buf, va);
     if u16::from_be_bytes([buf[0], buf[1]]) != 2 {
         return None;
     }
