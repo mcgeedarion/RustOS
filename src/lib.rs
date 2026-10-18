@@ -2,20 +2,25 @@
 //!
 //! # Build profiles
 //!
-//! Three mutually-exclusive feature combinations select the active module
-//! tree:
+//! The active module tree is selected by the slim-profile feature flags:
 //!
-//! | Features active              | Profile                     |
-//! |------------------------------|-----------------------------|
-//! | `boot_minimal` without `userspace_boot` | First-stage boot only |
-//! | `userspace_boot`             | Boot + thin userspace shims |
-//! | neither slim feature        | Full subsystem graph        |
+//! | Features active                         | Profile                         |
+//! |-----------------------------------------|---------------------------------|
+//! | `boot_minimal` only                    | First-stage boot only           |
+//! | `userspace_boot` only                  | Initramfs/ELF diagnostics        |
+//! | neither slim feature                   | Full subsystem graph             |
+//! | both slim features                     | Rejected at compile time        |
 //!
-//! Cargo's `full_kernel` default currently activates both slim flags and
-//! therefore selects userspace diagnostics, not the full subsystem graph.
-//! The `arch`, `boot_perf`, `console`, `init`, and `kernel` modules
-//! compile under all three profiles because the panic handler, early console,
-//! and BootInfo parser are needed everywhere.
+//! The default `full_kernel` feature enables `uefi_boot` only. Since neither
+//! slim-profile flag is enabled by default, Cargo defaults select the full
+//! subsystem graph. The `arch`, `boot_perf`, `console`, `init`, and
+//! `kernel` modules compile under all supported profiles because early boot,
+//! panic handling, and BootInfo parsing are needed everywhere.
+
+// The slim profiles select different module graphs and cannot be combined.
+// Reject ambiguous builds instead of silently letting userspace_boot win.
+#[cfg(all(feature = "boot_minimal", feature = "userspace_boot"))]
+compile_error!("features `boot_minimal` and `userspace_boot` are mutually exclusive");
 
 #![cfg_attr(not(test), no_std)]
 #![cfg_attr(not(test), no_main)]
