@@ -308,11 +308,13 @@ pub unsafe fn copy_to_user_raw(dst: *mut u8, src: *const u8, len: usize) -> usiz
 
 /// Types for which every possible byte pattern is a valid value.
 ///
-/// Implementations are restricted to primitive integer and floating-point
-/// types. Do not implement this trait for bool, char, references, or enums.
-pub trait UserPod: Copy {}
+/// # Safety
+/// Implementors must have no invalid bit patterns, including padding bytes
+/// whose values would be observed by Rust. Do not implement this trait for
+/// bool, char, references, enums, or structs containing those types.
+pub unsafe trait UserPod: Copy {}
 macro_rules! impl_user_pod {
-    ($($ty:ty),+ $(,)?) => { $(impl UserPod for $ty {})+ };
+    ($($ty:ty),+ $(,)?) => { $(unsafe impl UserPod for $ty {})+ };
 }
 impl_user_pod!(u8, i8, u16, i16, u32, i32, u64, i64, u128, i128, usize, isize, f32, f64);
 
