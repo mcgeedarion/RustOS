@@ -99,7 +99,7 @@ pub const PIPE_BUF: usize = 4096;
 
 /// Backing fd range reserved for pipe ends.  Read end = even, write end = odd.
 /// 0x8000_0000 is far above any VFS / devfs / socket fd.
-pub(crate) const PIPE_FD_BASE: usize = 0x8000_0000;
+pub(crate) const PIPE_FD_BASE: usize = 0x9000_0000;
 
 const EAGAIN: isize = -11;
 const EINTR: isize = -4;
@@ -219,22 +219,32 @@ pub fn is_pipe(bfd: usize) -> bool {
 }
 
 pub fn is_pipe_fd(user_fd: usize) -> bool {
+    user_pipe_backing(user_fd).is_some()
+}
+
+pub fn user_pipe_backing(user_fd: usize) -> Option<usize> {
     let pid = crate::proc::scheduler::current_pid();
     let bfd = crate::fs::process_fd::proc_fd_backing(pid, user_fd);
-    if bfd < 0 {
-        return false;
-    }
-    is_pipe(bfd as usize)
+    if bfd < 0 { return None; }
+    backing_pipe_fd(bfd as usize)
+}
+
+pub fn backing_pipe_fd(bfd: usize) -> Option<usize> {
+    if is_pipe(bfd) { return Some(bfd); }
+    let (scheme, fid) = crate::fs::scheme_fd::scheme_fd_get(bfd)?;
+    scheme.pipe_backing_fd(fid)
+}
+
+pub fn pipe_bytes_available(bfd: usize) -> usize {
+    let Some(bfd) = backing_pipe_fd(bfd) else { return 0; };
+    let Some(state) = PIPE_TABLE.lock().get(bfd) else { return 0; };
+    let count = state.inner.lock().len;
+    count
 }
 
 /// Legacy readiness oracle — called by poll::fd_ready().
 pub fn pipe_poll(user_fd: usize, events: u32) -> u32 {
-    let pid = crate::proc::scheduler::current_pid();
-    let bfd_raw = crate::fs::process_fd::proc_fd_backing(pid, user_fd);
-    if bfd_raw < 0 {
-        return POLLNVAL;
-    }
-    let bfd = bfd_raw as usize;
+    let Some(bfd) = user_pipe_backing(user_fd) else { return POLLNVAL; };
 
     let state = match PIPE_TABLE.lock().get(bfd) {
         Some(s) => s,
@@ -395,7 +405,7 @@ pub fn pipe_write(bfd: usize, buf: &[u8]) -> isize {
                 if inner.read_open == 0 {
                     // Broken pipe: deliver SIGPIPE, return EPIPE.
                     drop(inner);
-                    crate::proc::signal::send_signal(pid, SIGPIPE);
+                    crate::proc::signal::send_signal(pid, SIGPIPE as u8);
                     return if written == 0 {
                         EPIPE
                     } else {
@@ -503,6 +513,13 @@ impl PipeScheme {
 }
 
 impl Scheme for PipeScheme {
+    fn poll_source(&self, fid: SchemeFileId) -> Option<Arc<dyn PollSource>> {
+        pipe_poll_source(self.bfd_from_fid(fid))
+    }
+
+    fn pipe_backing_fd(&self, fid: SchemeFileId) -> Option<usize> {
+        Some(self.bfd_from_fid(fid))
+    }
     fn open(&self, _url: &str, _flags: OpenFlags) -> Result<SchemeFileId, SchemeError> {
         Err(SchemeError::InvalidArg)
     }
@@ -547,7 +564,7 @@ pub fn sys_pipe(pipefd_va: usize) -> isize {
 
 /// NR 293.
 pub fn sys_pipe2(pipefd_va: usize, flags: u32) -> isize {
-    use crate::fs::process_fd::proc_fd_install;
+    use crate::fs::process_fd::proc_fd_install_checked;
     use crate::fs::scheme_fd::{alloc_scheme_backing_fd, scheme_fd_register};
     use crate::uaccess::{copy_to_user, validate_user_ptr};
 
@@ -601,10 +618,22 @@ pub fn sys_pipe2(pipefd_va: usize, flags: u32) -> isize {
     }
 
     // 6. Install scheme fds into the process fd table.
-    let rd_flags = if cloexec { O_CLOEXEC } else { 0 };
-    let wr_flags = 1 | if cloexec { O_CLOEXEC } else { 0 };
-    let read_fd = proc_fd_install(pid, scheme_read_bfd, None, rd_flags, None);
-    let write_fd = proc_fd_install(pid, scheme_write_bfd, None, wr_flags, None);
+    let rd_flags = flags & (O_NONBLOCK | O_CLOEXEC);
+    let wr_flags = 1 | rd_flags;
+    let read_fd = match proc_fd_install_checked(pid, scheme_read_bfd, None, rd_flags, None) {
+        Ok(fd) => fd,
+        Err(e) => {
+            crate::fs::scheme_fd::scheme_fd_close(scheme_write_bfd);
+            return e;
+        }
+    };
+    let write_fd = match proc_fd_install_checked(pid, scheme_write_bfd, None, wr_flags, None) {
+        Ok(fd) => fd,
+        Err(e) => {
+            crate::fs::process_fd::proc_fd_close(pid, read_fd);
+            return e;
+        }
+    };
 
     // 7. Copy [read_fd, write_fd] to userspace.
     let pair: [i32; 2] = [read_fd as i32, write_fd as i32];

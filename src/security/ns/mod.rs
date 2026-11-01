@@ -73,7 +73,7 @@ impl NsSet {
     pub fn clone_with_flags(&self, flags: u64) -> Self {
         NsSet {
             pid: if flags & CLONE_NEWPID != 0 {
-                Arc::new(pid_ns::PidNs::new_child())
+                Arc::new(pid_ns::PidNs::new_child(&self.pid))
             } else {
                 self.pid.clone()
             },

@@ -46,13 +46,17 @@ const VIRTIO_BLK_MMIO_BASE: usize = 0x1000_1000;
 static mut GDBSTUB_SERIAL: crate::debug::gdbstub::serial::SerialPort =
     unsafe { crate::debug::gdbstub::serial::SerialPort::new() };
 
-pub fn init(_boot_info: &'static BootInfo) -> ! {
+pub fn init(boot_info: &'static BootInfo) -> ! {
     serial::early_init();
 
-    #[cfg(target_arch = "x86_64")]
-    let vga_active = crate::drivers::vga::init();
-    #[cfg(not(target_arch = "x86_64"))]
-    let vga_active = false;
+    let fb = boot_info.framebuffer;
+    let gop_active = fb.base != 0 && crate::drivers::gop::init_with_format(
+        fb.base as u64, fb.width, fb.height, fb.stride, fb.format,
+    );
+    if !gop_active {
+        crate::drivers::vga::init();
+    }
+    let vga_active = !gop_active && crate::drivers::vga::is_initialised();
 
     crate::allocator::heap_init();
 
@@ -93,13 +97,14 @@ pub fn init(_boot_info: &'static BootInfo) -> ! {
 
     xsave_init();
 
-    let rsdp_pa = unsafe { crate::arch::x86_64::uefi_entry::RSDP_PHYS };
-    crate::firmware::acpi::acpi_init(rsdp_pa);
+    unsafe { crate::firmware::acpi::acpi_init(boot_info.rsdp_phys as usize); }
     crate::serial_println!("acpi: {} CPU(s)", crate::firmware::acpi::cpu_count());
 
     crate::drivers::pcie::pcie_init();
 
-    crate::drivers::virtio_gpu::init();
+    // The current virtio-gpu transport is MMIO-only. A PCI BAR is not a
+    // virtio-MMIO register bank; retain GOP/VGA until a PCI transport is found.
+    crate::serial_println!("virtio-gpu: no discovered MMIO transport; retaining firmware display");
     crate::serial_println!(
         "virtio-gpu: {} scanout(s)",
         crate::drivers::virtio_gpu::num_scanouts()
@@ -194,7 +199,7 @@ impl StorageBackend {
         }
     }
 
-    fn read_sector(&self, lba: u64, buf: &mut [u8]) -> bool {
+    fn read_sector(&self, lba: u64, buf: &mut [u8; 512]) -> bool {
         match self {
             Self::Ahci => crate::drivers::block::ahci::ahci_read_sector(0, lba, buf),
             Self::Nvme(ns) => crate::drivers::block::nvme::read_sectors(*ns, lba, 1, buf).is_ok(),

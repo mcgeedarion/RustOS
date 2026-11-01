@@ -13,7 +13,7 @@
 //!   5. Obtain the EFI memory map dynamically and call ExitBootServices.
 //!   6. Switch to the kernel boot stack and tail-call kernel_main().
 
-use crate::init::boot_info::{BootInfo, BootRange, EfiMemoryMapInfo};
+use crate::init::boot_info::{BootInfo, BootRange, EfiMemoryMapInfo, FramebufferInfo};
 use core::arch::asm;
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use spin::Once;
@@ -150,6 +150,81 @@ struct EfiBootServices {
     // Library Services
     _protocols_per_handle: *mut core::ffi::c_void, // 0x130
     locate_handle_buffer: LocateHandleBufferFn,    // 0x138
+    locate_protocol: unsafe extern "efiapi" fn(
+        *const [u64; 2], *mut core::ffi::c_void, *mut *mut core::ffi::c_void,
+    ) -> EfiStatus, // 0x140
+}
+
+#[repr(C)]
+struct EfiGraphicsOutput {
+    query_mode: *mut core::ffi::c_void,
+    set_mode: *mut core::ffi::c_void,
+    blt: *mut core::ffi::c_void,
+    mode: *const EfiGraphicsMode,
+}
+
+#[repr(C)]
+struct EfiGraphicsMode {
+    max_mode: u32,
+    mode: u32,
+    info: *const EfiGraphicsInfo,
+    size_of_info: usize,
+    framebuffer_base: u64,
+    framebuffer_size: usize,
+}
+
+#[repr(C)]
+struct EfiGraphicsInfo {
+    version: u32,
+    width: u32,
+    height: u32,
+    format: u32,
+    pixel_masks: [u32; 4],
+    pixels_per_scanline: u32,
+}
+
+const _: () = {
+    assert!(core::mem::offset_of!(EfiBootServices, locate_protocol) == 0x140);
+    assert!(core::mem::offset_of!(EfiGraphicsMode, framebuffer_base) == 24);
+    assert!(core::mem::offset_of!(EfiGraphicsInfo, pixels_per_scanline) == 32);
+};
+
+unsafe fn capture_framebuffer(bs: &EfiBootServices) -> FramebufferInfo {
+    // EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID, laid out in firmware byte order.
+    const GOP_GUID: [u64; 2] = [0x4A38_23DC_9042_A9DE, 0x6A51_80D0_DE7A_FB96];
+    let mut interface = core::ptr::null_mut();
+    if (bs.locate_protocol)(&GOP_GUID, core::ptr::null_mut(), &mut interface) != EFI_SUCCESS {
+        return FramebufferInfo::none();
+    }
+    let Some(gop) = (interface as *const EfiGraphicsOutput).as_ref() else {
+        return FramebufferInfo::none();
+    };
+    let Some(mode) = gop.mode.as_ref() else { return FramebufferInfo::none(); };
+    if mode.size_of_info < core::mem::size_of::<EfiGraphicsInfo>() {
+        return FramebufferInfo::none();
+    }
+    let Some(info) = mode.info.as_ref() else { return FramebufferInfo::none(); };
+    let Some(stride) = info.pixels_per_scanline.checked_mul(4) else {
+        return FramebufferInfo::none();
+    };
+    let Some(size) = (stride as usize).checked_mul(info.height as usize) else {
+        return FramebufferInfo::none();
+    };
+    if info.format > 1 || info.width == 0 || info.height == 0
+        || info.pixels_per_scanline < info.width || mode.framebuffer_base == 0
+        || size > mode.framebuffer_size
+        || (mode.framebuffer_base as usize).checked_add(mode.framebuffer_size).is_none()
+    {
+        return FramebufferInfo::none();
+    }
+    FramebufferInfo {
+        base: mode.framebuffer_base as usize,
+        size: mode.framebuffer_size,
+        width: info.width,
+        height: info.height,
+        stride,
+        format: info.format,
+    }
 }
 
 // EfiMemoryType variants we care about for allocate_pool.
@@ -258,12 +333,8 @@ unsafe extern "efiapi" fn uefi_start(
     );
 
     // 2. Capture GOP framebuffer — graceful fallback if firmware has no GOP.
-    #[cfg(not(any(feature = "boot_minimal", feature = "userspace_boot")))]
-    let gop_ok =
-        crate::drivers::gop::capture_from_boot_services(st.boot_services as *mut core::ffi::c_void);
-    #[cfg(any(feature = "boot_minimal", feature = "userspace_boot"))]
-    let gop_ok = false;
-    if !gop_ok {
+    let framebuffer = capture_framebuffer(bs);
+    if framebuffer.base == 0 {
         efi_print(
             st.con_out,
             "rustos: GOP not available - serial-only mode\r\n",
@@ -358,6 +429,7 @@ unsafe extern "efiapi" fn uefi_start(
     let boot_info = BootInfo {
         rsdp_phys: rsdp,
         efi_memory_map: EfiMemoryMapInfo::new(map_buf as usize, map_size, desc_size),
+        framebuffer,
         initramfs,
         ..BootInfo::empty()
     };
@@ -411,7 +483,7 @@ unsafe extern "efiapi" fn uefi_start(
     crate::arch::x86_64::serial::early_init();
 
     // 7. Switch to kernel boot stack and call kernel_main.
-    extern "C" {
+    extern "sysv64" {
         fn kernel_main(boot_info: &'static BootInfo) -> !;
     }
     let bi_ptr: *const BootInfo = BOOT_INFO.get().unwrap();

@@ -104,6 +104,10 @@ impl Timer for ArchImpl {
 }
 
 impl Paging for ArchImpl {
+    fn read_pte(root: usize, va: usize) -> usize { super::paging::read_pte(root, va) }
+    fn set_pte(root: usize, va: usize, entry: usize) -> bool { super::paging::set_pte(root, va, entry) }
+    fn pte_accessed(root: usize, va: usize) -> bool { Self::read_pte(root, va) & (1 << 10) != 0 }
+    fn clear_accessed(root: usize, va: usize) { super::paging::clear_accessed(root, va) }
     fn map_page(cr3: usize, va: usize, pa: usize, flags: PageFlags) -> bool {
         // AArch64 stage-1 leaf descriptors encode user access in AP[2:1].
         // Descriptor type, AF, normal-memory attribute and shareability remain

@@ -1,26 +1,16 @@
-extern crate alloc;
-use alloc::string::String;
+//! Inode serialization and lookup in a checked item set.
+pub use super::superblock::BtrfsInodeItem;
+use super::{superblock::BtrfsKey, tree::Items};
 
-#[derive(Clone, Debug, Default)]
-pub struct BtrfsInodeItem {
-    pub generation: u64,
-    pub transid: u64,
-    pub size: u64,
-    pub nbytes: u64,
-    pub block_group: u64,
-    pub nlink: u32,
-    pub uid: u32,
-    pub gid: u32,
-    pub mode: u32,
-    pub rdev: u64,
-    pub flags: u64,
-    pub sequence: u64,
-    pub atime_sec: u64,
-    pub atime_nsec: u32,
-    pub ctime_sec: u64,
-    pub ctime_nsec: u32,
-    pub mtime_sec: u64,
-    pub mtime_nsec: u32,
-    pub otime_sec: u64,
-    pub otime_nsec: u32,
+pub(super) fn read(items: &Items, ino: u64) -> Result<BtrfsInodeItem, isize> {
+    let data = items.get(&BtrfsKey::new(ino, 1, 0)).ok_or(-2isize)?;
+    if data.len() != 160 { return Err(-5); }
+    Ok(BtrfsInodeItem::from_bytes(data))
+}
+pub(super) fn write(items: &mut Items, ino: u64, inode: &BtrfsInodeItem) {
+    items.insert(BtrfsKey::new(ino, 1, 0), inode.to_bytes());
+}
+pub(super) fn mutable(inode: &BtrfsInodeItem) -> Result<(), isize> {
+    // Readonly, immutable and append-only inodes cannot be arbitrarily replaced.
+    if inode.flags & ((1 << 2) | (1 << 6) | (1 << 7)) != 0 { Err(-1) } else { Ok(()) }
 }

@@ -516,7 +516,7 @@ pub fn atomic_commit(
     // Delegate scanout to the GPU backend.
     if let Some(bo) = d.gem_bos.iter().find(|b| b.handle == fb_handle) {
         let fb = Framebuffer::from_gem(bo);
-        crate::drivers::gpu::gpu::set_scanout(&fb);
+        crate::drivers::gpu::gpu::init_gop(fb.phys, fb.width, fb.height, fb.pitch);
     }
 
     Ok(())

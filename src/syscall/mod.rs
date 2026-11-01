@@ -70,6 +70,7 @@ include!("p0_gaps.rs");
 include!("openat2_mincore.rs");
 include!("stubs.rs");
 include!("posix_full.rs");
+include!("compat_impl.rs");
 
 // Re-export helpers needed by posix_full.rs
 pub(crate) use crate::fs::io_syscalls::sys_pwrite64 as sys_pwrite64_impl;
@@ -110,47 +111,19 @@ fn arg_i32(v: usize) -> Option<i32> {
 }
 
 pub(crate) fn sys_epoll_create1(flags: u32) -> isize {
-    let fd = crate::fs::poll::sys_epoll_create(0);
-    if fd >= 0 && flags & EPOLL_CLOEXEC != 0 {
-        crate::fs::fcntl::set_cloexec(fd as usize, true);
-    }
-    fd
+    crate::fs::poll::sys_epoll_create1(flags)
 }
 
 // Deduplicated into a single helper; both NRs route here.
 #[inline]
 pub(crate) fn copy_gid_to_user(a: usize, b: usize, c: usize) -> isize {
-    let pid = crate::proc::scheduler::current_pid();
-    let gid = crate::proc::scheduler::with_proc(pid, |p| p.cred.gid).unwrap_or(0);
-    let bytes = gid.to_le_bytes();
-    if a != 0 {
-        let _ = crate::uaccess::copy_to_user(a, &bytes);
-    }
-    if b != 0 {
-        let _ = crate::uaccess::copy_to_user(b, &bytes);
-    }
-    if c != 0 {
-        let _ = crate::uaccess::copy_to_user(c, &bytes);
-    }
-    0
+    crate::proc::creds::sys_getresgid(a, b, c)
 }
 
 // Mirrors copy_gid_to_user; extracted from the inline arm in dispatch_process.
 #[inline]
 pub(crate) fn copy_uid_to_user(a: usize, b: usize, c: usize) -> isize {
-    let pid = crate::proc::scheduler::current_pid();
-    let uid = crate::proc::scheduler::with_proc(pid, |p| p.uid).unwrap_or(0);
-    let bytes = uid.to_le_bytes();
-    if a != 0 {
-        let _ = crate::uaccess::copy_to_user(a, &bytes);
-    }
-    if b != 0 {
-        let _ = crate::uaccess::copy_to_user(b, &bytes);
-    }
-    if c != 0 {
-        let _ = crate::uaccess::copy_to_user(c, &bytes);
-    }
-    0
+    crate::proc::creds::sys_getresuid(a, b, c)
 }
 
 fn copy_msgbuf_from_user(msgp_va: usize, msgsz: usize) -> Option<(i64, Vec<u8>)> {
@@ -179,7 +152,7 @@ fn copy_sembuf_from_user(sops_va: usize, nsops: usize) -> Option<Vec<sem::Sembuf
     if sops_va == 0 || nsops == 0 || nsops > sem::SEMOPM {
         return None;
     }
-    const SEMBUF_SIZE: usize = 8;
+    const SEMBUF_SIZE: usize = 6;
     let mut raw = alloc::vec![0u8; nsops * SEMBUF_SIZE];
     crate::uaccess::copy_from_user(&mut raw, sops_va).ok()?;
     let mut ops = Vec::with_capacity(nsops);
@@ -211,11 +184,12 @@ fn parse_shmid_ds(buf: &[u8]) -> Option<shm::ShmidDs> {
         shm_cpid: i32::from_ne_bytes(buf[80..84].try_into().ok()?),
         shm_lpid: i32::from_ne_bytes(buf[84..88].try_into().ok()?),
         shm_nattch: u64::from_ne_bytes(buf[88..96].try_into().ok()?),
+        ..Default::default()
     })
 }
 
-fn serialize_shmid_ds(ds: &shm::ShmidDs) -> [u8; 96] {
-    let mut buf = [0u8; 96];
+fn serialize_shmid_ds(ds: &shm::ShmidDs) -> [u8; 112] {
+    let mut buf = [0u8; 112];
     serialize_ipc64_perm(&ds.shm_perm, &mut buf[0..48]);
     buf[48..56].copy_from_slice(&ds.shm_segsz.to_ne_bytes());
     buf[56..64].copy_from_slice(&ds.shm_atime.to_ne_bytes());
@@ -242,11 +216,12 @@ fn parse_msqid_ds(buf: &[u8]) -> Option<msg::MsqidDs> {
         msg_qbytes: u64::from_ne_bytes(buf[88..96].try_into().ok()?),
         msg_lspid: i32::from_ne_bytes(buf[96..100].try_into().ok()?),
         msg_lrpid: i32::from_ne_bytes(buf[100..104].try_into().ok()?),
+        ..Default::default()
     })
 }
 
-fn serialize_msqid_ds(ds: &msg::MsqidDs) -> [u8; 104] {
-    let mut buf = [0u8; 104];
+fn serialize_msqid_ds(ds: &msg::MsqidDs) -> [u8; 120] {
+    let mut buf = [0u8; 120];
     serialize_ipc64_perm(&ds.msg_perm, &mut buf[0..48]);
     buf[48..56].copy_from_slice(&ds.msg_stime.to_ne_bytes());
     buf[56..64].copy_from_slice(&ds.msg_rtime.to_ne_bytes());
@@ -270,7 +245,8 @@ fn parse_ipc64_perm(buf: &[u8]) -> Option<crate::ipc::Ipc64Perm> {
         cuid: u32::from_ne_bytes(buf[12..16].try_into().ok()?),
         cgid: u32::from_ne_bytes(buf[16..20].try_into().ok()?),
         mode: u16::from_ne_bytes(buf[20..22].try_into().ok()?),
-        seq: u16::from_ne_bytes(buf[22..24].try_into().ok()?),
+        seq: u16::from_ne_bytes(buf[24..26].try_into().ok()?),
+        ..Default::default()
     })
 }
 
@@ -281,7 +257,7 @@ fn serialize_ipc64_perm(p: &crate::ipc::Ipc64Perm, buf: &mut [u8]) {
     buf[12..16].copy_from_slice(&p.cuid.to_ne_bytes());
     buf[16..20].copy_from_slice(&p.cgid.to_ne_bytes());
     buf[20..22].copy_from_slice(&p.mode.to_ne_bytes());
-    buf[22..24].copy_from_slice(&p.seq.to_ne_bytes());
+    buf[24..26].copy_from_slice(&p.seq.to_ne_bytes());
 }
 
 fn copy_mq_attr_from_user(va: usize) -> Option<mq::MqAttr> {
@@ -440,7 +416,7 @@ pub fn dispatch_with_rip(
         },
         crate::security::seccomp::SeccompVerdict::Trap => {
             let pid = crate::proc::scheduler::current_pid();
-            crate::proc::signal::send_signal(pid, SIGSYS);
+            crate::proc::signal::send_signal(pid, SIGSYS as i32);
             if !is_exit {
                 syscall_profile_exit(nr, __profile_token);
                 return -1;
@@ -513,8 +489,10 @@ pub(crate) fn shmctl_dispatch(shmid: i32, cmd: i32, buf_va: usize) -> isize {
     } else {
         match shm::shmctl(shmid, cmd) {
             Ok(ds) => {
-                if buf_va != 0 {
-                    let _ = crate::uaccess::copy_to_user(buf_va, &serialize_shmid_ds(&ds));
+                if cmd == crate::ipc::IPC_STAT {
+                    if crate::uaccess::copy_to_user(buf_va, &serialize_shmid_ds(&ds)).is_err() {
+                        return efault();
+                    }
                 }
                 0
             },
@@ -524,6 +502,8 @@ pub(crate) fn shmctl_dispatch(shmid: i32, cmd: i32, buf_va: usize) -> isize {
 }
 
 pub(crate) fn semop_dispatch(semid: i32, sops_va: usize, nsops: usize) -> isize {
+    if nsops == 0 { return -22; }
+    if nsops > sem::SEMOPM { return -7; }
     match copy_sembuf_from_user(sops_va, nsops) {
         Some(ops) => match sem::semop(semid, &ops) {
             Ok(()) => 0,
@@ -585,8 +565,10 @@ pub(crate) fn msgctl_dispatch(msqid: i32, cmd: i32, buf_va: usize) -> isize {
     } else {
         match msg::msgctl(msqid, cmd) {
             Ok(ds) => {
-                if buf_va != 0 {
-                    let _ = crate::uaccess::copy_to_user(buf_va, &serialize_msqid_ds(&ds));
+                if cmd == crate::ipc::IPC_STAT {
+                    if crate::uaccess::copy_to_user(buf_va, &serialize_msqid_ds(&ds)).is_err() {
+                        return efault();
+                    }
                 }
                 0
             },

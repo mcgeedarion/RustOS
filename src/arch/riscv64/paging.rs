@@ -54,6 +54,40 @@ pub const PTE_ACCESSED: u64 = 1 << 6; // A
 pub const PTE_DIRTY: u64 = 1 << 7; // D
 pub const PTE_COW: u64 = 1 << 8; // software-defined CoW marker
 
+unsafe fn existing_leaf(root: usize, va: usize) -> Option<*mut u64> {
+    if root == 0 { return None; }
+    let mut table = root;
+    for shift in [30, 21] {
+        let entry = core::ptr::read_volatile(pte_ptr(table, (va >> shift) & 511));
+        if !is_pointer_pte(entry) { return None; }
+        table = pte_to_pa(entry);
+    }
+    Some(pte_ptr(table, (va >> 12) & 511))
+}
+
+pub fn read_pte(root: usize, va: usize) -> usize {
+    unsafe { existing_leaf(root, va).map_or(0, |p| core::ptr::read_volatile(p) as usize) }
+}
+
+pub fn set_pte(root: usize, va: usize, entry: usize) -> bool {
+    unsafe {
+        let Some(p) = existing_leaf(root, va) else { return false; };
+        core::ptr::write_volatile(p, entry as u64);
+        core::arch::asm!("sfence.vma {va}, zero", va = in(reg) va, options(nostack));
+        true
+    }
+}
+
+pub fn clear_accessed(root: usize, va: usize) {
+    unsafe {
+        if let Some(p) = existing_leaf(root, va) {
+            (&*(p as *const core::sync::atomic::AtomicU64))
+                .fetch_and(!PTE_ACCESSED, core::sync::atomic::Ordering::AcqRel);
+            core::arch::asm!("sfence.vma {va}, zero", va = in(reg) va, options(nostack));
+        }
+    }
+}
+
 // Internal shorthands.
 const VALID: u64 = PTE_VALID;
 const COW_BIT: u64 = PTE_COW;

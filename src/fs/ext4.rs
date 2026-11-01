@@ -1,4 +1,4 @@
-//! Ext4 **read-only** filesystem driver.
+//! Ext4 bounded image reader with a conservative write backend.
 //!
 //! # Supported ext4 features
 //!
@@ -26,13 +26,17 @@
 //! after mount.
 //!
 //! This design trades memory for simplicity and is appropriate for a
-//! read-only boot/rootfs image.
+//! boot/rootfs image. The sibling `ext4_write` adapter uses `write_backend` for
+//! transactional image mutations; unsupported write features remain readable.
 
 extern crate alloc;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::convert::TryInto;
 use spin::Mutex;
+
+#[path = "ext4/write_backend.rs"]
+pub(crate) mod write_backend;
 
 /// INCOMPAT bits that this driver can handle.
 const INCOMPAT_HANDLED: u32 = 0x0002  // FILETYPE
@@ -315,6 +319,7 @@ struct ParsedDirEntry<'a> {
     rec_len: usize,
 }
 
+#[derive(Clone)]
 struct Ext4Fs {
     data: Vec<u8>,
     block_size: usize,
@@ -353,11 +358,11 @@ pub fn mount() -> bool {
     // Read the superblock (LBA 2..4 = bytes 1024..2048).
     let mut raw_sb = alloc::vec![0u8; 1024];
     let mut half = alloc::vec![0u8; 512];
-    if crate::drivers::virtio_blk::read_sectors(2, &mut half).is_err() {
+    if !crate::drivers::virtio_blk::read_sectors(2, 1, &mut half) {
         return false;
     }
     raw_sb[..512].copy_from_slice(&half);
-    if crate::drivers::virtio_blk::read_sectors(3, &mut half).is_err() {
+    if !crate::drivers::virtio_blk::read_sectors(3, 1, &mut half) {
         return false;
     }
     raw_sb[512..].copy_from_slice(&half);
@@ -482,7 +487,7 @@ pub fn mount() -> bool {
             break;
         }
         let slice = &mut image[off..off + n * 512];
-        if crate::drivers::virtio_blk::read_sectors(lba, slice).is_err() {
+        if !crate::drivers::virtio_blk::read_sectors(lba, n as u32, slice) {
             log::warn!("ext4: short read while loading image at lba {}", lba);
             return false;
         }
@@ -645,6 +650,7 @@ impl Ext4Fs {
 
     fn inode(&self, ino: u32) -> Option<Inode> {
         let off = self.inode_offset(ino)?;
+        self.data.get(off..off.checked_add(core::mem::size_of::<Inode>())?)?;
         // Safety: Inode is repr(C, packed) and the region is in-bounds.
         Some(unsafe { core::ptr::read_unaligned(self.data.as_ptr().add(off) as *const Inode) })
     }

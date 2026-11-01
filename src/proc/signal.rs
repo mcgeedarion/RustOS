@@ -172,10 +172,22 @@ fn pids_in_pgrp(pgid: usize) -> Vec<usize> {
     scheduler::with_procs_ro(|procs| {
         procs
             .iter()
-            .filter(|p| p.pgid == pgid && p.pid == p.tgid)
-            .map(|p| p.tgid)
+            .filter(|p| p.pid == p.tgid && p.inner.lock().pgid == pgid)
+            .map(|p| p.tgid as usize)
             .collect()
     })
+}
+
+pub fn signal_is_masked(tid: usize, sig: u32) -> bool {
+    is_masked_by(sig, SIGMASK.lock().get(&tid).copied().unwrap_or(0))
+}
+
+pub fn get_pending_siginfo(tid: usize) -> Option<SigInfo> {
+    if let Some(info) = PENDING.lock().get(&tid).and_then(|q| q.front()).copied() {
+        return Some(info);
+    }
+    let tgid = scheduler::tgid_of(tid);
+    GROUP_PENDING.lock().get(&tgid).and_then(|q| q.front()).copied()
 }
 
 pub fn send_signal(tid: usize, sig: i32) -> isize {
@@ -259,8 +271,8 @@ pub fn send_signal_group_info(tgid: usize, info: SigInfo) {
         .or_insert_with(VecDeque::new)
         .push_back(info);
     scheduler::with_procs_ro(|procs| {
-        for p in procs.iter().filter(|p| p.tgid == tgid) {
-            scheduler::wake_for_signal(p.pid, sig);
+        for p in procs.iter().filter(|p| p.tgid as usize == tgid) {
+            scheduler::wake_for_signal(p.pid as usize, sig);
         }
     });
 }
@@ -999,7 +1011,7 @@ pub fn sigqueue(tgid: usize, sig: i32, value: i64) -> isize {
         true
     });
 
-    if !target_exists {
+    if target_exists != Some(true) {
         return -3; // ESRCH
     }
 
@@ -1032,8 +1044,8 @@ pub fn sigqueue(tgid: usize, sig: i32, value: i64) -> isize {
 
     // Wake all threads in the target process group.
     scheduler::with_procs_ro(|procs| {
-        for p in procs.iter().filter(|p| p.tgid == tgid) {
-            scheduler::wake_for_signal(p.pid, sig);
+        for p in procs.iter().filter(|p| p.tgid as usize == tgid) {
+            scheduler::wake_for_signal(p.pid as usize, sig);
         }
     });
 

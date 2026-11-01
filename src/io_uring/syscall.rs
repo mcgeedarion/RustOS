@@ -36,7 +36,6 @@
 extern crate alloc;
 use crate::io_uring::ops;
 use crate::io_uring::ring::{self, IoUringParams};
-use crate::mm::mmap;
 use crate::proc::scheduler;
 use crate::sync::wait_queue::{CancellationToken, WakeReason};
 use crate::uaccess::{copy_from_user, copy_to_user};
@@ -52,6 +51,7 @@ const IORING_REGISTER_FILES_UPDATE: u32 = 6;
 const IORING_REGISTER_IOWQ_AFF: u32 = 7;
 const IORING_UNREGISTER_IOWQ_AFF: u32 = 8;
 const IORING_REGISTER_IOWQ_MAX_WORKERS: u32 = 9;
+const IORING_ENTER_GETEVENTS: u32 = 1;
 
 #[inline]
 fn current_cancel() -> Option<Arc<CancellationToken>> {
@@ -79,6 +79,9 @@ pub fn sys_io_uring_setup(entries: u32, params_va: usize) -> isize {
     {
         return -14;
     }
+    if params.flags != 0 || params.resv != [0; 3] {
+        return -22;
+    }
 
     let pid = scheduler::current_pid() as u32;
 
@@ -87,48 +90,24 @@ pub fn sys_io_uring_setup(entries: u32, params_va: usize) -> isize {
         Err(e) => return e,
     };
 
-    let fd = match crate::fs::vfs::alloc_fd_for_uring(ring_idx) {
+    let backing_fd = match crate::fs::vfs_uring::alloc_fd_for_uring(ring_idx) {
         Some(fd) => fd,
         None => {
             ring::free_ring(ring_idx);
             return -24;
         },
     };
+    let fd = match crate::fs::process_fd::proc_fd_install_checked(
+        pid as usize, backing_fd, None, 0o2000000, None,
+    ) {
+        Ok(fd) => fd,
+        // proc_fd_install_checked consumes backing_fd on both success and failure.
+        Err(e) => return e,
+    };
 
     ring::with_ring_mut(ring_idx, |r| {
         r.fd = fd;
     });
-
-    let (sq_pa, cq_pa) = ring::with_ring(ring_idx, |r| (r.sq_pa, r.cq_pa)).unwrap_or((0, 0));
-    let page_size = 4096usize;
-
-    let sq_va = mmap::sys_mmap(
-        0,
-        page_size,
-        mmap::PROT_READ | mmap::PROT_WRITE,
-        mmap::MAP_SHARED | mmap::MAP_ANONYMOUS,
-        usize::MAX,
-        sq_pa,
-    );
-    if sq_va < 0 {
-        ring::free_ring(ring_idx);
-        crate::fs::vfs::close_fd(fd);
-        return sq_va;
-    }
-
-    let cq_va = mmap::sys_mmap(
-        0,
-        page_size,
-        mmap::PROT_READ | mmap::PROT_WRITE,
-        mmap::MAP_SHARED | mmap::MAP_ANONYMOUS,
-        usize::MAX,
-        cq_pa,
-    );
-    if cq_va < 0 {
-        ring::free_ring(ring_idx);
-        crate::fs::vfs::close_fd(fd);
-        return cq_va;
-    }
 
     let filled =
         ring::with_ring(ring_idx, |r| r.build_params()).unwrap_or(IoUringParams::default());
@@ -139,8 +118,7 @@ pub fn sys_io_uring_setup(entries: u32, params_va: usize) -> isize {
         )
     };
     if copy_to_user(params_va, params_bytes).is_err() {
-        ring::free_ring(ring_idx);
-        crate::fs::vfs::close_fd(fd);
+        crate::fs::io_syscalls::sys_close(fd);
         return -14;
     }
 
@@ -162,23 +140,26 @@ pub fn sys_io_uring_enter(
     _sig_va: usize,
     _sig_sz: usize,
 ) -> isize {
+    if flags & !IORING_ENTER_GETEVENTS != 0 { return -22; }
+    if _sig_va != 0 { return -95; }
     let pid = scheduler::current_pid() as u32;
     let Some(ring_idx) = ring::ring_idx_for_fd(pid, fd) else {
         return -9;
     };
 
-    let sqes = ring::with_ring(ring_idx, |r| r.drain_sq()).unwrap_or_default();
-    let submit_count = (to_submit as usize).min(sqes.len());
+    if ring::with_ring(ring_idx, |r| min_complete > r.entries).unwrap_or(true) { return -22; }
+    let sqes = ring::with_ring(ring_idx, |r| r.drain_sq_limit(to_submit)).unwrap_or_default();
     let mut submitted = 0u32;
 
-    for sqe in sqes.iter().take(submit_count) {
-        let (res, cqe_flags) = ops::dispatch(sqe, ring_idx);
+    for sqe in &sqes {
+        let internal = crate::io_uring::sqe::Sqe::from(*sqe);
+        let res = ops::dispatch(&internal);
         // post_cqe wakes cq_wq internally — no extra wake() needed here.
-        ring::with_ring(ring_idx, |r| r.post_cqe(sqe.user_data, res, cqe_flags));
+        ring::with_ring(ring_idx, |r| r.post_cqe(sqe.user_data, res, 0));
         submitted += 1;
     }
 
-    if flags & ops::IORING_ENTER_GETEVENTS != 0 && min_complete > 0 {
+    if flags & IORING_ENTER_GETEVENTS != 0 && min_complete > 0 {
         // Clone the wait queue Arc before entering the wait so we never hold
         // the RING_TABLE lock while sleeping.
         let cq_wq = match ring::cq_wq_for(ring_idx) {
@@ -187,21 +168,19 @@ pub fn sys_io_uring_enter(
         };
         let cancel = current_cancel();
         let cancel_ref = cancel.as_deref();
-        // 5-second ceiling matches the rest of the poll subsystem.
-        let deadline_ns = crate::time::monotonic_ns() + 5_000_000_000;
-
         loop {
-            let available = ring::with_ring(ring_idx, |r| r.cq_available()).unwrap_or(0);
+            cq_wq.clear(0x0001);
+            let Some(available) = ring::with_ring(ring_idx, |r| r.cq_available()) else { return -9; };
             if available >= min_complete {
                 break;
             }
 
             // Sleep until a CQE is posted, deadline fires, or signal arrives.
-            let reason = cq_wq.wait(0x0001 /* CQ_READY */, cancel_ref, Some(deadline_ns));
+            let reason = cq_wq.wait(0x0001 /* CQ_READY */, cancel_ref, None);
             match reason {
-                WakeReason::Cancelled => return -4, // EINTR
+                WakeReason::Cancelled => return if submitted > 0 { submitted as isize } else { -4 },
                 WakeReason::Timeout => break,       // deadline — return what we have
-                WakeReason::Ready(_) => {},         // re-check count
+                WakeReason::Ready => {},            // re-check count
             }
         }
     }

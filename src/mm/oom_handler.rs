@@ -151,7 +151,7 @@ pub fn handle_oom() -> KernelResult<()> {
 
     OOM_ACTIVE.store(false, Ordering::SeqCst);
 
-    if victim_pid != 0 {
+    if pmm::free_pages() > stats.free_pages {
         Ok(())
     } else {
         Err(KernelError::OutOfMemory)
@@ -163,7 +163,9 @@ fn reclaim_slab_memory() {
     use crate::mm::slab;
 
     // Shrink slab caches aggressively
-    let freed = slab::slab_shrink(usize::MAX);
+    let before = pmm::free_pages();
+    slab::slab_shrink();
+    let freed = pmm::free_pages().saturating_sub(before) * 4096;
     if freed > 0 {
         log::debug!("OOM: Reclaimed {} bytes from slab", freed);
     }
@@ -184,8 +186,8 @@ fn find_largest_memory_user() -> usize {
     let mut victim_pid = 0;
 
     scheduler::for_each_process(|pcb| {
-        let rss = pcb.rss_pages();
-        if rss > max_rss && pcb.pid != 1 {
+        let rss = pcb.rss_pages;
+        if rss > max_rss && pcb.pid > 1 && pcb.state != crate::proc::process::State::Zombie {
             max_rss = rss;
             victim_pid = pcb.pid;
         }
@@ -209,7 +211,8 @@ fn kill_process(pid: usize) {
     // Signal the process to terminate
     use crate::proc::signal;
 
-    if let Err(e) = signal::send_signal(pid, 9) {
+    let e = signal::send_signal(pid, 9);
+    if e < 0 {
         // SIGKILL
         log::error!("OOM: Failed to send SIGKILL to {}: {:?}", pid, e);
     }
@@ -253,18 +256,17 @@ pub fn handle_vmm_fault(vaddr: usize, error_code: u64) -> KernelResult<()> {
 
     // Validate the address first
     if !is_valid_user_address(vaddr) {
-        return Err(KernelError::Fault);
+        return Err(KernelError::InvalidArg);
     }
 
     // Try to handle the fault
-    match page_fault::handle_fault(vaddr, error_code) {
-        Ok(()) => Ok(()),
-        Err(_) => {
-            // If page fault handling fails, try OOM recovery
-            handle_oom()?;
-            // Retry the fault
-            page_fault::handle_fault(vaddr, error_code)
-        },
+    if error_code & 1 != 0 {
+        return Err(KernelError::PermissionDenied);
+    }
+    if page_fault::handle_demand_fault(vaddr) {
+        Ok(())
+    } else {
+        Err(KernelError::InvalidArg)
     }
 }
 
@@ -289,8 +291,6 @@ fn is_valid_user_address(addr: usize) -> bool {
 
 /// Register a memory area for tracking
 pub fn register_vma(start: usize, end: usize, flags: u32) -> KernelResult<()> {
-    use crate::mm::vma::VmaFlags;
-
     if start >= end {
         return Err(KernelError::InvalidArg);
     }

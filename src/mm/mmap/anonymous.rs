@@ -50,7 +50,7 @@ pub fn clear_vmas_pub(pid: usize) {
     clear_vmas_internal(pid);
 }
 
-fn coalesce_or_insert_heap_vma(pid: usize, brk_base: usize, new_brk: usize) {
+pub(super) fn coalesce_or_insert_heap_vma(pid: usize, brk_base: usize, new_brk: usize) {
     let extended = with_mm_write(pid, |p| {
         if let Some(v) = p
             .vmas
@@ -81,7 +81,7 @@ fn coalesce_or_insert_heap_vma(pid: usize, brk_base: usize, new_brk: usize) {
     }
 }
 
-fn trim_heap_vma(pid: usize, brk_base: usize, new_brk: usize) {
+pub(super) fn trim_heap_vma(pid: usize, brk_base: usize, new_brk: usize) {
     with_mm_write(pid, |p| {
         if let Some(v) = p
             .vmas

@@ -147,7 +147,18 @@ pub fn init() {
 /// AP C-level entry point (called from arch trampoline after paging is on).
 /// `cpu_id` is the logical id assigned during topology enumeration.
 #[no_mangle]
+#[cfg(target_arch = "x86_64")]
+pub extern "sysv64" fn ap_entry(cpu_id: u32) -> ! {
+    enter_ap(cpu_id)
+}
+
+#[no_mangle]
+#[cfg(not(target_arch = "x86_64"))]
 pub extern "C" fn ap_entry(cpu_id: u32) -> ! {
+    enter_ap(cpu_id)
+}
+
+fn enter_ap(cpu_id: u32) -> ! {
     // Per-CPU storage must be first.
     unsafe { percpu::init(cpu_id) };
 

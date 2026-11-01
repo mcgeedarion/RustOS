@@ -386,7 +386,7 @@ impl Process {
         use crate::proc::signal::SIGKILL;
 
         // Send SIGKILL to the process using the signal module's sys_kill
-        let result = crate::proc::signal::sys_kill(self.pid as isize, SIGKILL);
+        let result = crate::proc::signal::sys_kill(self.pid as isize, SIGKILL as i32);
 
         if result < 0 {
             Err(ProcessError::from_errno(-(result as i32)))

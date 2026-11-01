@@ -11,7 +11,7 @@
 //!   returns structured data without requiring the entire binary in RAM.
 
 extern crate alloc;
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use crate::exec::elf::{
@@ -130,7 +130,10 @@ pub fn read_notes(path: &str) -> Vec<ElfNote> {
         if ph.p_type != PT_NOTE {
             continue;
         }
-        let off = ph.p_offset as usize;
+        let off = match i64::try_from(ph.p_offset) {
+            Ok(off) => off,
+            Err(_) => continue,
+        };
         let sz = ph.p_filesz as usize;
         if sz == 0 {
             continue;

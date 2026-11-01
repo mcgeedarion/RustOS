@@ -183,6 +183,14 @@ pub struct PerCpu {
     pub tss_rsp0_ptr: u64,
 }
 
+const _: () = {
+    assert!(core::mem::offset_of!(PerCpu, kstack_rsp) == 0);
+    assert!(core::mem::offset_of!(PerCpu, user_rsp_save) == 8);
+    assert!(core::mem::offset_of!(PerCpu, cpu_id) == 16);
+    assert!(core::mem::offset_of!(PerCpu, tss_rsp0_ptr) == 24);
+    assert!(core::mem::size_of::<Tss>() == 104);
+};
+
 static mut PER_CPU_STRUCTS: [PerCpu; MAX_CPUS] = [const {
     PerCpu {
         kstack_rsp: 0,
@@ -344,10 +352,11 @@ pub fn gdt_init() {
         pcpu.kstack_rsp = kstack_top.top as u64;
         pcpu.user_rsp_save = 0;
         pcpu.cpu_id = cpu_id as u32;
-        pcpu.tss_rsp0_ptr = &slot.tss.rsp0 as *const u64 as u64;
+        pcpu.tss_rsp0_ptr = core::ptr::addr_of!(slot.tss.rsp0) as u64;
 
         // Point GS_BASE at the per-CPU struct.
         set_gsbase(pcpu);
+        crate::smp::percpu::init(cpu_id as u32);
     }
 }
 
@@ -387,7 +396,7 @@ pub unsafe fn init_ap(cpu_id: u32) {
     pcpu.kstack_rsp = kstack_top.top as u64;
     pcpu.user_rsp_save = 0;
     pcpu.cpu_id = cpu_id;
-    pcpu.tss_rsp0_ptr = &slot.tss.rsp0 as *const u64 as u64;
+    pcpu.tss_rsp0_ptr = core::ptr::addr_of!(slot.tss.rsp0) as u64;
 
     set_gsbase(pcpu);
 
@@ -435,15 +444,7 @@ pub fn update_rsp0(cpu_id: u32, kstack_top: usize) {
 /// Returns 0 if GSBASE has not yet been configured (early boot).
 #[inline]
 pub fn current_cpu_id() -> u32 {
-    let id: u32;
-    unsafe {
-        asm!(
-            "mov {0:e}, gs:[16]",
-            out(reg) id,
-            options(nostack, readonly, preserves_flags)
-        );
-    }
-    id
+    unsafe { current_percpu().as_ref().map_or(0, |cpu| cpu.cpu_id) }
 }
 
 /// Return a raw pointer to this CPU's `PerCpu` struct (via current cpu_id).
@@ -452,8 +453,21 @@ pub fn current_cpu_id() -> u32 {
 /// a full GS segment dereference in Rust code.
 #[inline]
 pub fn current_percpu() -> *mut PerCpu {
-    let id = current_cpu_id() as usize;
-    unsafe { &mut PER_CPU_STRUCTS[id] as *mut PerCpu }
+    // Validate the MSR before dereferencing it: firmware/early boot GS may
+    // be zero or unrelated, and GS:0 is a stack pointer, not a self-pointer.
+    let lo: u32;
+    let hi: u32;
+    unsafe {
+        asm!("rdmsr", in("ecx") 0xC000_0101u32, out("eax") lo, out("edx") hi,
+             options(nostack, preserves_flags));
+    }
+    let base = ((hi as u64) << 32 | lo as u64) as usize;
+    let start = core::ptr::addr_of!(PER_CPU_STRUCTS) as usize;
+    let stride = core::mem::size_of::<PerCpu>();
+    if base < start || base >= start + stride * MAX_CPUS || (base - start) % stride != 0 {
+        return core::ptr::null_mut();
+    }
+    base as *mut PerCpu
 }
 
 /// Return a reference to the BSP GDT pointer.

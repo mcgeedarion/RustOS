@@ -32,6 +32,7 @@ pub mod sleep;
 #[cfg(test)]
 mod tests;
 
+use alloc::boxed::Box;
 use core::mem::size_of;
 use core::slice;
 use core::sync::atomic::{AtomicPtr, Ordering};
@@ -238,7 +239,7 @@ pub unsafe fn find_table(sig: &[u8; 4]) -> Option<*const SdtHeader> {
 
     let hdr_ref = &*hdr;
     if hdr_ref.len < size_of::<SdtHeader>() as u32 {
-        println!("acpi: root table length {} is too small", hdr_ref.len);
+        println!("acpi: root table length {} is too small", { hdr_ref.len });
         return None;
     }
 

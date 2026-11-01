@@ -83,6 +83,10 @@ pub enum SchemeError {
     Io = 6,
     /// The driver process has exited or is unreachable.
     Unreachable = 7,
+    /// Blocking operation interrupted by a signal or cancellation.
+    Interrupted = 8,
+    /// The pipe peer has closed its read endpoint.
+    BrokenPipe = 9,
     /// Any other unclassified error.
     Other = 0xFF,
 }
@@ -98,6 +102,8 @@ impl SchemeError {
             SchemeError::WouldBlock => -11,       // EAGAIN
             SchemeError::Io => -5,                // EIO
             SchemeError::Unreachable => -111,     // ECONNREFUSED
+            SchemeError::Interrupted => -4,       // EINTR
+            SchemeError::BrokenPipe => -32,       // EPIPE
             SchemeError::Other => -1,             // EPERM
         }
     }

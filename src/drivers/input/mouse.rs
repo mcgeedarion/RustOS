@@ -32,7 +32,8 @@ pub fn handle_byte(byte: u8) {
         return;
     }
 
-    ms.buf[ms.phase] = byte;
+    let phase = ms.phase;
+    ms.buf[phase] = byte;
     ms.phase += 1;
 
     if ms.phase == 3 {

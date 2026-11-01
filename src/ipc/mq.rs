@@ -298,7 +298,7 @@ pub fn mq_send(mqd: u64, data: Vec<u8>, prio: u32) -> Result<(), isize> {
                 let pid = inner2.notify_pid;
                 drop(inner2);
                 drop(tbl2);
-                crate::proc::signal::send_signal(pid as usize, sig);
+                crate::proc::signal::send_signal(pid as usize, sig as i32);
                 return Ok(());
             }
         }

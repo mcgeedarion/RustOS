@@ -75,6 +75,8 @@ pub struct TimerFdEntry {
 /// Fast map is safe here: keys are monotonic kernel-assigned timerfd table
 /// numbers and the table is never iterated for user-visible ordering.
 static TABLE: Mutex<KernelFastMap<usize, TimerFdEntry>> = Mutex::new(KernelFastMap::new());
+static BACKINGS: Mutex<alloc::collections::BTreeMap<usize, usize>> =
+    Mutex::new(alloc::collections::BTreeMap::new());
 static COUNTER: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 
 // `sys_timerfd_settime` and `sys_timerfd_gettime` are called from the
@@ -87,19 +89,15 @@ static COUNTER: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsiz
 ///
 /// Returns `None` if `scheme_bfd` is not a registered timerfd scheme fd.
 pub fn scheme_bfd_to_table_fdno(scheme_bfd: usize) -> Option<usize> {
-    let (_, fid) = crate::fs::scheme_fd::scheme_fd_get_fid(scheme_bfd)?;
-    // The TABLE fdno is stored verbatim in SchemeFileId.0.
-    let table_fdno = fid.0 as usize;
-    if table_fdno >= TIMERFD_FD_BASE && TABLE.lock().contains_key(&table_fdno) {
-        Some(table_fdno)
-    } else {
-        None
-    }
+    BACKINGS.lock().get(&scheme_bfd).copied()
 }
 
 pub struct TimerFdScheme;
 
 impl Scheme for TimerFdScheme {
+    fn poll_source(&self, fid: SchemeFileId) -> Option<alloc::sync::Arc<dyn crate::sync::poll_source::PollSource>> {
+        is_timerfd(fid.0 as usize).then(|| crate::fs::poll::timer_source(fid.0 as usize))
+    }
     fn open(&self, _url: &str, _flags: OpenFlags) -> Result<SchemeFileId, SchemeError> {
         Err(SchemeError::InvalidArg)
     }
@@ -198,6 +196,7 @@ pub fn sys_timerfd_create(clockid: u32, flags: u32) -> isize {
     use crate::fs::scheme_fd::{alloc_scheme_backing_fd, scheme_fd_register};
     use alloc::sync::Arc;
 
+    if flags & !(TFD_CLOEXEC | TFD_NONBLOCK) != 0 { return -22; }
     match clockid {
         CLOCK_REALTIME | CLOCK_MONOTONIC => {},
         _ => return -22, // EINVAL
@@ -220,6 +219,7 @@ pub fn sys_timerfd_create(clockid: u32, flags: u32) -> isize {
     let scheme: Arc<dyn Scheme> = Arc::new(TimerFdScheme);
     let scheme_bfd = alloc_scheme_backing_fd();
     scheme_fd_register(scheme_bfd, scheme, SchemeFileId(table_fdno as u64));
+    BACKINGS.lock().insert(scheme_bfd, table_fdno);
 
     let pid = crate::proc::scheduler::current_pid();
     let install_flags = if flags & TFD_CLOEXEC != 0 {

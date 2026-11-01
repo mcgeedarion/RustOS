@@ -65,7 +65,5 @@ pub fn tty_ioctl(fd: usize, req: usize, arg: usize) -> isize {
 }
 
 fn vfs_fionread(fd: usize, arg: usize) -> isize {
-    let n: u32 = crate::fs::vfs::vfs_fionread(fd).unwrap_or(0) as u32;
-    copy_to_user(arg, &n.to_ne_bytes());
-    0
+    super::file::vfs_fionread(fd, arg)
 }

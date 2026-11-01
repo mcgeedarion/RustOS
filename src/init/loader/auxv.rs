@@ -125,8 +125,8 @@ pub fn build_stack(
     }
     write64!(0u64);
     for (atype, aval) in auxv {
-        write64!(atype);
-        write64!(aval);
+        write64!(*atype);
+        write64!(*aval);
     }
 
     Some(initial_rsp)

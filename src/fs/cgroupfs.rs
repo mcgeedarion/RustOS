@@ -23,6 +23,7 @@
 //! | `rmdir`                      | `cgroupfs_rmdir`                |
 
 extern crate alloc;
+use alloc::string::ToString;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;

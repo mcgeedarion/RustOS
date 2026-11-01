@@ -109,6 +109,10 @@ impl Timer for ArchImpl {
 }
 
 impl Paging for ArchImpl {
+    fn read_pte(root: usize, va: usize) -> usize { super::paging::read_pte(root, va) }
+    fn set_pte(root: usize, va: usize, entry: usize) -> bool { super::paging::set_pte(root, va, entry) }
+    fn pte_accessed(root: usize, va: usize) -> bool { Self::read_pte(root, va) & (1 << 6) != 0 }
+    fn clear_accessed(root: usize, va: usize) { super::paging::clear_accessed(root, va) }
     fn map_page(cr3: usize, va: usize, pa: usize, flags: PageFlags) -> bool {
         // Translate HAL flags → native RISC-V PTE flags
         let mut pte_flags: u64 = super::paging::PTE_VALID | super::paging::PTE_READ

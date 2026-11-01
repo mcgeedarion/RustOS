@@ -60,14 +60,13 @@ impl DevfsTable {
     }
 }
 
-// SAFETY: DEVFS_TABLE is mutated only during single-threaded init.
-static mut DEVFS_TABLE: DevfsTable = DevfsTable {
+static DEVFS_TABLE: Mutex<DevfsTable> = Mutex::new(DevfsTable {
     majors: [const { None }; MAX_MAJOR],
-};
+});
 
 /// Register a character device at (major, minor).
 pub fn register_char_device(major: usize, minor: usize, ops: Arc<dyn FileOps + Send + Sync>) {
-    unsafe { DEVFS_TABLE.set(major, minor, ops) }
+    if major < MAX_MAJOR && minor < MAX_MINOR { DEVFS_TABLE.lock().set(major, minor, ops); }
 }
 
 /// Resolve a `/dev/input/eventN` path to its `FileOps`.
@@ -78,7 +77,7 @@ pub fn devfs_open(path: &str) -> Option<Arc<dyn FileOps + Send + Sync>> {
         .or_else(|| path.strip_prefix("event"))?;
 
     let minor: usize = rel.parse().ok()?;
-    unsafe { DEVFS_TABLE.get(INPUT_MAJOR, minor) }
+    DEVFS_TABLE.lock().get(INPUT_MAJOR, minor)
 }
 
 /// Input subsystem major number (matches Linux).
@@ -162,25 +161,53 @@ pub fn close(fd: usize) -> isize {
 }
 
 // ===== stat alias for devfs entries =====
-pub fn stat(_path: &str) -> Result<crate::fs::vfs_ops::KStat, isize> {
-    // cannot resolve without a devfs path map. Surface ENOENT
-    // so VFS dispatchers fall through to the next FS.
-    Err(-2)
+pub fn stat(path: &str) -> Result<crate::fs::vfs_ops::KStat, isize> {
+    let path = path.strip_prefix("/dev").unwrap_or(path).trim_matches('/');
+    let is_dir = path.is_empty() || path == "input";
+    let ino = match path {
+        "" => 1, "input" => 2, "null" => 0x103, "zero" => 0x105,
+        _ if devfs_open(path).is_some() => dev_rdev(path),
+        _ => return Err(-2),
+    };
+    Ok(crate::fs::vfs_ops::KStat {
+        ino, mode: if is_dir { 0o040755 } else { 0o020666 },
+        nlink: if is_dir { 2 } else { 1 }, is_dir, blksize: 4096,
+        ..Default::default()
+    })
+}
+
+pub fn dev_rdev(path: &str) -> u64 {
+    match path.trim_start_matches("/dev/").trim_start_matches('/') {
+        "null" => 0x103, "zero" => 0x105,
+        p => p.strip_prefix("input/event").and_then(|n| n.parse::<u64>().ok())
+            .map(|minor| ((INPUT_MAJOR as u64) << 8) | minor).unwrap_or(0),
+    }
 }
 
 /// Read all bytes from a devfs path. Character devices do not expose
 /// bulk reads this way; return empty to satisfy the VFS dispatch table
 /// without error so callers get a valid (empty) response.
-pub fn read_all(_path: &str) -> Result<alloc::vec::Vec<u8>, isize> {
-    Ok(alloc::vec::Vec::new())
+pub fn read_all(path: &str) -> Result<alloc::vec::Vec<u8>, isize> {
+    let st = stat(path)?;
+    if st.is_dir { return Err(-21); }
+    if dev_rdev(path) == 0x103 { Ok(alloc::vec::Vec::new()) } else { Err(-22) }
 }
 
 /// List directory entries under a devfs path.
 /// Returns synthesised entries for the known input device nodes.
 pub fn readdir(path: &str) -> Result<alloc::vec::Vec<crate::fs::vfs::ops::DirEntry>, isize> {
+    let path = path.strip_prefix("/dev").unwrap_or(path).trim_matches('/');
+    if path.is_empty() {
+        return Ok(["null", "zero", "input"].into_iter().map(|name| {
+            let st = stat(name).unwrap();
+            crate::fs::vfs::ops::DirEntry {
+                name: name.into(), ino: st.ino, is_dir: st.is_dir, mode: st.mode, size: 0,
+            }
+        }).collect());
+    }
     #[cfg(feature = "input_events")]
     {
-        if path == "/dev/input" || path == "input" || path.is_empty() {
+        if path == "input" {
             let count = crate::input::device_count();
             let entries = (0..count)
                 .map(|i| crate::fs::vfs::ops::DirEntry {
@@ -195,8 +222,7 @@ pub fn readdir(path: &str) -> Result<alloc::vec::Vec<crate::fs::vfs::ops::DirEnt
         }
     }
 
-    let _ = path;
-    Err(-2)
+    if path == "input" { Ok(alloc::vec::Vec::new()) } else { Err(-20) }
 }
 
 /// Concrete `dev:` scheme adapter.

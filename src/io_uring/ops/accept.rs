@@ -12,7 +12,7 @@ pub mod sock_flags {
 pub fn handle(sqe: &Sqe) -> i32 {
     let listen_fd = sqe.fd;
     let addr_va = sqe.addr;
-    let addrlen_va = sqe.addr3;
+    let addrlen_va = sqe.off;
     let flags = sqe.op_flags;
 
     if listen_fd < 0 {
@@ -30,12 +30,23 @@ pub fn handle(sqe: &Sqe) -> i32 {
         sqe.user_data
     );
 
-    let _ = flags;
-    crate::net::socket::core::sys_accept(listen_fd as usize, addr_va as usize, addrlen_va as usize)
-        as i32
+    if flags & !(sock_flags::SOCK_NONBLOCK | sock_flags::SOCK_CLOEXEC) != 0 { return -22; }
+    let fd = crate::net::socket::core::sys_accept(
+        listen_fd as usize, addr_va as usize, addrlen_va as usize,
+    );
+    if fd >= 0 {
+        let pid = crate::proc::scheduler::current_pid();
+        if flags & sock_flags::SOCK_CLOEXEC != 0 {
+            crate::fs::process_fd::proc_fd_set_cloexec(pid, fd as usize, true);
+        }
+        if flags & sock_flags::SOCK_NONBLOCK != 0 {
+            crate::fs::process_fd::proc_fd_set_nonblock(pid, fd as usize, true);
+        }
+    }
+    fd as i32
 }
 
-use crate::io_uring::{ring::IoUringSqe, with_ring_mut, IoUringError};
+use crate::io_uring::{with_ring, IoUringError};
 use core::{
     future::Future,
     pin::Pin,
@@ -50,7 +61,7 @@ pub struct IoAccept {
     addrlen_va: u64,
     flags: u32,
     token: u64,
-    submitted: bool,
+    result: Option<i32>,
 }
 
 impl IoAccept {
@@ -70,7 +81,7 @@ impl IoAccept {
             addrlen_va,
             flags,
             token,
-            submitted: false,
+            result: None,
         }
     }
 }
@@ -79,25 +90,21 @@ impl Future for IoAccept {
     type Output = Result<i32, IoUringError>;
 
     fn poll(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
-        if !self.submitted {
-            let wire_sqe = IoUringSqe::from(Sqe::accept(
+        if self.result.is_none() {
+            if with_ring(self.ring_idx, |_| ()).is_none() {
+                return Poll::Ready(Err(IoUringError::InvalidRing));
+            }
+            let sqe = Sqe::accept(
                 self.fd,
                 self.addr_va,
                 self.addrlen_va,
                 self.flags,
                 self.token,
-            ));
-            let result = with_ring_mut(self.ring_idx, |r| r.push_sqe(wire_sqe));
-            match result {
-                None => return Poll::Ready(Err(IoUringError::InvalidRing)),
-                Some(false) => return Poll::Ready(Err(IoUringError::SqFull)),
-                Some(true) => {},
-            }
-            self.submitted = true;
+            );
+            self.result = Some(handle(&sqe));
         }
 
-        // Wakeup is delivered by IoUringRing::post_cqe → cq_wq.wake(POLLIN).
-        // The executor re-polls this future when the WaitQueue fires.
-        Poll::Pending
+        let result = self.result.unwrap();
+        Poll::Ready(if result < 0 { Err(IoUringError::OsError(result)) } else { Ok(result) })
     }
 }

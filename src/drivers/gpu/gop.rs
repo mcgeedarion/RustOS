@@ -33,6 +33,30 @@ static GOP: Mutex<Option<GopState>> = Mutex::new(None);
 
 /// Initialise from values supplied by the bootloader.
 pub fn init(fb_base: u64, width: u32, height: u32, pitch_bytes: u32) {
+    let _ = init_with_format(fb_base, width, height, pitch_bytes, 1);
+}
+
+/// Install a validated linear GOP mode. Bit-mask and BLT-only modes need
+/// different pixel writers and must not be treated as 32-bit RGB buffers.
+pub fn init_with_format(
+    fb_base: u64,
+    width: u32,
+    height: u32,
+    pitch_bytes: u32,
+    pixel_format: u32,
+) -> bool {
+    let format = match pixel_format {
+        0 => GopPixelFormat::RgbX,
+        1 => GopPixelFormat::BgrX,
+        _ => return false,
+    };
+    let Some(row_bytes) = width.checked_mul(4) else { return false; };
+    let Some(size) = (pitch_bytes as u64).checked_mul(height as u64) else { return false; };
+    if fb_base == 0 || width == 0 || height == 0 || pitch_bytes < row_bytes
+        || pitch_bytes % 4 != 0 || fb_base.checked_add(size).is_none()
+    {
+        return false;
+    }
     let fb = Framebuffer {
         phys: fb_base,
         width,
@@ -42,8 +66,9 @@ pub fn init(fb_base: u64, width: u32, height: u32, pitch_bytes: u32) {
     };
     *GOP.lock() = Some(GopState {
         fb,
-        format: GopPixelFormat::BgrX,
+        format,
     });
+    true
 }
 
 pub fn is_initialised() -> bool {
@@ -90,13 +115,13 @@ pub fn capture_from_boot_services() -> Option<Framebuffer> {
 #[inline]
 fn argb_to_gopfmt(argb: u32, fmt: GopPixelFormat) -> u32 {
     // Input: 0xAARRGGBB
-    let a = (argb >> 24) & 0xFF;
     let r = (argb >> 16) & 0xFF;
     let g = (argb >> 8) & 0xFF;
     let b = argb & 0xFF;
     match fmt {
-        GopPixelFormat::RgbX => (r << 24) | (g << 16) | (b << 8) | a,
-        GopPixelFormat::BgrX => (b << 24) | (g << 16) | (r << 8) | a,
+        // A u32 store is little-endian on all supported targets.
+        GopPixelFormat::RgbX => (b << 16) | (g << 8) | r,
+        GopPixelFormat::BgrX => (r << 16) | (g << 8) | b,
         GopPixelFormat::Unknown => argb,
     }
 }

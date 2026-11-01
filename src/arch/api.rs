@@ -100,6 +100,13 @@ pub trait Paging {
     /// Free page-table pages belonging to a user address space. Leaf frames must
     /// be unmapped and released by the caller before this operation.
     fn free_page_table(root: usize);
+    /// Read a 4 KiB leaf, including a non-present software swap entry.
+    fn read_pte(root: usize, va: usize) -> usize;
+    /// Replace an existing 4 KiB leaf. Does not allocate intermediate tables.
+    /// The caller must serialize page-table changes and arrange remote shootdown.
+    fn set_pte(root: usize, va: usize, entry: usize) -> bool;
+    fn pte_accessed(root: usize, va: usize) -> bool;
+    fn clear_accessed(root: usize, va: usize);
 }
 
 pub trait Tlb {

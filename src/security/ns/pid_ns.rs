@@ -14,6 +14,7 @@
 extern crate alloc;
 use crate::security::ns::alloc_ns_id;
 use alloc::collections::BTreeMap;
+use alloc::sync::Arc;
 use core::sync::atomic::{AtomicU32, Ordering};
 use spin::Mutex;
 
@@ -24,6 +25,7 @@ pub struct PidNs {
     pub id: u64,
     /// The level in the hierarchy (init ns = 0).
     pub level: u32,
+    parent: Option<Arc<PidNs>>,
     next_pid: AtomicU32,
     /// Map of ns-local PID → kernel task-id for /proc enumeration.
     pid_map: Mutex<BTreeMap<u32, u64>>,
@@ -34,18 +36,24 @@ impl PidNs {
         PidNs {
             id: alloc_ns_id(),
             level: 0,
+            parent: None,
             next_pid: AtomicU32::new(1),
             pid_map: Mutex::new(BTreeMap::new()),
         }
     }
 
-    pub fn new_child() -> Self {
+    pub fn new_child(parent: &Arc<PidNs>) -> Self {
         PidNs {
             id: alloc_ns_id(),
-            level: 0, // caller can increment
+            level: parent.level.saturating_add(1),
+            parent: Some(Arc::clone(parent)),
             next_pid: AtomicU32::new(1),
             pid_map: Mutex::new(BTreeMap::new()),
         }
+    }
+
+    pub fn parent(&self) -> Option<Arc<PidNs>> {
+        self.parent.clone()
     }
 
     /// Allocate the next available PID in this namespace.

@@ -145,6 +145,14 @@ pub fn cloexec_range(lo: usize, hi: usize) {
 }
 
 pub fn close_fd_no_meta(fd: usize) {
+    crate::fs::poll::on_backing_close(fd);
+    if crate::fs::poll::is_epoll_fd(fd) {
+        crate::fs::poll::epoll_close(fd);
+        return;
+    }
+    if crate::fs::vfs_uring::close_uring_fd(fd) {
+        return;
+    }
     if crate::fs::pidfd::is_pidfd(fd) {
         crate::fs::pidfd::free(fd);
         return;
@@ -228,6 +236,10 @@ pub fn fd_size(fd: usize) -> Option<usize> {
     vfs::size_of_raw(fd)
 }
 
+pub fn fd_sync(fd: usize) -> isize {
+    vfs::flush_fd(fd, true)
+}
+
 pub fn fd_create(path: &str) -> Result<(), isize> {
     crate::fs::vfs_ops::create(path)
 }
@@ -306,46 +318,7 @@ pub fn sys_fcntl(fd: usize, cmd: i32, arg: usize) -> isize {
 
     match cmd {
         F_DUPFD | F_DUPFD_CLOEXEC => {
-            let limit_check = check_nofile_limit();
-            if limit_check < 0 {
-                return limit_check;
-            }
-
-            let new_fd = {
-                let mut candidate = arg;
-                loop {
-                    if crate::fs::process_fd::proc_fd_get(pid, candidate).is_none() {
-                        break candidate;
-                    }
-                    candidate = candidate.saturating_add(1);
-                    if candidate == usize::MAX {
-                        return -24;
-                    }
-                }
-            };
-
-            let new_bfd = match duplicate_backing_fd(bfd) {
-                Ok(n) => n,
-                Err(e) => return e,
-            };
-            let flags = if cmd == F_DUPFD_CLOEXEC {
-                (entry.fl_flags as u32) | O_CLOEXEC as u32
-            } else {
-                entry.fl_flags as u32
-            };
-            let installed = crate::fs::process_fd::proc_fd_install(
-                pid,
-                new_bfd,
-                entry.path.clone(),
-                flags,
-                Some(new_fd),
-            );
-            FD_META.lock().entry(new_bfd).or_default().fl_flags = entry.fl_flags;
-            if cmd == F_DUPFD_CLOEXEC {
-                crate::fs::process_fd::proc_fd_set_cloexec(pid, installed, true);
-                set_cloexec(new_bfd, true);
-            }
-            installed as isize
+            crate::fs::process_fd::proc_fd_dup_into(pid, fd, pid, arg, cmd == F_DUPFD_CLOEXEC)
         },
         F_GETFD => {
             if entry.cloexec {

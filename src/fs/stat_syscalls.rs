@@ -24,15 +24,41 @@ const AT_SYMLINK_NOFOLLOW: u32 = 0x100;
 
 #[inline]
 fn read_path(va: usize) -> Option<String> {
-    if va == 0 || va >= USER_SPACE_END {
-        return None;
+    crate::proc::exec::read_cstr_safe(va)
+}
+
+/// Serialize the Linux x86-64 statfs ABI without exposing Rust padding bytes.
+fn copy_statfs(path: &str, out: usize) -> isize {
+    let s = match crate::fs::vfs_ops::statfs(path) { Ok(s) => s, Err(e) => return e };
+    let mut bytes = [0u8; 120];
+    for (offset, value) in [
+        (0, s.f_type), (8, s.f_bsize), (16, s.f_blocks),
+        (24, s.f_bfree), (32, s.f_bavail), (64, s.f_namelen),
+        (72, s.f_bsize),
+    ] {
+        bytes[offset..offset + 8].copy_from_slice(&value.to_ne_bytes());
     }
-    let mut buf = [0u8; 4096];
-    copy_from_user(&mut buf, va).ok()?;
-    let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
-    core::str::from_utf8(&buf[..end])
-        .ok()
-        .map(|s| String::from(s))
+    // Backend APIs do not report inode totals or fsids. Leave those fields
+    // zero (unknown), not fabricated capacity or a borrowed mount's values.
+    match copy_to_user(out, &bytes) { Ok(_) => 0, Err(_) => -14 }
+}
+
+pub fn sys_statfs_path(path: &str, out: usize) -> isize {
+    if path.is_empty() { return -2; }
+    let path = resolve_path(path);
+    if let Err(e) = crate::fs::vfs_ops::stat(&path) { return e; }
+    copy_statfs(&path, out)
+}
+
+pub fn sys_fstatfs(fd: usize, out: usize) -> isize {
+    let entry = match crate::fs::process_fd::proc_fd_get(
+        crate::proc::scheduler::current_pid(), fd,
+    ) { Some(e) => e, None => return -9 };
+    let path = entry.path.clone().or_else(|| vfs::fd_path(entry.backing_fd));
+    match path {
+        Some(path) if path.starts_with('/') => copy_statfs(&path, out),
+        _ => -22,
+    }
 }
 
 /// Translate a user-visible fd to its kernel-internal backing fd.
@@ -363,7 +389,7 @@ pub fn kstat_ext2(path: &str) -> Result<crate::fs::vfs_ops::KStat, isize> {
         Some(vs) => Ok(crate::fs::vfs_ops::KStat {
             ino: vs.ino,
             mode: vs.mode,
-            nlink: vs.nlink,
+            nlink: vs.nlink.min(u32::MAX as u64) as u32,
             uid: 0,
             gid: 0,
             size: vs.size,
@@ -540,15 +566,15 @@ pub fn sys_readlink(path_va: usize, buf_va: usize, bufsz: usize) -> isize {
         return n;
     }
 
-    match vfs::readlink(&path) {
-        Some(target) => {
+    match crate::fs::vfs_ops::readlink(&resolve_path(&path)) {
+        Ok(target) => {
             let n = target.len().min(bufsz);
-            if copy_to_user(buf_va, target[..n].as_bytes()).is_err() {
+            if copy_to_user(buf_va, &target.as_bytes()[..n]).is_err() {
                 return -14;
             }
             n as isize
         },
-        None => -2,
+        Err(e) => e,
     }
 }
 
@@ -565,19 +591,12 @@ pub fn sys_rename(old_va: usize, new_va: usize) -> isize {
         Some(p) => p,
         None => return -14,
     };
-    if vfs::rename(&old, &new) {
-        0
-    } else {
-        -2
-    }
+    sys_rename_str(&old, &new)
 }
 
 pub fn sys_rename_str(old: &str, new: &str) -> isize {
-    if vfs::rename(old, new) {
-        0
-    } else {
-        -2
-    }
+    crate::fs::vfs_ops::rename(&resolve_path(old), &resolve_path(new))
+        .map(|_| 0).unwrap_or_else(|e| e)
 }
 
 pub fn sys_mkdir(path_va: usize, _mode: u32) -> isize {
@@ -585,11 +604,7 @@ pub fn sys_mkdir(path_va: usize, _mode: u32) -> isize {
         Some(p) => p,
         None => return -14,
     };
-    if vfs::mkdir(&path) {
-        0
-    } else {
-        -17
-    }
+    crate::fs::vfs_ops::mkdir(&resolve_path(&path)).map(|_| 0).unwrap_or_else(|e| e)
 }
 
 pub fn sys_unlink(path_va: usize) -> isize {
@@ -597,11 +612,7 @@ pub fn sys_unlink(path_va: usize) -> isize {
         Some(p) => p,
         None => return -14,
     };
-    if vfs::unlink(&path) {
-        0
-    } else {
-        -2
-    }
+    vfs::unlink(&resolve_path(&path)).map(|_| 0).unwrap_or_else(|e| e)
 }
 
 pub fn sys_truncate(path_va: usize, length: i64) -> isize {

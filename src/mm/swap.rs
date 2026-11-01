@@ -35,7 +35,7 @@
 //!  x86_64 (64-bit PTE):  [ slot:32 | dev_id:8 | type=SWAP:8 | P=0 ]
 //!
 //!  Bit layout (LSB = bit 0):
-//!    bits  7:0  = 0xAB  (swap-type marker; bit 0 = P/V = 0)
+//!    bits  7:0  = 0xAA  (swap-type marker; bit 0 = P/V = 0)
 //!    bits 23:16 = dev_id (0..MAX_SWAP_DEVS-1)
 //!    bits 55:24 = slot index (1-based)
 //! ```
@@ -96,7 +96,7 @@ impl SwapSlot {
     /// Encode into the upper bits of a not-present PTE.
     ///
     /// Layout (LSB = bit 0):
-    ///   bits  7:0  = 0xAB  (swap marker; bit 0 = P/V = 0)
+    ///   bits  7:0  = 0xAA  (swap marker; bit 0 = P/V = 0)
     ///   bits 23:16 = dev   (8 bits, supports up to 256 devices)
     ///   bits 55:24 = slot  (32 bits; slot is u32 so this never overflows)
     ///
@@ -105,7 +105,7 @@ impl SwapSlot {
     /// now non-overlapping for the full u32 slot range.
     #[inline]
     pub fn encode_pte(self) -> usize {
-        ((self.slot as usize) << 24) | ((self.dev as usize) << 16) | 0xAB // swap-type marker; bit 0
+        ((self.slot as usize) << 24) | ((self.dev as usize) << 16) | 0xAA // swap-type marker; bit 0
                                                                           // (PRESENT/VALID) = 0
     }
 
@@ -116,7 +116,7 @@ impl SwapSlot {
         if pte & 1 != 0 {
             return None;
         } // present — not a swap PTE
-        if (pte & 0xFF) != 0xAB {
+        if (pte & 0xFF) != 0xAA {
             return None;
         } // wrong marker
         let dev = ((pte >> 16) & 0xFF) as u8;
@@ -450,7 +450,7 @@ pub fn swapout_one() -> bool {
                 continue;
             }
             // Check the accessed bit in the PTE.
-            let cr3 = scheduler::with_proc(e.pid, |p| p.user_pagetable).unwrap_or(0);
+            let cr3 = scheduler::with_proc((e.pid) as usize, |p| p.user_pagetable).unwrap_or(0);
             if cr3 == 0 {
                 continue;
             }
@@ -527,11 +527,26 @@ pub fn swapout_one() -> bool {
         return false;
     }
 
-    let cr3 = scheduler::with_proc(e.pid, |p| p.user_pagetable).unwrap_or(0);
+    let cr3 = scheduler::with_proc((e.pid) as usize, |p| p.user_pagetable).unwrap_or(0);
     if cr3 != 0 {
         let swap_pte = slot.encode_pte();
-        <Arch as Paging>::set_pte(cr3, e.va, swap_pte);
+        if !<Arch as Paging>::set_pte(cr3, e.va, swap_pte) {
+            let mut tbl = DEV_TABLE.lock();
+            if let Some(dev) = tbl.devs[slot.dev as usize].as_mut() {
+                dev.free_slot(slot.slot);
+                STAT_FREE_SLOTS.fetch_add(1, Ordering::Relaxed);
+            }
+            return false;
+        }
         <Arch as Paging>::flush_va(e.va);
+        crate::smp::ipi::tlb_shootdown(e.va as u64, (e.va + PAGE_SIZE) as u64, 0);
+    } else {
+        let mut tbl = DEV_TABLE.lock();
+        if let Some(dev) = tbl.devs[slot.dev as usize].as_mut() {
+            dev.free_slot(slot.slot);
+            STAT_FREE_SLOTS.fetch_add(1, Ordering::Relaxed);
+        }
+        return false;
     }
 
     lru_mutex.lock().remove_pa(e.pa);
@@ -552,7 +567,7 @@ pub fn swapout_one() -> bool {
 pub fn swapin(pid: u32, faulting_va: usize) -> bool {
     let page_va = faulting_va & PAGE_MASK;
 
-    let cr3 = scheduler::with_proc(pid, |p| p.user_pagetable).unwrap_or(0);
+    let cr3 = scheduler::with_proc((pid) as usize, |p| p.user_pagetable).unwrap_or(0);
     if cr3 == 0 {
         return false;
     }
@@ -568,7 +583,7 @@ pub fn swapin(pid: u32, faulting_va: usize) -> bool {
     let pa = match pa_ptr {
         Some(p) => p,
         None => {
-            crate::proc::signal::send_signal(pid, 9 /* SIGKILL */);
+            crate::proc::signal::send_signal((pid) as usize, 9 /* SIGKILL */);
             return false;
         },
     };
@@ -581,7 +596,7 @@ pub fn swapin(pid: u32, faulting_va: usize) -> bool {
             Some(dev) => (dev.ops.read_page, dev.ops.dev_priv, slot.byte_offset()),
             None => {
                 free_page(pa);
-                crate::proc::signal::send_signal(pid, 7 /* SIGBUS */);
+                crate::proc::signal::send_signal((pid) as usize, 7 /* SIGBUS */);
                 return false;
             },
         }
@@ -591,10 +606,19 @@ pub fn swapin(pid: u32, faulting_va: usize) -> bool {
 
     if !io_ok {
         free_page(pa);
-        crate::proc::signal::send_signal(pid, 7 /* SIGBUS */);
+        crate::proc::signal::send_signal((pid) as usize, 7 /* SIGBUS */);
         return false;
     }
 
+    let prot = crate::mm::mmap::find_vma((pid) as usize, faulting_va)
+        .map(|v| v.prot)
+        .unwrap_or(crate::mm::mmap::PROT_READ);
+    let flags = prot_to_flags(prot);
+    if !<Arch as Paging>::map_page(cr3, page_va, pa, flags) {
+        free_page(pa);
+        return false;
+    }
+    <Arch as Paging>::flush_va(page_va);
     {
         let mut tbl = DEV_TABLE.lock();
         if let Some(ref mut dev) = tbl.devs[slot.dev as usize] {
@@ -602,13 +626,6 @@ pub fn swapin(pid: u32, faulting_va: usize) -> bool {
         }
     }
     STAT_FREE_SLOTS.fetch_add(1, Ordering::Relaxed);
-
-    let prot = crate::mm::mmap::find_vma(pid, faulting_va)
-        .map(|v| v.prot)
-        .unwrap_or(crate::mm::mmap::PROT_READ);
-    let flags = prot_to_flags(prot);
-    <Arch as Paging>::map_page(cr3, page_va, pa as usize, flags);
-    <Arch as Paging>::flush_va(page_va);
 
     track_page(pa as usize, pid, page_va);
     STAT_SWAPIN.fetch_add(1, Ordering::Relaxed);
@@ -684,8 +701,9 @@ pub fn sys_swapon(path: *const u8, path_len: usize) -> isize {
     if path_len > 4096 {
         return -36; // ENAMETOOLONG
     }
-    let name = unsafe { core::slice::from_raw_parts(path, path_len) };
-    let (ops, num_slots) = match crate::fs::vfs::open_swap_device(name) {
+    let mut name = alloc::vec![0u8; path_len];
+    if crate::uaccess::copy_from_user(&mut name, path as usize).is_err() { return -14; }
+    let (ops, num_slots) = match crate::fs::vfs::open_swap_device(&name) {
         Ok(x) => x,
         Err(e) => return e,
     };
@@ -706,8 +724,9 @@ pub fn sys_swapoff(path: *const u8, path_len: usize) -> isize {
     if path_len > 4096 {
         return -36; // ENAMETOOLONG
     }
-    let name = unsafe { core::slice::from_raw_parts(path, path_len) };
-    let dev_idx = match crate::fs::vfs::find_swap_device(name) {
+    let mut name = alloc::vec![0u8; path_len];
+    if crate::uaccess::copy_from_user(&mut name, path as usize).is_err() { return -14; }
+    let dev_idx = match crate::fs::vfs::find_swap_device(&name) {
         Ok(i) => i,
         Err(e) => return e,
     };
@@ -716,7 +735,7 @@ pub fn sys_swapoff(path: *const u8, path_len: usize) -> isize {
     // PTE whose SwapSlot::dev matches dev_idx.  Without this drain, any
     // subsequent fault on those addresses would find the device gone and
     // deliver SIGBUS with no recovery possible.
-    drain_swap_device(dev_idx);
+    if !drain_swap_device(dev_idx) { return -5; }
     match remove_swap_device(dev_idx) {
         Ok(()) => 0,
         Err(e) => e,
@@ -731,32 +750,36 @@ pub fn sys_swapoff(path: *const u8, path_len: usize) -> isize {
 /// provided closure for every not-present PTE that decodes as a valid
 /// `SwapSlot`.  The closure receives `(va, slot)` and should return `true`
 /// to continue the walk.
-fn drain_swap_device(dev_idx: u8) {
+fn drain_swap_device(dev_idx: u8) -> bool {
     // Collect (pid, cr3) pairs under a read lock so we don't hold the
     // scheduler lock across the (potentially slow) swapin I/O calls.
-    let targets: alloc::vec::Vec<(u32, usize)> = scheduler::with_procs_ro(|procs| {
+    let targets: alloc::vec::Vec<_> = scheduler::with_procs_ro(|procs| {
         procs
             .iter()
-            .filter(|p| p.user_pagetable != 0)
-            .map(|p| (p.pid as u32, p.user_pagetable))
+            .filter_map(|owner| {
+                let p = owner.inner.lock();
+                (p.user_pagetable != 0).then(|| (owner.pid, p.user_pagetable, p.vmas.clone()))
+            })
             .collect()
     });
 
-    for (pid, cr3) in targets {
+    for (pid, cr3, vmas) in targets {
         // Collect all VAs with swap PTEs on this device, then swapin each
         // one.  We collect first to avoid calling swapin while holding a
         // page-table lock inside walk_swap_ptes.
         let mut vas: alloc::vec::Vec<usize> = alloc::vec::Vec::new();
-        <Arch as Paging>::walk_swap_ptes(cr3, |va, slot| {
-            if slot.dev == dev_idx {
-                vas.push(va);
+        for vma in vmas {
+            for va in (vma.start..vma.end).step_by(PAGE_SIZE) {
+                if let Some(slot) = SwapSlot::decode_pte(<Arch as Paging>::read_pte(cr3, va)) {
+                    if slot.dev == dev_idx { vas.push(va); }
+                }
             }
-            true // continue walk
-        });
+        }
         for va in vas {
-            swapin(pid, va);
+            if !swapin(pid, va) { return false; }
         }
     }
+    true
 }
 
 /// One line of `/proc/swaps` output.

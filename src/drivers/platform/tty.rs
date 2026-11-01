@@ -128,13 +128,16 @@ fn send_signal_to_pgrp(pgid: usize, sig: i32) {
     let tgids = crate::proc::scheduler::with_procs_ro(|procs| {
         procs
             .iter()
-            .filter(|p| p.pgid == pgid && p.pid == p.tgid)
+            .filter(|owner| {
+                let p = owner.lock();
+                p.pgid == pgid && p.pid == p.tgid
+            })
             .map(|p| p.tgid)
             .collect::<Vec<_>>()
     });
 
     for tgid in tgids {
-        crate::proc::signal::send_signal_group(tgid, sig);
+        crate::proc::signal::send_signal_group((tgid) as usize, sig);
     }
 }
 

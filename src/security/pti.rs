@@ -52,14 +52,7 @@ impl PtiCr3Pair {
 
 #[cfg(target_arch = "x86_64")]
 pub fn cpu_has_pcid() -> bool {
-    let ecx: u32;
-    unsafe {
-        core::arch::asm!(
-            "mov eax, 1", "cpuid",
-            out("ecx") ecx, out("eax") _, out("ebx") _, out("edx") _,
-            options(nostack)
-        );
-    }
+    let ecx = unsafe { core::arch::x86_64::__cpuid(1) }.ecx;
     (ecx >> 17) & 1 != 0
 }
 
@@ -99,7 +92,7 @@ pub fn build_shadow_pml4(
     trampoline_phys: u64,
     trampoline_va: u64,
 ) -> Option<u64> {
-    let shadow_phys = crate::mm::pmm::alloc_frame()?;
+    let shadow_phys = crate::mm::pmm::alloc_page()? as u64;
     unsafe {
         let shadow_ptr = phys_to_virt(shadow_phys) as *mut u64;
         let kernel_ptr = phys_to_virt(kernel_pml4_phys) as *const u64;
@@ -150,7 +143,7 @@ unsafe fn get_or_alloc_kernel_table(table: *mut u64, index: usize) -> *mut u64 {
         return phys_to_virt(entry & 0x000F_FFFF_FFFF_F000) as *mut u64;
     }
     let new_phys =
-        crate::mm::pmm::alloc_frame().expect("PTI: OOM allocating shadow page-table page");
+        crate::mm::pmm::alloc_page().expect("PTI: OOM allocating shadow page-table page") as u64;
     let new_virt = phys_to_virt(new_phys) as *mut u64;
     for i in 0..512 {
         new_virt.add(i).write_volatile(0);

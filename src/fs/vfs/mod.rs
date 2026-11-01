@@ -16,6 +16,29 @@ pub mod uring;
 // Preserve the historical `crate::fs::vfs::*` facade after moving the raw
 // descriptor implementation into `fd.rs`.
 pub use fd::*;
+pub use ops::{mkdir, readlink, rename};
+
+pub fn exists(path: &str) -> bool {
+    ops::stat(path).is_ok()
+}
+
+pub fn dup(fd: usize) -> isize {
+    crate::fs::io_syscalls::sys_dup(fd)
+}
+
+pub fn truncate(fd: usize, len: usize) -> isize {
+    let pid = crate::proc::scheduler::current_pid();
+    let bfd = crate::fs::process_fd::proc_fd_backing(pid, fd);
+    if bfd < 0 { return bfd; }
+    ops::truncate_fd(bfd as usize, len).map(|_| 0).unwrap_or_else(|e| e)
+}
+
+pub fn fsync(fd: usize) -> isize {
+    let pid = crate::proc::scheduler::current_pid();
+    let bfd = crate::fs::process_fd::proc_fd_backing(pid, fd);
+    if bfd < 0 { return bfd; }
+    fd::flush_fd(bfd as usize, true)
+}
 
 /// Compatibility open flag constants.
 pub const O_RDONLY: u32 = open_check::flags::O_RDONLY;

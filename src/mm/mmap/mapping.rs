@@ -1,6 +1,6 @@
 use super::mm_lock::{check_rlimit_as, with_mm_write};
 use super::protection::prot_to_flags;
-use super::vma::{insert_vma, page_align_up};
+use super::vma::{insert_vma, page_align_up, remove_vma};
 use super::{Vma, VmaKind, MAP_ANON, MAP_FIXED, MAP_GROWSDOWN, PAGE, PROT_EXEC, PROT_WRITE};
 use crate::arch::{
     api::{PageFlags, Paging},
@@ -24,6 +24,13 @@ pub fn sys_mmap(
     }
     let len = page_align_up(length);
     let pid = scheduler::current_pid();
+    if flags & MAP_ANON == 0 {
+        let backing = crate::fs::process_fd::proc_fd_backing(pid, fd);
+        if backing < 0 { return backing; }
+        if crate::fs::vfs_uring::is_uring_fd(backing as usize) {
+            return crate::io_uring::ring::mmap_ring(backing as usize, addr, length, prot, flags, offset);
+        }
+    }
 
     if flags & MAP_GROWSDOWN != 0 {
         let over = scheduler::with_proc(pid, |p| p.rlimits.exceeds_stack(len)).unwrap_or(false);
@@ -57,10 +64,12 @@ pub fn sys_mmap(
     }
 
     // Special-case framebuffer mappings via the GOP driver.
-    if flags & MAP_ANON == 0 && crate::drivers::gop::is_fb_fd(fd) {
-        if let Some(info) = crate::drivers::gop::get() {
-            let fb_phys = info.fb_phys as usize;
-            let fb_size = crate::drivers::gop::fb_byte_size(&info);
+    if flags & MAP_ANON == 0
+        && crate::fs::process_fd::proc_fd_path(pid, fd).as_deref() == Some("/dev/fb0")
+    {
+        if let Some(info) = crate::drivers::gop::capture_from_boot_services() {
+            let fb_phys = info.phys as usize;
+            let fb_size = info.pitch as usize * info.height as usize;
             let phys_off = fb_phys + offset;
             let max_len = fb_size.saturating_sub(offset);
             let safe_len = len.min(max_len);
@@ -183,7 +192,7 @@ fn va_end_of(va: usize, len: usize) -> usize {
 // Remove VMAs in the range [addr, end) and unmap/free their pages.  This helper
 // previously only adjusted the VMA list; it now also unmaps page tables and
 // frees underlying physical frames for non-PhysMap mappings (bug #2).
-fn remove_vma_inner(p: &mut crate::proc::process::Pcb, addr: usize, end: usize) {
+pub(super) fn remove_vma_inner(p: &mut crate::proc::process::Pcb, addr: usize, end: usize) {
     let user_cr3 = p.user_pagetable;
     // Collect pages to free after TLB shootdown.
     let mut to_free: Vec<usize> = Vec::new();
@@ -191,7 +200,8 @@ fn remove_vma_inner(p: &mut crate::proc::process::Pcb, addr: usize, end: usize) 
         if let Some(pa) = <Arch as Paging>::virt_to_phys(user_cr3, page_va) {
             // Check if this page belongs to a PhysMap VMA before removal.
             let is_phys = p.vmas.iter().any(|v| {
-                page_va >= v.start && page_va < v.end && matches!(v.kind, VmaKind::PhysMap(_))
+                page_va >= v.start && page_va < v.end
+                    && matches!(v.kind, VmaKind::PhysMap(_) | VmaKind::Shared(_, _))
             });
             // Unmap the page from the old address space.
             <Arch as Paging>::unmap_page(user_cr3, page_va);

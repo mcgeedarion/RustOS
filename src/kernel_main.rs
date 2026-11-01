@@ -3,7 +3,18 @@
 use crate::init::boot_info::BootInfo;
 
 #[no_mangle]
+#[cfg(target_arch = "x86_64")]
+pub extern "sysv64" fn kernel_main(boot_info: &'static BootInfo) -> ! {
+    enter(boot_info)
+}
+
+#[no_mangle]
+#[cfg(not(target_arch = "x86_64"))]
 pub extern "C" fn kernel_main(boot_info: &'static BootInfo) -> ! {
+    enter(boot_info)
+}
+
+fn enter(boot_info: &'static BootInfo) -> ! {
     // ── Milestone 1: kernel entry ────────────────────────────────────────────
     // This is the very first Rust instruction after the arch stub hands off
     // to common code.  The counter is read before any subsystem init so that

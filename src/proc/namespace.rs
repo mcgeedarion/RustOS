@@ -327,7 +327,7 @@ pub fn nsfd_to_ns_id(fd: usize) -> Option<(String, NsId)> {
 
 /// Apply a namespace change to process `pid`.
 pub fn setns_apply(pid: usize, name: &str, ns_id: NsId) -> isize {
-    crate::proc::scheduler::with_proc_mut(pid, |p| {
+    crate::proc::scheduler::with_proc_mut(pid, |p, _owner| {
         match name {
             "mnt" => p.ns.mnt = ns_id,
             "uts" => p.ns.uts = ns_id,

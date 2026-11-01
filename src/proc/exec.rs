@@ -165,7 +165,7 @@ fn destroy_address_space(root: usize, vmas: &[crate::mm::mmap::Vma]) {
     }
 
     for vma in vmas {
-        if matches!(&vma.kind, crate::mm::mmap::VmaKind::PhysMap(_)) {
+        if matches!(&vma.kind, crate::mm::mmap::VmaKind::PhysMap(_) | crate::mm::mmap::VmaKind::Shared(_, _)) {
             continue;
         }
         for va in (vma.start..vma.end).step_by(PAGE_SIZE) {
@@ -551,8 +551,8 @@ fn make_user_process(
     pcb.ppid = ppid;
     pcb.tgid = pid;
     pcb.tg_id = pid;
-    pcb.pgid = pid as u32;
-    pcb.sid = pid as u32;
+    pcb.pgid = (pid as u32) as usize;
+    pcb.sid = (pid as u32) as usize;
     pcb.state = State::Ready;
     pcb.exe_path = Some(path.to_string());
     pcb.user_pagetable = image.root;
@@ -649,6 +649,14 @@ pub fn sys_execve(path_va: usize, argv_va: usize, envp_va: usize) -> isize {
         Some(_) => return ENOENT,
         None => return EFAULT,
     };
+    sys_execve_path(path, argv_va, envp_va)
+}
+
+/// Execute a kernel-owned pathname while still checking userspace argv/envp.
+pub fn sys_execve_path(path: String, argv_va: usize, envp_va: usize) -> isize {
+    if path.is_empty() {
+        return ENOENT;
+    }
     let mut remaining = MAX_EXEC_BYTES;
     let argv = match read_cstr_vector_safe(argv_va, &mut remaining) {
         Ok(value) => value,

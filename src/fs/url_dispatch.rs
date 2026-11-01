@@ -674,7 +674,7 @@ impl Scheme for DevFs {
     }
 
     fn read(&self, fid: SchemeFileId, buf: &mut [u8]) -> Result<usize, SchemeError> {
-        let (minor, nonblock) = {
+        let (minor, nonblock): (usize, bool) = {
             let mut fds = DEV_SCHEME_FDS.lock();
             let fd = fds.get_mut(&fid.0).ok_or(SchemeError::NotFound)?;
 
@@ -701,7 +701,7 @@ impl Scheme for DevFs {
     }
 
     fn ioctl(&self, fid: SchemeFileId, cmd: u64, arg: usize) -> Result<usize, SchemeError> {
-        let ops = {
+        let ops: Arc<dyn crate::fs::vfs_ops::FileOps + Send + Sync> = {
             let fds = DEV_SCHEME_FDS.lock();
             let fd = fds.get(&fid.0).ok_or(SchemeError::NotFound)?;
 
@@ -728,13 +728,17 @@ impl Scheme for DevFs {
                 *cur = checked_seek(*cur, data.len(), offset, whence)?;
                 Ok(*cur as u64)
             },
+            #[cfg(feature = "input_events")]
             DevSchemeKind::InputEvent { .. } => Err(SchemeError::InvalidArg),
         }
     }
 
     fn close(&self, fid: SchemeFileId) -> Result<(), SchemeError> {
-        if let Some(DevSchemeKind::InputEvent { ops, .. }) = DEV_SCHEME_FDS.lock().remove(&fid.0) {
-            ops.close();
+        match DEV_SCHEME_FDS.lock().remove(&fid.0) {
+            #[cfg(feature = "input_events")]
+            Some(DevSchemeKind::InputEvent { ops, .. }) => { ops.close(); },
+            Some(_) => {},
+            None => return Err(SchemeError::NotFound),
         }
 
         Ok(())

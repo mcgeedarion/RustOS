@@ -41,7 +41,7 @@ pub fn clone_for_fork(parent_pid: usize, child_pid: usize, parent_cr3: usize) ->
     let parent_key = crate::proc::thread::vma_pid(parent_pid);
     let child_key = crate::proc::thread::vma_pid(child_pid);
     if parent_key != child_key {
-        crate::mm::mmap::clone_vmas(parent_key, child_key);
+        crate::mm::mmap::clone_vmas(parent_key as usize, child_key as usize);
     }
     child_cr3
 }

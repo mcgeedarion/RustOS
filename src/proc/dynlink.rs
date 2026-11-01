@@ -97,7 +97,7 @@ pub fn load_interp(interp_path: &str) -> Result<(usize, usize), isize> {
         Ok(fd) => fd,
         Err(_) => return Err(-2),
     };
-    let size = crate::fs::vfs::file_size(fd);
+    let size = crate::fs::vfs::file_size(fd).unwrap_or(0);
     if size == 0 {
         crate::fs::vfs::close(fd);
         return Err(-8);
@@ -164,7 +164,7 @@ fn map_elf_phdrs(elf: &[u8]) -> Result<usize, isize> {
     }
 
     let e_type = u16::from_le_bytes([elf[16], elf[17]]);
-    let e_phoff = usize::from_le_bytes(elf[32..40].try_into().map_err(|_| -8)?);
+    let e_phoff = usize::from_le_bytes(elf[32..40].try_into().map_err(|_| -8isize)?);
     let e_phentsize = u16::from_le_bytes([elf[54], elf[55]]) as usize;
     let e_phnum = u16::from_le_bytes([elf[56], elf[57]]) as usize;
 
@@ -175,12 +175,7 @@ fn map_elf_phdrs(elf: &[u8]) -> Result<usize, isize> {
     const PAGE: usize = 4096;
 
     let pid = crate::proc::scheduler::current_pid();
-    let cr3 = crate::proc::scheduler::with_procs(|procs| {
-        procs
-            .iter()
-            .find(|p| p.pid == pid)
-            .map_or(0, |p| p.user_pagetable)
-    });
+    let cr3 = crate::proc::scheduler::with_proc(pid, |p| p.user_pagetable).unwrap_or(0);
     if cr3 == 0 {
         return Err(-12);
     }
@@ -190,16 +185,16 @@ fn map_elf_phdrs(elf: &[u8]) -> Result<usize, isize> {
         if base + e_phentsize > elf.len() {
             break;
         }
-        let p_type = u32::from_le_bytes(elf[base..base + 4].try_into().map_err(|_| -8)?);
+        let p_type = u32::from_le_bytes(elf[base..base + 4].try_into().map_err(|_| -8isize)?);
         if p_type != PT_LOAD {
             continue;
         }
 
-        let p_offset = usize::from_le_bytes(elf[base + 8..base + 16].try_into().map_err(|_| -8)?);
-        let p_vaddr = usize::from_le_bytes(elf[base + 16..base + 24].try_into().map_err(|_| -8)?);
-        let p_filesz = usize::from_le_bytes(elf[base + 32..base + 40].try_into().map_err(|_| -8)?);
-        let p_memsz = usize::from_le_bytes(elf[base + 40..base + 48].try_into().map_err(|_| -8)?);
-        let p_flags = u32::from_le_bytes(elf[base + 4..base + 8].try_into().map_err(|_| -8)?);
+        let p_offset = usize::from_le_bytes(elf[base + 8..base + 16].try_into().map_err(|_| -8isize)?);
+        let p_vaddr = usize::from_le_bytes(elf[base + 16..base + 24].try_into().map_err(|_| -8isize)?);
+        let p_filesz = usize::from_le_bytes(elf[base + 32..base + 40].try_into().map_err(|_| -8isize)?);
+        let p_memsz = usize::from_le_bytes(elf[base + 40..base + 48].try_into().map_err(|_| -8isize)?);
+        let p_flags = u32::from_le_bytes(elf[base + 4..base + 8].try_into().map_err(|_| -8isize)?);
 
         let load_va = (p_vaddr + bias) & !(PAGE - 1);
         let pages = (p_memsz + PAGE - 1) / PAGE;
@@ -263,6 +258,7 @@ fn map_elf_phdrs(elf: &[u8]) -> Result<usize, isize> {
                 flags: if bias != 0 { 0x22 } else { 0x02 },
                 kind: crate::mm::mmap::VmaKind::FileBacked(0, p_offset as u64),
                 file_offset: p_offset as u64,
+                locked: false,
             },
         );
     }
@@ -273,5 +269,5 @@ fn get_entry_point(elf: &[u8]) -> Result<usize, isize> {
     if elf.len() < 64 {
         return Err(-8);
     }
-    usize::from_le_bytes(elf[24..32].try_into().map_err(|_| -8))
+    Ok(usize::from_le_bytes(elf[24..32].try_into().map_err(|_| -8isize)?))
 }

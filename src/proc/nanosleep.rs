@@ -175,7 +175,7 @@ pub fn sys_clock_getres(clockid: u32, timespec_va: usize) -> isize {
     let mut buf = [0u8; 16];
     buf[0..8].copy_from_slice(&res.tv_sec.to_le_bytes());
     buf[8..16].copy_from_slice(&(res.tv_nsec as i64).to_le_bytes());
-    if !copy_to_user(timespec_va, &buf) {
+    if copy_to_user(timespec_va, &buf).is_err() {
         return -14;
     }
     0
@@ -222,7 +222,7 @@ pub fn sleep_until_ns(deadline_ns: u64) -> isize {
     });
 
     match reason {
-        WakeReason::Timeout | WakeReason::Ready(_) => 0,
+        WakeReason::Timeout | WakeReason::Ready => 0,
         WakeReason::Cancelled => -4, // EINTR
     }
 }

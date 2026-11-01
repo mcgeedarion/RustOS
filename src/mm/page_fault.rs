@@ -138,13 +138,13 @@ pub fn handle_demand_fault(faulting_va: usize) -> bool {
             // suffix from Step A is the correct POSIX behaviour.
         },
 
-        VmaKind::Fixed => {
-            // MAP_FIXED over an already-unmapped region — access violation.
+        VmaKind::Shared(owner, index) => {
             free_page(pa);
-            send_sigsegv(pid, faulting_va);
-            return false;
+            let Some(&shared_pa) = owner.frames().get(*index) else { return false; };
+            let mapped = <Arch as Paging>::map_page(user_cr3, page_va, shared_pa, prot_to_flags(vma.prot));
+            <Arch as Paging>::flush_va(page_va);
+            return mapped;
         },
-
         VmaKind::PhysMap(phys_base) => {
             // Re-map the exact physical page — do NOT use the PMM-allocated
             // `pa`. Return `pa` to the PMM immediately; the physical page is

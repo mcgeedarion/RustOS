@@ -12,7 +12,7 @@ pub fn free_address_space(pid: usize, user_cr3: usize) {
     let vmas: Vec<Vma> = scheduler::with_proc(pid, |p| p.vmas.clone()).unwrap_or_default();
 
     for vma in &vmas {
-        let is_phys = matches!(vma.kind, VmaKind::PhysMap(_));
+        let is_phys = matches!(vma.kind, VmaKind::PhysMap(_) | VmaKind::Shared(_, _));
         for va in (vma.start..vma.end).step_by(PAGE) {
             if let Some(pa) = <Arch as Paging>::virt_to_phys(user_cr3, va) {
                 if <Arch as Paging>::unmap_page(user_cr3, va).is_some() && !is_phys {

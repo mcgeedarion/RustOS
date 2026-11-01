@@ -1,12 +1,7 @@
 //! ext2 on-disk structures, inode types, and all Ext2Fs impl methods.
 //! Merged from inode.rs + structs.rs + impl_a.rs + impl_b.rs
 extern crate alloc;
-use super::bitmap::*;
-use super::block::*;
-use super::directory::*;
-use super::superblock::*;
 use super::symlink::*;
-use crate::fs::vfs_ops::{DirEntry, KStat, KStatfs};
 use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
@@ -28,22 +23,22 @@ fn block_read(lba: u64, count: u32) -> Vec<u8> {
 
 fn block_write(lba: u64, data: &[u8]) {
     debug_assert!(data.len() % 512 == 0);
-    crate::drivers::block::write_sectors(lba, data);
+    crate::drivers::block::write_sectors(lba, (data.len() / 512) as u32, data);
 }
 
 #[derive(Clone, Debug)]
-struct Superblock {
+pub(crate) struct Superblock {
     inodes_count: u32,
-    blocks_count: u32,
+    pub(crate) blocks_count: u32,
     r_blocks_count: u32,
     free_blocks_count: u32,
     free_inodes_count: u32,
-    first_data_block: u32,
+    pub(crate) first_data_block: u32,
     log_block_size: u32,
     log_frag_size: u32,
-    blocks_per_group: u32,
+    pub(crate) blocks_per_group: u32,
     frags_per_group: u32,
-    inodes_per_group: u32,
+    pub(crate) inodes_per_group: u32,
     mtime: u32,
     wtime: u32,
     mnt_count: u16,
@@ -71,13 +66,17 @@ struct Superblock {
 }
 
 impl Superblock {
-    fn from_bytes(b: &[u8]) -> Option<Self> {
+    pub(crate) fn from_bytes(b: &[u8]) -> Option<Self> {
         if b.len() < 1024 {
             return None;
         }
         let r32 = |o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
         let r16 = |o: usize| u16::from_le_bytes(b[o..o + 2].try_into().unwrap());
         if r16(56) != EXT2_SUPER_MAGIC {
+            return None;
+        }
+        // Reject unsupported layouts before any shifts, divisions, or writes.
+        if r32(24) > 6 || r32(96) & !2 != 0 || r32(100) & !3 != 0 {
             return None;
         }
         let mut uuid = [0u8; 16];
@@ -124,10 +123,10 @@ impl Superblock {
             algo_bitmap: r32(200),
         })
     }
-    fn block_size(&self) -> usize {
+    pub(crate) fn block_size(&self) -> usize {
         1024 << self.log_block_size
     }
-    fn inode_size(&self) -> usize {
+    pub(crate) fn inode_size(&self) -> usize {
         if self.rev_level >= 1 {
             self.inode_size as usize
         } else {
@@ -137,7 +136,7 @@ impl Superblock {
 }
 
 #[derive(Clone, Debug)]
-struct BgDesc {
+pub(crate) struct BgDesc {
     block_bitmap: u32,
     inode_bitmap: u32,
     inode_table: u32,
@@ -147,7 +146,7 @@ struct BgDesc {
 }
 
 impl BgDesc {
-    fn from_bytes(b: &[u8]) -> Self {
+    pub(crate) fn from_bytes(b: &[u8]) -> Self {
         let r32 = |o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
         let r16 = |o: usize| u16::from_le_bytes(b[o..o + 2].try_into().unwrap());
         BgDesc {
@@ -172,7 +171,7 @@ impl BgDesc {
 }
 
 #[derive(Clone, Debug)]
-struct Inode {
+pub(crate) struct Inode {
     mode: u16,
     uid: u16,
     size: u32,
@@ -298,6 +297,7 @@ pub struct Ext2Stat {
     pub ctime: u32,
     pub nlink: u16,
     pub blocks: u32,
+    pub blksize: u64,
 }
 #[derive(Clone, Debug)]
 pub struct Ext2DirEntry {
@@ -442,27 +442,82 @@ impl Ext2Fs {
         if n_blocks > 12 {
             return Err(-28);
         }
-        for i in 0..12usize {
-            if inode.block[i] != 0 {
-                self.free_block(inode.block[i]);
-                inode.block[i] = 0;
-            }
-        }
+        // Allocate replacements before releasing the old data. ENOSPC must
+        // leave a previously valid file intact, not dangling at freed blocks.
+        let mut replacement = [0u32; 12];
         for i in 0..n_blocks {
-            let blk = self.alloc_block_inner().ok_or(-28isize)?;
+            let blk = match self.alloc_block_inner() {
+                Some(blk) => blk,
+                None => {
+                    for blk in replacement.iter().copied().filter(|b| *b != 0) {
+                        self.free_block(blk);
+                    }
+                    return Err(-28);
+                }
+            };
             let s = i * bs;
             let e = (s + bs).min(data.len());
             let mut buf = vec![0u8; bs];
             buf[..e - s].copy_from_slice(&data[s..e]);
             self.write_block(blk, &buf);
-            inode.block[i] = blk;
+            replacement[i] = blk;
+        }
+        for i in 0..12usize {
+            if inode.block[i] != 0 {
+                self.free_block(inode.block[i]);
+            }
+            inode.block[i] = replacement[i];
+        }
+        for i in 12..15 {
+            self.free_indirect(inode.block[i], (i - 11) as u32);
+            inode.block[i] = 0;
         }
         inode.size = data.len() as u32;
+        if inode.mode & EXT2_S_IFMT == EXT2_S_IFREG {
+            inode.dir_acl = 0;
+        }
         inode.blocks = (n_blocks * bs / 512) as u32;
         Ok(())
     }
 
-    fn free_block(&mut self, blkno: u32) {
+    fn free_indirect(&mut self, block: u32, depth: u32) {
+        if block == 0 { return; }
+        if depth != 0 {
+            let data = self.read_block(block);
+            for bytes in data.chunks_exact(4) {
+                let child = u32::from_le_bytes(bytes.try_into().unwrap());
+                self.free_indirect(child, depth - 1);
+            }
+        }
+        self.free_block(block);
+    }
+
+    pub(crate) fn free_inode(&mut self, ino: u32) {
+        if ino == 0 || ino > self.sb.inodes_count { return; }
+        let group = (ino - 1) / self.sb.inodes_per_group;
+        let local = ((ino - 1) % self.sb.inodes_per_group) as usize;
+        let Some(mut gd) = self.read_group_desc(group) else { return; };
+        let mut bitmap = self.read_block(gd.inode_bitmap);
+        if bitmap[local / 8] & (1 << (local % 8)) == 0 { return; }
+        if let Some(inode) = self.read_inode(ino) {
+            if inode.mode & EXT2_S_IFMT != EXT2_S_IFLNK || inode.blocks != 0 {
+                for b in &inode.block[..12] { self.free_block(*b); }
+                for i in 12..15 { self.free_indirect(inode.block[i], (i - 11) as u32); }
+            }
+            if inode.mode & EXT2_S_IFMT == EXT2_S_IFDIR {
+                gd.used_dirs = gd.used_dirs.saturating_sub(1);
+            }
+        }
+        bitmap[local / 8] &= !(1 << (local % 8));
+        self.write_block(gd.inode_bitmap, &bitmap);
+        gd.free_inodes = gd.free_inodes.saturating_add(1);
+        self.write_group_desc(group, &gd);
+    }
+
+    pub(crate) fn free_block(&mut self, blkno: u32) {
+        if blkno < self.sb.first_data_block || blkno >= self.sb.blocks_count {
+            return;
+        }
         let group = (blkno - self.sb.first_data_block) / self.sb.blocks_per_group;
         let local_bit = (blkno - self.sb.first_data_block) % self.sb.blocks_per_group;
         let mut gd = match self.read_group_desc(group) {
@@ -472,7 +527,7 @@ impl Ext2Fs {
         let mut bmap = self.read_block(gd.block_bitmap);
         let byte = (local_bit / 8) as usize;
         let bit = local_bit % 8;
-        if byte < bmap.len() {
+        if byte < bmap.len() && bmap[byte] & (1 << bit) != 0 {
             bmap[byte] &= !(1 << bit);
             self.write_block(gd.block_bitmap, &bmap);
             gd.free_blocks = gd.free_blocks.saturating_add(1);
@@ -603,10 +658,11 @@ impl Ext2Fs {
             if de.rec_len == 0 {
                 break;
             }
+            let rec_len = de.rec_len as usize;
             if de.inode != 0 {
                 entries.push(de);
             }
-            off += de.rec_len as usize;
+            off += rec_len;
         }
         entries
     }
@@ -619,31 +675,32 @@ impl Ext2Fs {
         ft: u8,
     ) -> Result<(), isize> {
         let inode = self.read_inode(dir_ino).ok_or(-2isize)?;
+        if inode.mode & EXT2_S_IFMT != EXT2_S_IFDIR { return Err(-20); }
+        if name.is_empty() || name.len() > 255 || name.contains('/') { return Err(-22); }
+        if self.dir_lookup(dir_ino, name).is_some() { return Err(-17); }
         let mut data = self.read_inode_data(&inode);
         let name_b = name.as_bytes();
         let new_real = (8 + name_b.len() + 3) & !3;
         let bs = self.block_size;
-        let mut last_off = 0usize;
+        let mut slot = None;
         let mut off = 0usize;
         while off + 8 <= data.len() {
             let de = RawDirEntry::from_bytes(&data[off..]).ok_or(-5isize)?;
-            if de.rec_len == 0 {
+            let real = if de.inode == 0 { 0 } else { (8 + de.name_len as usize + 3) & !3 };
+            if de.rec_len as usize >= real + new_real {
+                if real != 0 {
+                    data[off + 4..off + 6].copy_from_slice(&(real as u16).to_le_bytes());
+                }
+                slot = Some((off + real, de.rec_len as usize - real));
                 break;
             }
-            last_off = off;
             off += de.rec_len as usize;
         }
-        let last_de = RawDirEntry::from_bytes(&data[last_off..]).ok_or(-5isize)?;
-        let last_real = (8 + last_de.name_len as usize + 3) & !3;
-        let last_rec = last_de.rec_len as usize;
-        let gap_off = last_off + last_real;
-        let gap_len = last_off + last_rec - gap_off;
-        if gap_len < new_real {
-            let new_sz = (data.len() + new_real + bs - 1) / bs * bs;
-            data.resize(new_sz, 0);
-        }
-        data[last_off + 4..last_off + 6].copy_from_slice(&(last_real as u16).to_le_bytes());
-        let remaining = data.len() - gap_off;
+        let (gap_off, remaining) = slot.unwrap_or_else(|| {
+            let start = data.len();
+            data.resize(start + bs, 0);
+            (start, bs)
+        });
         data[gap_off..gap_off + 4].copy_from_slice(&child_ino.to_le_bytes());
         data[gap_off + 4..gap_off + 6].copy_from_slice(&(remaining as u16).to_le_bytes());
         data[gap_off + 6] = name_b.len() as u8;
@@ -669,7 +726,7 @@ impl Ext2Fs {
                 return Err(-2);
             }
             if de.inode != 0 && de.name == name {
-                if let Some(po) = prev_off {
+                if let Some(po) = prev_off.filter(|po| *po / self.block_size == off / self.block_size) {
                     let pr = u16::from_le_bytes(data[po + 4..po + 6].try_into().unwrap()) as usize;
                     let nr = (pr + de.rec_len as usize) as u16;
                     data[po + 4..po + 6].copy_from_slice(&nr.to_le_bytes());
@@ -678,7 +735,7 @@ impl Ext2Fs {
                 }
                 let mut inode2 = inode.clone();
                 self.write_block_data(&mut inode2, dir_ino, &data)?;
-                return Ok(());
+                return self.write_inode(dir_ino, &inode2);
             }
             prev_off = Some(off);
             off += de.rec_len as usize;
@@ -692,6 +749,7 @@ impl Ext2Fs {
         mode: u16,
         is_dir: bool,
     ) -> Result<u32, isize> {
+        if self.dir_lookup(parent_ino, name).is_some() { return Err(-17); }
         let ino = self.alloc_inode_inner(is_dir).ok_or(-28isize)?;
         let ts = crate::arch::time::current_unix_time_secs() as u32;
         let new_inode = Inode {
@@ -703,7 +761,7 @@ impl Ext2Fs {
             mtime: ts,
             dtime: 0,
             gid: 0,
-            links_count: 1,
+            links_count: if is_dir { 2 } else { 1 },
             blocks: 0,
             flags: 0,
             block: [0u32; 15],
@@ -716,7 +774,7 @@ impl Ext2Fs {
             inode_size: 0,
         };
         self.write_inode(ino, &new_inode)?;
-        let ft = if is_dir { 2u8 } else { 1u8 };
+        let ft = dir_entry_type_for_mode(mode, is_dir);
         self.append_dirent(parent_ino, ino, name, ft)?;
         Ok(ino)
     }
@@ -734,10 +792,14 @@ impl Ext2Fs {
             ctime: inode.ctime,
             nlink: inode.links_count,
             blocks: inode.blocks,
+            blksize: self.block_size as u64,
         })
     }
 
     pub(crate) fn do_stat(&self, path: &str, follow: bool) -> Result<Ext2Stat, isize> {
+        if path.trim_matches('/').is_empty() {
+            return self.stat_ino(EXT2_ROOT_INO);
+        }
         let ino = if follow {
             self.resolve_path(path).ok_or(-2isize)?
         } else {
@@ -802,6 +864,9 @@ impl Ext2Fs {
     pub(crate) fn do_create_file(&mut self, path: &str, mode: u16) -> Result<(), isize> {
         let (parent, name) = split_path(path)?;
         let p = self.resolve_path(parent).ok_or(-2isize)?;
+        if self.dir_lookup(p, name).is_some() {
+            return Err(-17);
+        }
         self.alloc_inode_entry(p, name, EXT2_S_IFREG | mode, false)?;
         Ok(())
     }
@@ -819,6 +884,10 @@ impl Ext2Fs {
 
     pub(crate) fn do_rmdir(&mut self, path: &str) -> Result<(), isize> {
         let ino = self.resolve_path(path).ok_or(-2isize)?;
+        if ino == EXT2_ROOT_INO { return Err(-16); }
+        if self.read_inode(ino).ok_or(-2isize)?.mode & EXT2_S_IFMT != EXT2_S_IFDIR {
+            return Err(-20);
+        }
         let non_dot = self
             .read_raw_dir_entries(ino)
             .iter()
@@ -836,7 +905,9 @@ impl Ext2Fs {
         self.write_inode(ino, &inode)?;
         let mut pi = self.read_inode(p).ok_or(-2isize)?;
         pi.links_count = pi.links_count.saturating_sub(1);
-        self.write_inode(p, &pi)
+        self.write_inode(p, &pi)?;
+        self.free_inode(ino);
+        Ok(())
     }
 
     pub(crate) fn do_unlink(&mut self, path: &str) -> Result<(), isize> {
@@ -853,7 +924,9 @@ impl Ext2Fs {
         if i2.links_count == 0 {
             i2.dtime = crate::arch::time::current_unix_time_secs() as u32;
         }
-        self.write_inode(ino, &i2)
+        self.write_inode(ino, &i2)?;
+        if i2.links_count == 0 { self.free_inode(ino); }
+        Ok(())
     }
 
     pub(crate) fn do_rename(&mut self, old: &str, new: &str) -> Result<(), isize> {
@@ -937,9 +1010,9 @@ impl Ext2Fs {
         Ext2Statfs {
             block_size: self.block_size as u32,
             total_blocks: self.sb.blocks_count,
-            free_blocks: self.sb.free_blocks_count,
+            free_blocks: self.group_descs.iter().map(|g| g.free_blocks as u32).sum(),
             total_inodes: self.sb.inodes_count,
-            free_inodes: self.sb.free_inodes_count,
+            free_inodes: self.group_descs.iter().map(|g| g.free_inodes as u32).sum(),
         }
     }
 }

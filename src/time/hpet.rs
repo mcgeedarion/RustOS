@@ -89,10 +89,14 @@ pub fn set_oneshot(ns_from_now: u64) {
 
 fn acpi_hpet_base() -> Option<u64> {
     let table = crate::firmware::acpi::find_table(b"HPET")?;
-    if table.len() < 52 {
+    let length = unsafe { core::ptr::addr_of!((*table).len).read_unaligned() } as usize;
+    if length < 56 {
         return None;
     }
-    let addr_bytes: [u8; 8] = table[44..52].try_into().ok()?;
+    let bytes = unsafe { core::slice::from_raw_parts(table.cast::<u8>(), length) };
+    // GAS address-space ID must describe system memory, not an I/O port.
+    if bytes[40] != 0 { return None; }
+    let addr_bytes: [u8; 8] = bytes[44..52].try_into().ok()?;
     let addr = u64::from_le_bytes(addr_bytes);
     if addr == 0 {
         None

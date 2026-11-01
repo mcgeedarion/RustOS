@@ -92,7 +92,7 @@ impl ConsoleOutput for SerialConsole {
     fn write_bytes(&self, bytes: &[u8]) {
         #[cfg(target_arch = "x86_64")]
         for &b in bytes {
-            crate::arch::x86_64::serial::serial_write_byte(b);
+            crate::arch::x86_64::serial::write_byte(b);
         }
     }
 }

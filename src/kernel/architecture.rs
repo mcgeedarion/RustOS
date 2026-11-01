@@ -39,7 +39,7 @@ pub const KERNEL_ARCHITECTURE: KernelArchitecture = KernelArchitecture::Hybrid;
 /// Validates that the hybrid kernel contract is properly configured.
 /// Returns `true` only when the kernel is hybrid and has non-empty in-kernel services.
 const fn validate_hybrid_contract() -> bool {
-    KERNEL_ARCHITECTURE == KernelArchitecture::Hybrid
+    matches!(KERNEL_ARCHITECTURE, KernelArchitecture::Hybrid)
         && !HYBRID_KERNEL_CONTRACT.in_kernel_services.is_empty()
 }
 

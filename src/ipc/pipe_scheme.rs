@@ -133,7 +133,7 @@ impl Scheme for PipeScheme {
     fn open(&self, _path: &str, _flags: OpenFlags) -> Result<SchemeFileId, SchemeError> {
         let id = alloc_pipe_id();
         PIPES.lock().insert(id, PipeBuf::new(4096));
-        Ok(SchemeFileId(id as usize))
+        Ok(SchemeFileId(id as u64))
     }
 
     /// Read from the **read end** (fid is odd: write_fid + 1).
@@ -211,7 +211,7 @@ impl Scheme for PipeScheme {
 pub fn create_pipe() -> Result<(usize, usize), SchemeError> {
     let scheme: Arc<dyn Scheme> = Arc::new(PipeScheme);
 
-    let wfid = scheme.open("", OpenFlags::RDWR)?;
+    let wfid = scheme.open("", OpenFlags::READ | OpenFlags::WRITE)?;
     let rfid = SchemeFileId(wfid.0 + 1);
 
     let write_bfd = alloc_scheme_backing_fd();

@@ -23,6 +23,8 @@
 
 extern crate alloc;
 use crate::core::fast_hash::KernelFastMap;
+use alloc::sync::Arc;
+use alloc::collections::BTreeMap;
 use spin::Mutex;
 
 use crate::fs::scheme_table::Scheme;
@@ -40,7 +42,9 @@ const PID_FD_MAX: usize = 2048;
 /// Maps raw PIDFD_TABLE fdno -> target pid.
 /// Fast map is safe here: keys are bounded raw pidfd table fd numbers assigned
 /// by the kernel and are not exposed through deterministic iteration.
-static PIDFD_TABLE: Mutex<KernelFastMap<usize, usize>> = Mutex::new(KernelFastMap::new());
+static PIDFD_TABLE: Mutex<KernelFastMap<usize, Arc<crate::proc::process::ProcLock>>> =
+    Mutex::new(KernelFastMap::new());
+static PIDFD_BACKINGS: Mutex<BTreeMap<usize, usize>> = Mutex::new(BTreeMap::new());
 /// Pending signal queue: maps pid -> pending signal (one slot; SIGKILL wins).
 /// Fast map is safe here: keys are kernel pid values and this one-slot pending
 /// signal cache is not an authorization or ordering boundary.
@@ -49,21 +53,15 @@ static PENDING_SIGNAL: Mutex<KernelFastMap<usize, u32>> = Mutex::new(KernelFastM
 /// Translate a scheme backing fd to the PIDFD_TABLE fdno.
 /// Returns None if `scheme_bfd` is not a registered pidfd scheme fd.
 pub fn scheme_bfd_to_table_fdno(scheme_bfd: usize) -> Option<usize> {
-    let (_, fid) = crate::fs::scheme_fd::scheme_fd_get_fid(scheme_bfd)?;
-    let table_fdno = fid.0 as usize;
-    if table_fdno >= PID_FD_BASE
-        && table_fdno < PID_FD_MAX
-        && PIDFD_TABLE.lock().contains_key(&table_fdno)
-    {
-        Some(table_fdno)
-    } else {
-        None
-    }
+    PIDFD_BACKINGS.lock().get(&scheme_bfd).copied()
 }
 
 pub struct PidFdScheme;
 
 impl Scheme for PidFdScheme {
+    fn poll_source(&self, fid: SchemeFileId) -> Option<Arc<dyn crate::sync::poll_source::PollSource>> {
+        is_pidfd(fid.0 as usize).then(|| crate::fs::poll::pidfd_source(fid.0 as usize))
+    }
     fn open(&self, _url: &str, _flags: OpenFlags) -> Result<SchemeFileId, SchemeError> {
         Err(SchemeError::InvalidArg) // created via pidfd_open only
     }
@@ -93,11 +91,11 @@ impl Scheme for PidFdScheme {
 }
 
 /// Allocate a raw PIDFD_TABLE fdno for `pid`. Returns fdno or -EMFILE.
-fn alloc_table_fdno(pid: usize) -> Result<usize, isize> {
+fn alloc_table_fdno(process: Arc<crate::proc::process::ProcLock>) -> Result<usize, isize> {
     let mut tbl = PIDFD_TABLE.lock();
     for fd in PID_FD_BASE..PID_FD_MAX {
         if !tbl.contains_key(&fd) {
-            tbl.insert(fd, pid);
+            tbl.insert(fd, process);
             return Ok(fd);
         }
     }
@@ -107,6 +105,7 @@ fn alloc_table_fdno(pid: usize) -> Result<usize, isize> {
 /// Release a raw PIDFD_TABLE entry.
 pub fn free(fd: usize) {
     PIDFD_TABLE.lock().remove(&fd);
+    PIDFD_BACKINGS.lock().retain(|_, raw| *raw != fd);
 }
 
 /// True if `fd` is a live raw PIDFD_TABLE fdno.
@@ -114,14 +113,24 @@ pub fn is_pidfd(fd: usize) -> bool {
     PIDFD_TABLE.lock().contains_key(&fd)
 }
 
+pub fn pidfd_poll(fd: usize, events: u32) -> u32 {
+    match PIDFD_TABLE.lock().get(&fd) {
+        None => crate::fs::poll::POLLNVAL,
+        Some(process) if process.load_state() == crate::proc::process::State::Zombie =>
+            events & crate::fs::poll::POLLIN,
+        _ => 0,
+    }
+}
+
 /// Resolve raw PIDFD_TABLE fdno -> target pid.
 /// Returns None if the entry is missing or the process is a zombie.
 fn resolve(table_fdno: usize) -> Option<usize> {
-    let pid = *PIDFD_TABLE.lock().get(&table_fdno)?;
+    let process = PIDFD_TABLE.lock().get(&table_fdno)?.clone();
+    let pid = process.pid as usize;
     let procs = crate::proc::scheduler::procs_lock();
     let alive = procs
         .iter()
-        .any(|p| p.pid == pid && p.state != crate::proc::process::State::Zombie);
+        .any(|p| Arc::ptr_eq(p, &process) && p.load_state() != crate::proc::process::State::Zombie);
     crate::proc::scheduler::procs_unlock();
     if alive {
         Some(pid)
@@ -143,15 +152,11 @@ pub fn sys_pidfd_open(pid: usize, flags: u32) -> isize {
     } // ESRCH
 
     let procs = crate::proc::scheduler::procs_lock();
-    let alive = procs
-        .iter()
-        .any(|p| p.pid == pid && p.state != crate::proc::process::State::Zombie);
+    let process = procs.iter().find(|p| p.pid as usize == pid).cloned();
     crate::proc::scheduler::procs_unlock();
-    if !alive {
-        return -3;
-    } // ESRCH
+    let process = match process { Some(p) => p, None => return -3 };
 
-    let table_fdno = match alloc_table_fdno(pid) {
+    let table_fdno = match alloc_table_fdno(process) {
         Ok(f) => f,
         Err(e) => return e,
     };
@@ -159,6 +164,7 @@ pub fn sys_pidfd_open(pid: usize, flags: u32) -> isize {
     let scheme: Arc<dyn Scheme> = Arc::new(PidFdScheme);
     let scheme_bfd = alloc_scheme_backing_fd();
     scheme_fd_register(scheme_bfd, scheme, SchemeFileId(table_fdno as u64));
+    PIDFD_BACKINGS.lock().insert(scheme_bfd, table_fdno);
 
     let pid_caller = crate::proc::scheduler::current_pid();
     let nonblock_fl = if flags & PIDFD_NONBLOCK != 0 {
@@ -171,7 +177,7 @@ pub fn sys_pidfd_open(pid: usize, flags: u32) -> isize {
         pid_caller,
         scheme_bfd,
         None,
-        nonblock_fl | 1, // FD_CLOEXEC
+        nonblock_fl | crate::fs::process_fd::O_CLOEXEC_FLAG,
         None,
     );
     user_fd as isize
@@ -181,8 +187,8 @@ pub fn sys_pidfd_open(pid: usize, flags: u32) -> isize {
 // calling this.  We translate to the PIDFD_TABLE fdno via
 // scheme_bfd_to_table_fdno.
 
-pub fn sys_pidfd_send_signal(scheme_bfd: usize, sig: u32, _info_va: usize, flags: u32) -> isize {
-    if flags != 0 {
+pub fn sys_pidfd_send_signal(scheme_bfd: usize, sig: u32, info_va: usize, flags: u32) -> isize {
+    if flags != 0 || info_va != 0 {
         return -22;
     }
     if sig > 64 {
@@ -198,38 +204,19 @@ pub fn sys_pidfd_send_signal(scheme_bfd: usize, sig: u32, _info_va: usize, flags
         None => return -3, // ESRCH
     };
 
-    if sig == 0 {
-        return 0;
-    } // existence check
-
-    match sig {
-        SIGKILL => {
-            let procs = crate::proc::scheduler::procs_lock();
-            if let Some(p) = procs.iter_mut().find(|p| p.pid == pid) {
-                p.state = crate::proc::process::State::Zombie;
-                p.exit_code = -(sig as i32);
-            }
-            crate::proc::scheduler::procs_unlock();
-            crate::proc::wait::notify_exit(pid);
-            0
-        },
-        SIGSTOP => {
-            let procs = crate::proc::scheduler::procs_lock();
-            if let Some(p) = procs.iter_mut().find(|p| p.pid == pid) {
-                p.state = crate::proc::process::State::Blocked;
-            }
-            crate::proc::scheduler::procs_unlock();
-            0
-        },
-        SIGCONT => {
-            crate::proc::scheduler::wake_pid(pid);
-            0
-        },
-        _ => {
-            PENDING_SIGNAL.lock().insert(pid, sig);
-            0
-        },
-    }
+    let caller = crate::proc::scheduler::current_pid();
+    let creds = crate::proc::scheduler::with_proc(caller, |p|
+        (p.uid, p.euid, p.sid, p.caps.has(crate::security::capset::cap::KILL)));
+    let target = crate::proc::scheduler::with_proc(pid, |p| (p.uid, p.suid, p.sid));
+    let allowed = match (creds, target) {
+        (Some((uid, euid, sid, cap)), Some((tuid, suid, tsid))) =>
+            cap || uid == tuid || uid == suid || euid == tuid || euid == suid
+                || (sig == SIGCONT && sid == tsid),
+        _ => return -3,
+    };
+    if !allowed { return -1; }
+    if sig == 0 { return 0; }
+    crate::proc::signal::send_signal_user(pid, sig as i32)
 }
 
 /// Check and consume one pending signal for `pid`.
@@ -252,22 +239,11 @@ pub fn sys_pidfd_getfd(scheme_bfd: usize, targetfd: usize, flags: u32) -> isize 
     };
 
     let caller_pid = crate::proc::scheduler::current_pid();
-    let has_ptrace = crate::security::check_capability(19 /* CAP_SYS_PTRACE */);
+    let has_ptrace = crate::proc::scheduler::with_proc(caller_pid, |p|
+        p.caps.has(crate::security::capset::cap::SYS_PTRACE)).unwrap_or(false);
     if !has_ptrace && caller_pid != target_pid {
         return -1;
     } // EPERM
 
-    let owner = crate::fs::fcntl::fd_owner(targetfd);
-    if owner != 0 && owner != target_pid {
-        return -9;
-    } // EBADF
-
-    let new_fd = crate::fs::vfs::dup_from(targetfd, 3);
-    if new_fd < 0 {
-        return new_fd;
-    }
-
-    crate::fs::fcntl::set_fd_owner(new_fd as usize, caller_pid);
-    crate::fs::fcntl::set_cloexec(new_fd as usize, true);
-    new_fd
+    crate::fs::process_fd::proc_fd_dup_into(target_pid, targetfd, caller_pid, 0, true)
 }

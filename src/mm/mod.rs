@@ -164,21 +164,7 @@ pub mod memfd {
     }
 }
 
-/// Transitional VM mapping helpers for SysV shared memory.
-pub mod vmm {
-    pub fn map_range(
-        _hint: usize,
-        _size: usize,
-        _prot: u32,
-        _frames: &[usize],
-    ) -> Result<usize, isize> {
-        Err(-38)
-    }
-
-    pub fn unmap_range(_addr: usize) -> Result<(), isize> {
-        Err(-38)
-    }
-}
+pub mod vmm;
 
 /// Compatibility user-copy facade for core-dump code.
 pub mod user_copy {

@@ -32,6 +32,7 @@
 extern crate alloc;
 use crate::time::{read_monotonic_ns, Timespec, NSEC_PER_SEC};
 use alloc::collections::BTreeMap;
+use alloc::sync::Arc;
 use core::sync::atomic::{AtomicU64, Ordering};
 use spin::Mutex;
 
@@ -39,7 +40,7 @@ use spin::Mutex;
 /// to indicate the request time is an absolute deadline.
 pub const TIMER_ABSTIME: i32 = 1;
 
-pub type TimerCallback = fn(u64); // arg is the timer ID
+pub type TimerCallback = Arc<dyn Fn(u64) + Send + Sync>; // arg is the timer ID
 
 /// A pending kernel timer.
 struct TimerEntry {
@@ -52,9 +53,8 @@ struct TimerEntry {
 static NEXT_TIMER_ID: AtomicU64 = AtomicU64::new(1);
 
 struct Wheel {
-    /// Sorted by deadline.  Multiple timers may share the same deadline
-    /// (BTreeMap key = deadline << 20 | id to avoid collisions).
-    entries: BTreeMap<u64, TimerEntry>,
+    /// A tuple avoids truncating the high bits of nanosecond deadlines.
+    entries: BTreeMap<(u64, u64), TimerEntry>,
 }
 
 impl Wheel {
@@ -66,7 +66,7 @@ impl Wheel {
 
     fn insert(&mut self, deadline_ns: u64, period_ns: u64, cb: TimerCallback) -> u64 {
         let id = NEXT_TIMER_ID.fetch_add(1, Ordering::SeqCst);
-        let key = (deadline_ns << 20).wrapping_add(id & 0xF_FFFF);
+        let key = (deadline_ns, id);
         self.entries.insert(
             key,
             TimerEntry {
@@ -84,37 +84,45 @@ impl Wheel {
     }
 
     /// Fire all timers whose deadline ≤ `now_ns`.  Re-arms periodic timers.
-    fn expire(&mut self, now_ns: u64) {
-        let deadline_max = now_ns << 20 | 0xF_FFFF;
-        let fired: alloc::vec::Vec<u64> = self
+    fn expire(&mut self, now_ns: u64) -> alloc::vec::Vec<(u64, TimerCallback)> {
+        let fired: alloc::vec::Vec<(u64, u64)> = self
             .entries
-            .range(..=deadline_max)
+            .range(..=(now_ns, u64::MAX))
             .map(|(&k, _)| k)
             .collect();
-        let mut rearms: alloc::vec::Vec<(u64, u64, TimerCallback)> = alloc::vec![];
+        let mut callbacks = alloc::vec::Vec::new();
         for key in fired {
-            if let Some(e) = self.entries.remove(&key) {
-                (e.callback)(e.id);
+            if let Some(mut e) = self.entries.remove(&key) {
+                callbacks.push((e.id, Arc::clone(&e.callback)));
                 if e.period_ns != 0 {
-                    rearms.push((now_ns + e.period_ns, e.period_ns, e.callback));
+                    // Retain the ID so cancellation remains valid after a
+                    // periodic firing, and skip missed periods without drift.
+                    let next = (now_ns - e.deadline_ns).checked_div(e.period_ns)
+                        .and_then(|periods| periods.checked_add(1))
+                        .and_then(|periods| periods.checked_mul(e.period_ns))
+                        .and_then(|delta| e.deadline_ns.checked_add(delta));
+                    if let Some(deadline) = next {
+                        e.deadline_ns = deadline;
+                        self.entries.insert((deadline, e.id), e);
+                    }
                 }
             }
         }
-        for (dl, period, cb) in rearms {
-            self.insert(dl, period, cb);
-        }
+        callbacks
     }
 }
 
 static WHEEL: Mutex<Option<Wheel>> = Mutex::new(None);
 
 pub fn init() {
-    *WHEEL.lock() = Some(Wheel::new());
+    WHEEL.lock().get_or_insert_with(Wheel::new);
 }
 
 /// Add a one-shot timer.  `callback` is called from the tick handler.
 /// Returns a timer ID that can be passed to `cancel_timer`.
-pub fn add_oneshot(deadline_ns: u64, cb: TimerCallback) -> u64 {
+pub fn add_oneshot<F>(deadline_ns: u64, cb: F) -> u64
+where F: Fn(u64) + Send + Sync + 'static {
+    let cb: TimerCallback = Arc::new(cb);
     WHEEL
         .lock()
         .as_mut()
@@ -122,7 +130,9 @@ pub fn add_oneshot(deadline_ns: u64, cb: TimerCallback) -> u64 {
 }
 
 /// Add a periodic timer with initial deadline and interval.
-pub fn add_periodic(first_ns: u64, period_ns: u64, cb: TimerCallback) -> u64 {
+pub fn add_periodic<F>(first_ns: u64, period_ns: u64, cb: F) -> u64
+where F: Fn(u64) + Send + Sync + 'static {
+    let cb: TimerCallback = Arc::new(cb);
     WHEEL
         .lock()
         .as_mut()
@@ -140,9 +150,10 @@ pub fn cancel_timer(id: u64) {
 /// Must be called with interrupts disabled or from an IRQ context.
 pub fn expire_timers() {
     let now = read_monotonic_ns();
-    if let Some(w) = WHEEL.lock().as_mut() {
-        w.expire(now);
-    }
+    let callbacks = WHEEL.lock().as_mut().map(|w| w.expire(now)).unwrap_or_default();
+    // Callbacks may add/cancel timers or acquire process/FD locks. Never run
+    // them with the wheel mutex held.
+    for (id, callback) in callbacks { callback(id); }
 }
 
 /// Kernel-internal helper: sleep until `deadline_ns` on CLOCK_MONOTONIC.
@@ -240,9 +251,9 @@ impl ItimerState {
 
 fn deliver_itimer_signal(task_id: u64, which: u32) {
     let sig = match which {
-        ITIMER_REAL => 14u32,    // SIGALRM
-        ITIMER_VIRTUAL => 26u32, // SIGVTALRM
-        ITIMER_PROF => 27u32,    // SIGPROF
+        ITIMER_REAL => 14i32,    // SIGALRM
+        ITIMER_VIRTUAL => 26i32, // SIGVTALRM
+        ITIMER_PROF => 27i32,    // SIGPROF
         _ => return,
     };
     crate::proc::signal::send_signal(task_id as usize, sig);

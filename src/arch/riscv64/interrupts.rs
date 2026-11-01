@@ -23,15 +23,32 @@ const PLIC_CONTEXT_SIZE: usize = 0x1000;
 /// Base address of PLIC on QEMU virt machine
 const PLIC_BASE: usize = 0x0C00_0000;
 
+/// QEMU virt exposes M-mode then S-mode contexts for each hart.
+const fn supervisor_context(hart_id: u32) -> usize {
+    hart_id as usize * 2 + 1
+}
+
+const fn enable_address(hart_id: u32, irq: u32) -> usize {
+    PLIC_BASE + PLIC_ENABLE + supervisor_context(hart_id) * 0x80 + (irq as usize / 32) * 4
+}
+
+const _: () = {
+    assert!(supervisor_context(0) == 1);
+    assert!(supervisor_context(1) == 3);
+    assert!(enable_address(0, 10) == 0x0C00_2080);
+    assert!(enable_address(1, 33) == 0x0C00_2184);
+};
+
 /// Initialize the PLIC interrupt controller (BSP only).
 pub fn init() {
     unsafe {
         // Set priority threshold to 0 (accept all priorities)
-        let threshold_reg = PLIC_BASE + PLIC_THRESHOLD;
+        let hart_id = super::cpu::cpu_id();
+        let threshold_reg = PLIC_BASE + PLIC_THRESHOLD + supervisor_context(hart_id) * PLIC_CONTEXT_SIZE;
         ptr::write_volatile(threshold_reg as *mut u32, 0);
 
         // Enable UART interrupt (IRQ 10 on QEMU virt)
-        let enable_reg = PLIC_BASE + PLIC_ENABLE;
+        let enable_reg = enable_address(hart_id, 10);
         let mut enable_val = ptr::read_volatile(enable_reg as *const u32);
         enable_val |= 1 << 10;
         ptr::write_volatile(enable_reg as *mut u32, enable_val);
@@ -46,8 +63,8 @@ pub fn init() {
 
 /// Per-CPU initialization for secondary CPUs.
 pub fn init_percpu() {
-    let hart_id = super::super::arch::riscv64::hal::cpu_id();
-    let context_offset = ((hart_id + 1) as usize) * PLIC_CONTEXT_SIZE; // S-mode context
+    let hart_id = super::cpu::cpu_id();
+    let context_offset = supervisor_context(hart_id) * PLIC_CONTEXT_SIZE;
 
     unsafe {
         // Set threshold for this hart's context
@@ -59,8 +76,8 @@ pub fn init_percpu() {
 /// Handle an external interrupt from the PLIC.
 /// Returns the interrupt ID if one was claimed, or None if none pending.
 pub fn handle_irq() -> Option<u32> {
-    let hart_id = super::super::arch::riscv64::hal::cpu_id();
-    let context_offset = ((hart_id + 1) as usize) * PLIC_CONTEXT_SIZE;
+    let hart_id = super::cpu::cpu_id();
+    let context_offset = supervisor_context(hart_id) * PLIC_CONTEXT_SIZE;
 
     unsafe {
         // Claim an interrupt
@@ -75,7 +92,7 @@ pub fn handle_irq() -> Option<u32> {
         match irq_id {
             10 => {
                 // UART interrupt - check if data available
-                if let Some(_byte) = super::super::arch::riscv64::serial::getc() {
+                if let Some(_byte) = super::serial::getc() {
                     // Could buffer input here for later processing
                 }
             },
@@ -93,11 +110,11 @@ pub fn handle_irq() -> Option<u32> {
 
 /// Enable a specific interrupt source.
 pub fn enable_irq(irq: u32) {
-    if irq >= PLIC_MAX_SOURCES as u32 {
+    if irq == 0 || irq >= PLIC_MAX_SOURCES as u32 {
         return;
     }
     unsafe {
-        let enable_reg = PLIC_BASE + PLIC_ENABLE + ((irq / 32) * 4);
+        let enable_reg = enable_address(super::cpu::cpu_id(), irq);
         let mut val = ptr::read_volatile(enable_reg as *const u32);
         val |= 1 << (irq % 32);
         ptr::write_volatile(enable_reg as *mut u32, val);
@@ -106,11 +123,11 @@ pub fn enable_irq(irq: u32) {
 
 /// Disable a specific interrupt source.
 pub fn disable_irq(irq: u32) {
-    if irq >= PLIC_MAX_SOURCES as u32 {
+    if irq == 0 || irq >= PLIC_MAX_SOURCES as u32 {
         return;
     }
     unsafe {
-        let enable_reg = PLIC_BASE + PLIC_ENABLE + ((irq / 32) * 4);
+        let enable_reg = enable_address(super::cpu::cpu_id(), irq);
         let mut val = ptr::read_volatile(enable_reg as *const u32);
         val &= !(1 << (irq % 32));
         ptr::write_volatile(enable_reg as *mut u32, val);

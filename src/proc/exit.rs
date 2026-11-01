@@ -100,6 +100,12 @@ fn zombify(pid: usize, code: i32) -> Option<usize> {
 }
 
 fn cleanup_task(pid: usize, code: i32) {
+    #[cfg(feature = "full_kernel")]
+    {
+        crate::ipc::sem::undo_on_exit(pid);
+        crate::ipc::shm::cleanup_pid(pid);
+        crate::mm::vmm::forget_process(pid);
+    }
     robust_list_on_exit(pid);
     clear_child_tid(pid);
     thread::unregister_thread(pid);

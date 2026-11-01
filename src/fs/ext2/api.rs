@@ -1,8 +1,8 @@
 //! Public VFS entry-points for ext2.
 //! Source lines 1035–end of the original ext2.rs monolith.
 extern crate alloc;
-use super::inode::Ext2DirEntry;
-use super::superblock::{BgDesc, Ext2Fs, Ext2Stat, Ext2Statfs, Superblock, FS};
+use alloc::string::ToString;
+use super::inode::{BgDesc, Ext2DirEntry, Ext2Fs, Ext2Stat, Ext2Statfs, Superblock, FS};
 use alloc::{string::String, vec::Vec};
 
 pub fn mount() -> bool {
@@ -17,6 +17,12 @@ pub fn mount() -> bool {
     };
 
     let block_size = sb.block_size();
+    if sb.blocks_per_group == 0 || sb.inodes_per_group == 0
+        || block_size > 65536 || sb.inode_size() < 128
+        || sb.inode_size() > block_size || block_size % sb.inode_size() != 0
+    {
+        return false;
+    }
     let lba_offset = 0u64;
 
     // Read block group descriptor table
@@ -192,4 +198,9 @@ pub fn create_file(path: &str, mode: u16) -> Result<(), i32> {
 #[inline]
 pub fn stat(path: &str) -> Result<Ext2Stat, i32> {
     sys_stat(path)
+}
+
+/// Metadata and data writes are synchronous in this driver.
+pub fn sync_inode(path: &str) -> Result<(), i32> {
+    sys_stat(path).map(|_| ())
 }

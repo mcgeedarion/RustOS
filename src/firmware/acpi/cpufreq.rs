@@ -51,27 +51,6 @@ static PSTATE_COUNT: AtomicU8 = AtomicU8::new(0);
 static CURRENT_PSTATE: AtomicU8 = AtomicU8::new(0);
 static MAX_ALLOWED: AtomicU8 = AtomicU8::new(0); // from _PPC
 
-/// Get mutable reference to PSTATE_TABLE during initialization.
-///
-/// # Safety
-/// - Must only be called during single-threaded boot before SMP
-/// - PSTATE_TABLE must not have been initialized yet
-unsafe fn get_pstate_table_mut() -> &'static mut [Pstate; MAX_PSTATES] {
-    PSTATE_TABLE
-        .get_or_try_init(|| {
-            Ok::<[Pstate; MAX_PSTATES], ()>(
-                [Pstate {
-                    freq_mhz: 0,
-                    power_mw: 0,
-                    latency_us: 0,
-                    control: 0,
-                    status: 0,
-                }; MAX_PSTATES],
-            )
-        })
-        .unwrap()
-}
-
 const IA32_PERF_CTL: u32 = 0x199;
 const IA32_PERF_STS: u32 = 0x198;
 
@@ -127,6 +106,12 @@ unsafe fn read_aml_dword(aml: &[u8], i: usize) -> Option<u32> {
 /// Scan the DSDT AML for `_PSS` package entries.
 /// Each entry is a Package{} of 6 DWORDs.
 unsafe fn scan_pss(aml: &[u8]) {
+    if PSTATE_TABLE.get().is_some() {
+        return;
+    }
+    let mut table = [Pstate {
+        freq_mhz: 0, power_mw: 0, latency_us: 0, control: 0, status: 0,
+    }; MAX_PSTATES];
     let marker = *b"_PSS";
     let mut i = 0usize;
     let mut found = 0usize;
@@ -205,20 +190,22 @@ unsafe fn scan_pss(aml: &[u8]) {
                 continue;
             }
             if e < MAX_PSTATES {
-                let table = get_pstate_table_mut();
-                table[e] = Pstate {
+                table[found] = Pstate {
                     freq_mhz: vals[0],
                     power_mw: vals[1],
                     latency_us: vals[2],
                     control: vals[4],
                     status: vals[5],
                 };
-                found = found.max(e + 1);
+                found += 1;
             }
         }
         break; // only parse the first _PSS
     }
 
+    // Publish the completed array once. Never derive mutable references from
+    // a Once's shared, already-published value.
+    PSTATE_TABLE.call_once(|| table);
     PSTATE_COUNT.store(found as u8, Ordering::Release);
     if found > 0 {
         println!("acpi/cpufreq: {} P-states discovered", found);
@@ -284,7 +271,7 @@ pub fn pstates() -> &'static [Pstate] {
     let n = PSTATE_COUNT.load(Ordering::Acquire) as usize;
     // SAFETY: PSTATE_TABLE is only written during `init()` before any CPU
     // goes multi-threaded; reads afterwards are safe with Acquire ordering.
-    unsafe { &PSTATE_TABLE[..n] }
+    PSTATE_TABLE.get().map_or(&[], |table| &table[..n])
 }
 
 /// Request P-state `index` (0 = highest performance).
@@ -313,19 +300,14 @@ pub fn set_pstate(index: usize) -> Result<(), &'static str> {
         return Err("P-state exceeds _PPC limit");
     }
 
-    let ctrl = unsafe {
-        PSTATE_TABLE
-            .get(index)
-            .ok_or("P-state index out of bounds")?
-            .control
-    } as u64;
+    let state = PSTATE_TABLE.get().and_then(|table| table.get(index))
+        .ok_or("P-state index out of bounds")?;
+    let ctrl = state.control as u64;
     unsafe {
         wrmsr(IA32_PERF_CTL, ctrl);
     }
     CURRENT_PSTATE.store(index as u8, Ordering::Release);
-    println!("acpi/cpufreq: → P{}  {} MHz", index, unsafe {
-        PSTATE_TABLE.get(index).unwrap().freq_mhz
-    });
+    println!("acpi/cpufreq: → P{}  {} MHz", index, state.freq_mhz);
     Ok(())
 }
 

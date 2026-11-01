@@ -78,7 +78,7 @@ pub mod pte {
     }
     #[inline]
     pub const fn pte_to_pa(pte: u64) -> usize {
-        ((pte & ADDR_MASK) >> 10) as usize * SIZE
+        ((pte & ADDR_MASK) >> 10) as usize * super::page::SIZE
     }
 }
 

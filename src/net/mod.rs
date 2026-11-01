@@ -25,6 +25,8 @@ pub mod icmp;
 pub mod icmpv6;
 pub mod ip;
 pub mod ipv6;
+// Select the syscall-facing tree rather than the historical socket.rs prototype.
+#[path = "socket/mod.rs"]
 pub mod socket;
 pub mod tcp;
 pub mod udp;

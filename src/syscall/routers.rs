@@ -1,4 +1,6 @@
 //! Subsystem dispatch routers.
+#![deny(unreachable_patterns)]
+#![deny(non_snake_case)]
 
 use crate::syscall::dispatcher_context::SyscallContext;
 use crate::syscall::errno::{efault, einval, emsgsize, enosys};
@@ -81,13 +83,14 @@ pub fn dispatch_filesystem(ctx: &SyscallContext) -> Option<isize> {
         SYS_FCHOWNAT => Some(crate::syscall::sys_fchownat_impl(
             a as i32, b, c as u32, d as u32, e as i32,
         )),
-        SYS_FCHMODAT => Some(crate::syscall::sys_fchmodat_impl(a as i32, b, c as u32)),
+        SYS_FCHMODAT => Some(crate::syscall::sys_fchmodat_impl(a as i32, b, c as u32, 0)),
         SYS_FUTIMESAT => Some(crate::syscall::sys_futimesat_impl(a as i32, b, c)),
         SYS_NEWFSTATAT => Some(crate::syscall::sys_newfstatat_impl(
             a as i32, b, c, d as u32,
         )),
         SYS_UNLINKAT => Some(crate::syscall::sys_unlinkat_impl(a as i32, b, c as u32)),
         SYS_RENAMEAT => Some(crate::syscall::sys_renameat_impl(a as i32, b, c as i32, d)),
+        SYS_RENAMEAT2 => Some(crate::syscall::sys_renameat2_impl(a as i32, b, c as i32, d, e as u32)),
         SYS_LINKAT => Some(crate::syscall::sys_linkat_impl(
             a as i32, b, c as i32, d, e as i32,
         )),
@@ -97,9 +100,6 @@ pub fn dispatch_filesystem(ctx: &SyscallContext) -> Option<isize> {
             a as i32, b, c as u32,
         )),
         SYS_UTIMENSAT => Some(crate::syscall::sys_utimensat_impl(a as i32, b, c, d as i32)),
-        SYS_EXECVEAT => Some(crate::syscall::sys_execveat_impl(
-            a as i32, b, c, d, e as i32,
-        )),
         SYS_OPENAT2 => Some(crate::syscall::sys_openat2_impl(a as i32, b, c, d)),
         SYS_COPY_FILE_RANGE => Some(crate::syscall::sys_copy_file_range_impl(
             a, b, c, d, e, f as u32,
@@ -116,7 +116,7 @@ pub fn dispatch_filesystem(ctx: &SyscallContext) -> Option<isize> {
             _ => Some(einval()),
         },
         SYS_MEMFD_CREATE => Some(crate::syscall::sys_memfd_create_impl(a, b as u32)),
-        SYS_REMAP_FILE_PAGES => Some(crate::syscall::sys_remap_file_pages_impl()),
+        SYS_REMAP_FILE_PAGES => Some(crate::syscall::sys_remap_file_pages_impl(a, b, c as i32, d, e as i32)),
         SYS_POSIX_FADVISE => Some(crate::fs::vfs_extras::sys_posix_fadvise(
             a, b as i64, c as i64, d as i32,
         )),
@@ -155,38 +155,39 @@ pub fn dispatch_filesystem(ctx: &SyscallContext) -> Option<isize> {
         SYS_IO_URING_REGISTER => Some(crate::io_uring::syscall::sys_io_uring_register(
             a, b as u32, c, d as u32,
         )),
-        SYS_SOCKET => Some(crate::net::socket::sys_socket(a as i32, b as i32, c as i32)),
+        SYS_SOCKET => Some(crate::net::socket::sys_socket(a as u16, b as u16, c as u32)),
         SYS_CONNECT => Some(crate::net::socket::sys_connect(a, b, c as u32)),
         SYS_ACCEPT => Some(crate::net::socket::sys_accept(a, b, c)),
         SYS_SENDTO => Some(crate::net::socket::sys_sendto(
             a, b, c, d as i32, e, f as u32,
         )),
         SYS_RECVFROM => Some(crate::net::socket::sys_recvfrom(a, b, c, d as i32, e, f)),
-        SYS_SENDMSG => Some(crate::net::socket::sys_sendmsg(a, b, c as i32)),
-        SYS_RECVMSG => Some(crate::net::socket::sys_recvmsg(a, b, c as i32)),
-        SYS_SHUTDOWN => Some(crate::net::socket::sys_shutdown(a, b as i32)),
+        SYS_SENDMSG => Some(crate::net::socket::sys_sendmsg(a, b, c as u32)),
+        SYS_RECVMSG => Some(crate::net::socket::sys_recvmsg(a, b, c as u32)),
+        SYS_SHUTDOWN => Some(crate::net::socket::sys_shutdown(a, b as u32)),
         SYS_BIND => Some(crate::net::socket::sys_bind(a, b, c as u32)),
         SYS_LISTEN => Some(crate::net::socket::sys_listen(a, b as i32)),
         SYS_GETSOCKNAME => Some(crate::net::socket::sys_getsockname(a, b, c)),
         SYS_GETPEERNAME => Some(crate::net::socket::sys_getpeername(a, b, c)),
         SYS_SOCKETPAIR => Some(crate::net::socket::sys_socketpair(
-            a as i32, b as i32, c as i32, d,
+            a as u16, b as u16, c as u32, d,
         )),
         SYS_SETSOCKOPT => Some(crate::net::socket::sys_setsockopt(
-            a, b as i32, c as i32, d, e as u32,
+            a, b as u32, c as u32, d, e as u32,
         )),
         SYS_GETSOCKOPT => Some(crate::net::socket::sys_getsockopt(
-            a, b as i32, c as i32, d, e,
+            a, b as u32, c as u32, d, e,
         )),
         SYS_ACCEPT4 => {
+            if d & !(0x800 | 0x80000) != 0 { return Some(einval()); }
             let fd = crate::net::socket::sys_accept(a, b, c);
             if fd >= 0 {
                 const SOCK_NONBLOCK: usize = 0x800;
                 const SOCK_CLOEXEC: usize = 0x80000;
                 if d & SOCK_NONBLOCK != 0 {
-                    let mut t = crate::net::socket::TCP_SOCKETS.lock();
+                    let mut t = crate::net::socket::SOCKETS.lock();
                     if let Some(Some(s)) = t.get_mut(fd as usize) {
-                        s.nonblocking = true;
+                        s.nonblock = true;
                     }
                 }
                 if d & SOCK_CLOEXEC != 0 {
@@ -268,13 +269,9 @@ pub fn dispatch_process(ctx: &SyscallContext) -> Option<isize> {
         // wait
         // ---------------------------------------------------------------
         SYS_WAIT4 => Some(crate::proc::wait::sys_wait4(a as isize, b, c as i32, d)),
-        SYS_WAITPID => Some(crate::proc::wait::sys_waitpid(a as isize, b, c as i32)),
         SYS_WAITID => {
-            // waitid(idtype, id, siginfo_ptr, options) — simplified
-            // forward as wait4(-1, wstatus=0, opts, 0) for any-child variant
-            let id = b as isize;
-            let opt = d as i32;
-            Some(crate::proc::wait::sys_wait4(id, 0, opt, 0))
+            if e != 0 { return Some(crate::syscall::errno::enotsup()); }
+            Some(crate::proc::wait::sys_waitid(a as i32, b as i32, c, d as i32))
         },
 
         // ---------------------------------------------------------------
@@ -286,37 +283,35 @@ pub fn dispatch_process(ctx: &SyscallContext) -> Option<isize> {
 
         // rt_sigaction: sig, new_act_ptr, old_act_ptr, sigsetsize
         SYS_RT_SIGACTION => {
-            let sig = b as u32;
+            if d != 8 { return Some(einval()); }
+            let sig = a as u32;
             let pid = crate::proc::scheduler::current_pid();
-            let new_sa = read_sigaction_from_user(b);
+            let new_sa = if b != 0 {
+                match read_sigaction_from_user(b) { Some(sa) => Some(sa), None => return Some(efault()) }
+            } else { None };
             let mut old_sa = crate::proc::signal::SigAction::default();
             let had_old = c != 0;
             let ret = crate::proc::signal::sys_rt_sigaction(
                 pid,
                 sig,
-                if a != 0 {
-                    read_sigaction_from_user(a)
-                } else {
-                    None
-                },
+                new_sa,
                 if had_old { Some(&mut old_sa) } else { None },
             );
             if ret == 0 && had_old {
-                write_sigaction_to_user(c, &old_sa);
+                if !write_sigaction_to_user(c, &old_sa) { return Some(efault()); }
             }
-            let _ = new_sa;
             Some(ret)
         },
 
         // rt_sigprocmask: how, new_set_ptr, old_set_ptr, sigsetsize
         SYS_RT_SIGPROCMASK => {
+            if d != 8 { return Some(einval()); }
             let how = a as u32;
             let pid = crate::proc::scheduler::current_pid();
             let new_set: Option<u64> = if b != 0 {
                 let mut s = [0u8; 8];
-                crate::uaccess::copy_from_user(&mut s, b)
-                    .ok()
-                    .map(|_| u64::from_ne_bytes(s))
+                if crate::uaccess::copy_from_user(&mut s, b).is_err() { return Some(efault()); }
+                Some(u64::from_ne_bytes(s))
             } else {
                 None
             };
@@ -329,18 +324,17 @@ pub fn dispatch_process(ctx: &SyscallContext) -> Option<isize> {
                 pid,
             );
             if ret == 0 && has_old {
-                let _ = crate::uaccess::copy_to_user(c, &old_val.to_ne_bytes());
+                if crate::uaccess::copy_to_user(c, &old_val.to_ne_bytes()).is_err() { return Some(efault()); }
             }
             Some(ret)
         },
 
         // rt_sigpending: set_ptr, sigsetsize
         SYS_RT_SIGPENDING => {
+            if b != 8 { return Some(einval()); }
             let pid = crate::proc::scheduler::current_pid();
             let pending = crate::proc::signal::sys_rt_sigpending(pid);
-            if a != 0 {
-                let _ = crate::uaccess::copy_to_user(a, &pending.to_ne_bytes());
-            }
+            if crate::uaccess::copy_to_user(a, &pending.to_ne_bytes()).is_err() { return Some(efault()); }
             Some(0)
         },
 
@@ -417,8 +411,6 @@ pub fn dispatch_process(ctx: &SyscallContext) -> Option<isize> {
         },
         SYS_SETUID => Some(crate::proc::creds::sys_setuid(a as u32)),
         SYS_SETGID => Some(crate::proc::creds::sys_setgid(a as u32)),
-        SYS_SETEUID => Some(crate::proc::creds::sys_seteuid(a as u32)),
-        SYS_SETEGID => Some(crate::proc::creds::sys_setegid(a as u32)),
         SYS_SETREUID => Some(crate::proc::creds::sys_setreuid(a as u32, b as u32)),
         SYS_SETREGID => Some(crate::proc::creds::sys_setregid(a as u32, b as u32)),
         SYS_SETRESUID => Some(crate::proc::creds::sys_setresuid(
@@ -429,36 +421,36 @@ pub fn dispatch_process(ctx: &SyscallContext) -> Option<isize> {
         )),
         SYS_GETRESUID => Some(crate::syscall::copy_uid_to_user(a, b, c)),
         SYS_GETRESGID => Some(crate::syscall::copy_gid_to_user(a, b, c)),
-        SYS_SETGROUPS => Some(crate::proc::creds::sys_setgroups(a, b)),
-        SYS_GETGROUPS => Some(crate::proc::creds::sys_getgroups(a, b)),
-        SYS_CAPGET => Some(crate::proc::creds::sys_capget(a, b)),
-        SYS_CAPSET => Some(crate::proc::creds::sys_capset(a, b)),
+        SYS_SETGROUPS => Some(crate::proc::creds::sys_setgroups(a as i32, b)),
+        SYS_GETGROUPS => Some(crate::proc::creds::sys_getgroups(a as i32, b)),
+        SYS_CAPGET => Some(crate::syscall::sys_capget_impl(a, b)),
+        SYS_CAPSET => Some(crate::syscall::sys_capset_impl(a, b)),
 
         // ---------------------------------------------------------------
         // prctl / rlimit
         // ---------------------------------------------------------------
-        SYS_PRCTL => Some(crate::proc::creds::sys_prctl(a as i32, b, c, d, e)),
-        SYS_ARCH_PRCTL => Some(crate::proc::creds::sys_arch_prctl(a as i32, b)),
-        SYS_GETRLIMIT => Some(crate::proc::rlimit::sys_getrlimit(a as u32, b)),
-        SYS_SETRLIMIT => Some(crate::proc::rlimit::sys_setrlimit(a as u32, b)),
-        SYS_PRLIMIT64 => Some(crate::proc::rlimit::sys_prlimit64(a, b as u32, c, d)),
+        SYS_PRCTL => Some(crate::syscall::sys_prctl_impl(a as i32, b, c, d, e)),
+        SYS_ARCH_PRCTL => Some(crate::syscall::sys_arch_prctl_impl(a as i32, b)),
+        SYS_GETRLIMIT => Some(crate::syscall::sys_getrlimit_impl(a as u32, b)),
+        SYS_SETRLIMIT => Some(crate::syscall::sys_setrlimit_impl(a as u32, b)),
+        SYS_PRLIMIT64 => Some(crate::syscall::sys_prlimit64_impl(a as u32, b as u32, c, d)),
         SYS_GETRUSAGE => Some(crate::proc::rusage::sys_getrusage(a as i32, b)),
 
         // ---------------------------------------------------------------
         // Thread-related
         // ---------------------------------------------------------------
         SYS_SET_TID_ADDRESS => Some(crate::proc::thread::sys_set_tid_address(a)),
-        SYS_SET_ROBUST_LIST => Some(crate::proc::thread::sys_set_robust_list(a, b)),
-        SYS_GET_ROBUST_LIST => Some(crate::proc::thread::sys_get_robust_list(a, b, c)),
-        SYS_PTRACE => Some(crate::proc::ptrace::sys_ptrace(a as i32, b, c, d)),
+        SYS_SET_ROBUST_LIST => Some(crate::proc::futex::sys_set_robust_list(a, b)),
+        SYS_GET_ROBUST_LIST => Some(crate::proc::futex::sys_get_robust_list(a, b, c)),
+        SYS_PTRACE => Some(crate::proc::ptrace::sys_ptrace(a as i32, b as i32, c, d)),
 
         // ---------------------------------------------------------------
         // Futex
         // ---------------------------------------------------------------
         SYS_FUTEX => Some(crate::proc::futex::sys_futex(
-            a, b as i32, c as u32, d, e, f as u32,
+            a, b as u32, c as u32, d, e, f as u32,
         )),
-        SYS_FUTEX_WAITV => Some(crate::proc::futex::sys_futex_waitv(
+        SYS_FUTEX_WAITV => Some(crate::syscall::sys_futex_waitv_impl(
             a, b as u32, c as u32, d, e as u64,
         )),
 
@@ -472,10 +464,11 @@ pub fn dispatch_memory(ctx: &SyscallContext) -> Option<isize> {
     let (a, b, c, d, e, f) = (ctx.a0(), ctx.a1(), ctx.a2(), ctx.a3(), ctx.a4(), ctx.a5());
     match ctx.nr {
         SYS_MMAP => Some(crate::mm::mmap::sys_mmap(
-            a, b, c as i32, d as i32, e, f as i64,
+            a, b, c as u32, d as u32, e, f,
         )),
-        SYS_MPROTECT => Some(crate::mm::mmap::sys_mprotect(a, b, c as i32)),
+        SYS_MPROTECT => Some(crate::mm::mmap::sys_mprotect(a, b, c as u32)),
         SYS_MUNMAP => Some(crate::mm::mmap::sys_munmap(a, b)),
+        SYS_MINCORE => Some(crate::syscall::sys_mincore(a, b, c)),
         SYS_MREMAP => Some(crate::mm::mmap::sys_mremap(a, b, c, d as i32, e)),
         SYS_BRK => Some(crate::mm::mmap::sys_brk(a)),
         SYS_MADVISE => Some(crate::mm::mmap::sys_madvise(a, b, c as i32)),
@@ -484,14 +477,6 @@ pub fn dispatch_memory(ctx: &SyscallContext) -> Option<isize> {
         SYS_MLOCKALL => Some(crate::mm::mmap::sys_mlockall(a as i32)),
         SYS_MUNLOCKALL => Some(crate::mm::mmap::sys_munlockall()),
         SYS_MSYNC => Some(crate::mm::mmap::sys_msync(a, b, c as i32)),
-        SYS_MMAP2 => Some(crate::mm::mmap::sys_mmap(
-            a,
-            b,
-            c as i32,
-            d as i32,
-            e,
-            (f as i64) * 4096,
-        )),
         SYS_PKEY_ALLOC => Some(crate::mm::pkeys::sys_pkey_alloc(a as u32, b as u32)),
         SYS_PKEY_FREE => Some(crate::mm::pkeys::sys_pkey_free(a as u32)),
         SYS_PKEY_MPROTECT => Some(crate::mm::pkeys::sys_pkey_mprotect(
@@ -564,15 +549,15 @@ pub fn dispatch_time(ctx: &SyscallContext) -> Option<isize> {
             a as u32, b as i32, c, d,
         )),
         SYS_CLOCK_GETTIME => Some(crate::proc::nanosleep::sys_clock_gettime(a as u32, b)),
-        SYS_CLOCK_SETTIME => Some(crate::proc::nanosleep::sys_clock_settime(a as u32, b)),
+        SYS_CLOCK_SETTIME => Some(crate::syscall::sys_clock_settime_impl(a as u32, b)),
         SYS_CLOCK_GETRES => Some(crate::proc::nanosleep::sys_clock_getres(a as u32, b)),
         SYS_GETITIMER => Some(crate::proc::itimer::sys_getitimer(a as i32, b)),
         SYS_SETITIMER => Some(crate::proc::itimer::sys_setitimer(a as i32, b, c)),
         SYS_ALARM => Some(crate::proc::itimer::sys_alarm(a as u32)),
-        SYS_TIMES => Some(crate::proc::rusage::sys_times(a)),
-        SYS_TIME => Some(crate::proc::nanosleep::sys_time(a)),
-        SYS_GETTIMEOFDAY => Some(crate::proc::nanosleep::sys_gettimeofday(a, b)),
-        SYS_SETTIMEOFDAY => Some(crate::proc::nanosleep::sys_settimeofday(a, b)),
+        SYS_TIMES => Some(crate::syscall::sys_times_impl(a)),
+        SYS_TIME => Some(crate::syscall::sys_time_impl(a)),
+        SYS_GETTIMEOFDAY => Some(crate::syscall::sys_gettimeofday_impl(a, b)),
+        SYS_SETTIMEOFDAY => Some(crate::syscall::sys_settimeofday_impl(a, b)),
         _ => None,
     }
 }
@@ -580,11 +565,11 @@ pub fn dispatch_time(ctx: &SyscallContext) -> Option<isize> {
 // Covers: hybrid/misc: getrandom, uname, umask, personality, sysinfo,
 // syslog, reboot, pivot_root, acpi, seccomp, bpf.
 pub fn dispatch_hybrid_services(ctx: &SyscallContext) -> Option<isize> {
-    let (a, b, c, _d, _e, _f) = (ctx.a0(), ctx.a1(), ctx.a2(), ctx.a3(), ctx.a4(), ctx.a5());
+    let (a, b, c, d, _e, _f) = (ctx.a0(), ctx.a1(), ctx.a2(), ctx.a3(), ctx.a4(), ctx.a5());
     match ctx.nr {
         SYS_GETRANDOM => Some(crate::syscall::sys_getrandom_impl(a, b, c as u32)),
         SYS_UNAME => Some(crate::syscall::sys_uname_impl(a)),
-        SYS_PERSONALITY => Some(0isize),
+        SYS_PERSONALITY => Some(crate::syscall::sys_personality_impl(a as u32)),
         SYS_SYSINFO => Some(crate::syscall::sys_sysinfo_impl(a)),
         SYS_SYSLOG => Some(crate::syscall::sys_syslog_impl(a as i32, b, c as i32)),
         SYS_REBOOT => Some(crate::syscall::sys_reboot_impl(

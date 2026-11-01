@@ -295,7 +295,7 @@ fn program_headers<'a>(
 
 fn has_interpreter(data: &[u8], hdr: &Elf64Header) -> bool {
     // If program_headers fails we conservatively return false.
-    let Ok(phdrs) = program_headers(data, hdr) else {
+    let Ok(mut phdrs) = program_headers(data, hdr) else {
         return false;
     };
     phdrs.any(|ph| { ph.p_type } == PT_INTERP)

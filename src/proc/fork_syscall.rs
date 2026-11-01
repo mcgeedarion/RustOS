@@ -17,7 +17,7 @@ fn clone_user_mappings(parent: &crate::proc::process::Pcb) -> Result<usize, isiz
     if parent.user_pagetable == 0 {
         return Err(-12);
     }
-    let root = <Arch as Paging>::new_user_address_space().ok_or(-12)?;
+    let root = <Arch as Paging>::new_user_address_space().ok_or(-12isize)?;
     let mut mapped_vas: Vec<usize> = Vec::new();
     let mut owned_frames: Vec<usize> = Vec::new();
 
@@ -42,7 +42,7 @@ fn clone_user_mappings(parent: &crate::proc::process::Pcb) -> Result<usize, isiz
                 flags
             };
 
-            if matches!(vma.kind, VmaKind::PhysMap(_)) {
+            if matches!(vma.kind, VmaKind::PhysMap(_) | VmaKind::Shared(_, _)) {
                 if !<Arch as Paging>::map_page(root, va, source_frame, flags) {
                     rollback_user_mappings(root, &mapped_vas, &owned_frames);
                     return Err(-12);
@@ -131,6 +131,8 @@ pub fn sys_fork() -> isize {
     scheduler::enqueue(child);
     proc_fd_fork(parent_pid, child_pid);
     cgroup::cgroup_fork(parent_pid, child_pid);
+    crate::mm::vmm::fork_attach(parent_pid, child_pid);
+    crate::ipc::shm::fork_attach(parent_pid, child_pid);
 
     let task = scheduler::task_ptr_for_pid(child_pid);
     if task.is_null() {
