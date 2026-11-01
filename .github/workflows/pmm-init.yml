@@ -1,0 +1,32 @@
+name: PMM initialization regressions
+
+on:
+  push:
+    branches: [fix/kernel-allocator-exit-signals-pmm]
+  pull_request:
+    branches: [main]
+    paths:
+      - src/mm/pmm.rs
+      - src/mm/pmm/**
+      - tests/host/pmm_init.rs
+      - scripts/ci/test-pmm-init.sh
+      - .github/workflows/pmm-init.yml
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
+          components: rust-src
+      - name: Exercise production PMM with fake physical RAM
+        run: bash scripts/ci/test-pmm-init.sh
+      - name: Check canonical x86_64 kernel
+        if: ${{ !cancelled() }}
+        run: cargo xtask check --arch x86_64
