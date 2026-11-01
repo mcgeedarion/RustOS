@@ -1,0 +1,33 @@
+name: Exit lifecycle regressions
+
+on:
+  push:
+    branches: [fix/kernel-allocator-exit-signals-pmm]
+  pull_request:
+    branches: [main]
+    paths:
+      - src/proc/exit.rs
+      - src/proc/proc_table.rs
+      - src/proc/wait.rs
+      - tests/host/exit_lifecycle.rs
+      - scripts/ci/test-exit-lifecycle.sh
+      - .github/workflows/exit-lifecycle.yml
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
+          components: rust-src
+      - name: Test production exit and process-table unlink with mocked platform services
+        run: bash scripts/ci/test-exit-lifecycle.sh
+      - name: Check canonical x86_64 kernel
+        if: ${{ !cancelled() }}
+        run: cargo xtask check --arch x86_64
