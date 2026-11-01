@@ -35,6 +35,13 @@ jobs:
           set -o pipefail
           cargo xtask smoke --arch x86_64 2>&1 | tee xtask-full-smoke.log
 
+      - name: Validate strict full-kernel smoke evidence
+        run: |
+          python3 scripts/ci/parse_smoke_log.py \
+            target/smoke-x86_64.log \
+            --metadata target/smoke-x86_64-metadata.json \
+            --arch x86_64
+
       - name: Upload full-kernel execution evidence
         if: always()
         uses: actions/upload-artifact@v4
