@@ -1,75 +1,25 @@
-# ADR 0003: VFS Runtime Registration System
+# ADR 0003: VFS and scheme registration
 
-## Status
-Accepted
+Status: retained registration direction with multiple coexisting registries at `08a14f6`. This record names the actual systems so callers do not confuse registration with mounted or operational support.
 
-## Context
-Filesystem support in RustOS was compile-time only:
-- Filesystems hardcoded into VFS layer
-- No ability to add filesystems at runtime
-- Difficult to support loadable filesystem modules
-- Auto-detection of filesystem types not available
+## Decision and context
 
-## Decision
-Implement a runtime VFS registration system:
+Register providers explicitly during initialization instead of requiring each caller to know a concrete backend implementation. Keep protocol identifiers, process descriptors, backing handles, and mount routing distinct.
 
-### Design
-```rust
-pub struct VfsRegistry {
-    filesystems: spin::Mutex<BTreeMap<&'static str, &'static dyn FileSystem>>,
-}
+## Current registries
 
-impl VfsRegistry {
-    pub fn register(&self, name: &'static str, fs: &'static dyn FileSystem) -> Result<(), VfsError>;
-    pub fn get(&self, name: &str) -> Option<&'static dyn FileSystem>;
-    pub fn auto_detect(&self, data: &[u8]) -> Option<&'static str>;
-}
-```
+- **Kernel schemes**: `src/fs/scheme_table.rs` owns the kernel `Scheme` trait and `SCHEME_TABLE`. `src/init/schemes.rs` installs boot providers in a dependency-conscious sequence.
+- **Scheme backing FDs**: `src/fs/scheme_fd.rs` associates shared scheme providers with local file IDs. Process-visible FDs are a separate layer.
+- **Kernel VFS/mounts**: `src/fs/vfs/` and `src/fs/mount.rs` provide path and mount routing.
+- **Workspace VFS**: `crates/vfs-core/src/lib.rs` defines `VFS_REGISTRY` and filesystem-provider registration. It is not the same registry as `SCHEME_TABLE`.
+- **IPC proxy**: `src/fs/ipc_proxy_scheme.rs` forwards operations through a userspace-service endpoint. Registering a proxy does not launch or supervise the server.
 
-### Filesystem Trait
-All filesystems implement the `FileSystem` trait:
-```rust
-pub trait FileSystem: Send + Sync {
-    fn name(&self) -> &'static str;
-    fn open(&self, path: &str, flags: OpenFlags) -> Result<FileHandle, VfsError>;
-    fn stat(&self, path: &str) -> Result<Stat, VfsError>;
-    // ... other operations
-}
-```
+The workspace filesystem adapters do not automatically replace kernel VFS routing or boot scheme initialization. Their probe/registration tests are narrower than a mounted filesystem integration test.
 
-### Auto-Detection
-Magic number detection for common filesystems:
-- EXT2/3/4: 0x53EF at offset 1080
-- FAT32: 0xEB5890 boot signature
-- NTFS: "NTFS" at offset 3
+## Required invariants
 
-### Usage
-```rust
-// Register filesystem at initialization
-pub fn register_ext4() -> Result<(), VfsError> {
-    static EXT4_FS: Ext4FileSystem = Ext4FileSystem::new();
-    vfs_core::VFS_REGISTRY.register("ext4", &EXT4_FS)
-}
+Registration must have a documented name/identity, provider lifetime, duplicate-registration rule, and initialization order. Process exit or server failure must not leave stale endpoint/FD ownership behind.
 
-// Auto-detect and mount
-let fs_type = vfs_core::VFS_REGISTRY.auto_detect(superblock_data);
-if let Some(name) = fs_type {
-    if let Some(fs) = vfs_core::VFS_REGISTRY.get(name) {
-        // Mount using detected filesystem
-    }
-}
-```
+Unregistering or replacing a provider requires a policy for open handles, queued operations, and blocked waiters. A successful registration call alone cannot establish those lifetime semantics.
 
-## Consequences
-### Positive
-- Runtime filesystem loading capability
-- Cleaner separation between VFS and implementations
-- Auto-detection simplifies mount operations
-- Easier to add new filesystems
-
-### Negative
-- Small runtime overhead from dynamic dispatch
-- Requires 'static lifetime for filesystem instances
-
-## Implementation
-See `crates/vfs-core/src/lib.rs` for the complete implementation.
+See [filesystems and storage](../filesystems-and-storage.md), [IPC](../ipc-and-async-io.md), and [process lifetime](../processes-and-scheduling.md) for the active integration boundaries. Registry consolidation remains explicit future work rather than an assumed completed migration.

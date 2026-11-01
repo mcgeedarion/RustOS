@@ -1,151 +1,62 @@
-# Code Coverage Integration for RustOS
+# Test and coverage boundaries
 
-This document describes local coverage collection options for host-testable portions of the workspace. Coverage is advisory: kernel boot validation still relies on `xtask` checks and QEMU smoke tests.
+RustOS uses hosted tests, direct-source harnesses, fuzz targets, emulator contracts, and textual guards. No whole-kernel coverage percentage or complete hardware test result was measured during the `08a14f6` documentation audit.
 
-## Overview
+## Executed host suites
 
-Code coverage is measured using `cargo-tarpaulin` for x86_64 targets and `grcov` for cross-platform coverage.
+| Suite | Result | What it actually covers |
+| --- | --- | --- |
+| `cargo xtask test` | 16 passed | Hosted `userspace_boot`-scoped library tests |
+| `test-region-heap.sh` | 3 passed | Production region allocator |
+| `test-pmm-init.sh` | 2 passed | PMM source with host physical-memory backing |
+| `test-kstack-ownership.sh` | 4 passed | Production ownership registry and simulated safe retirement/reclamation |
+| `test-exit-lifecycle.sh` | 2 passed | Exit, process table, wait logic with substitute scheduler/resources |
+| `fault_engine.rs` | 7 passed | Actual atomic fault-point engine |
+| `test-boot-marks.py` | 14 passed | Strict timing-log parser |
+| Python CI test discovery | 45 passed | Smoke/fault/panic parser and fuzz-coverage checks |
+| `scheme-api` | 2 unit tests + 1 doctest passed | Protocol helpers |
+| `sync-primitives` | 8 passed | Portable lock/RCU implementation tests |
+| `fs-ext4`, `fs-fat32` | 3 passed each | Adapter/probe helpers |
+| `vfs-core`, `mm-core`, `fs-tmpfs` | 0 tests | Successful compilation/invocation only |
+| `userspace/smoke/tests/assertions.rs` | 11 failed | Stale host mocks; no passing smoke assertion claim |
 
-## Installation
+The direct smoke test's mocks do not match the current sequence and payload expectations. The guest workload is more extensive than its old happy-path fixture; repairing the fixture is source work outside this documentation change.
 
-### cargo-tarpaulin (Linux/x86_64)
+## Kernel test selection
+
+`src/kmtest/mod.rs` declares registration and suites for selected fs, MM, process, scheme-FD, virtqueue, smoke, and OOM-recovery tests. Those tests require the full graph plus `kmtest` and an executable harness; being present under `kmtest/` does not mean a host test command ran them.
+
+`kmtest/fault_inject_tests.rs` is not declared by the test root. Similarly, the standalone VFS POSIX test file is not automatically part of the declared VFS tests.
+
+## Fuzzing
+
+The `fuzz` workspace has four libFuzzer targets. They import production parsing code with narrow host adapters rather than reimplementing the parser in the harness.
+
+| Target | Production surface |
+| --- | --- |
+| `cpio_newc` | `src/init/initramfs/mod.rs` |
+| `elf64` | `src/exec/elf.rs` metadata parsing/validation |
+| `vfs_path` | `src/fs/path.rs` |
+| `ext4_metadata` | `src/fs/ext4.rs` pure metadata decoding |
+
 ```bash
-cargo install cargo-tarpaulin
+cargo install cargo-fuzz --locked
+cargo fuzz run cpio_newc --sanitizer address -- \
+  -max_len=4096 -max_total_time=15 -dict=fuzz/dictionaries/cpio_newc.dict
+bash scripts/ci/fuzz-coverage.sh
 ```
 
-### grcov (Cross-platform)
-```bash
-cargo install grcov
-```
+Use the checked-in workflow for bounded timeouts and the other targets. No fuzz campaign or numeric parser coverage measurement was executed during this audit; host tests of the coverage guard do not count as fuzzing.
 
-## Running Coverage Locally
+## What is not established
 
-### Using tarpaulin
-```bash
-# Generate HTML report
-cargo tarpaulin --output-dir ./coverage --out Html
+- **Full execution**: No passing full-kernel compile or QEMU userspace run in this audit.
+- **Concurrency safety**: Host lock/lifetime tests do not exercise hardware interrupts, all CPU interleavings, TLBs, or real context switches.
+- **Fault recovery**: Engine budgets firing on the host are not injected failures in PMM, VMM, descriptors, or a running process.
+- **Persistence**: Metadata/probe tests do not validate crash recovery or mounted filesystem semantics.
+- **Device support**: No physical NIC, disk, GPU, input, or camera validation.
+- **Coverage totals**: No aggregate percentage, branch count, or claim that all declared tests are currently runnable.
 
-# Generate XML for CI
-cargo tarpaulin --output-dir ./coverage --out Xml
+## Evidence standard
 
-# Generate all formats
-cargo tarpaulin --output-dir ./coverage --out Html --out Xml --out Lcov
-
-# Run with specific features
-cargo tarpaulin --features "std,alloc" --output-dir ./coverage --out Html
-
-# Exclude test code from coverage
-cargo tarpaulin --exclude-files tests/* --output-dir ./coverage --out Html
-```
-
-### Using grcov with llvm-cov
-```bash
-# Build with coverage instrumentation
-RUSTFLAGS="-C instrument-coverage" \
-LLVM_PROFILE_FILE="rustos-%p-%m.profraw" \
-cargo test
-
-# Generate report
-grcov rustos-*.profraw -s . --binary-path ./target/debug/ \
-    -t html --branch --ignore-not-existing -o ./coverage/html
-
-# Generate lcov for Codecov
-grcov rustos-*.profraw -s . --binary-path ./target/debug/ \
-    -t lcov --branch --ignore-not-existing -o ./coverage/lcov.info
-```
-
-## CI Integration
-
-Coverage upload is not an authoritative release gate in the current workflow set. Use this section as a template if coverage reporting is re-enabled in CI.
-
-### Workflow Configuration
-
-If coverage reporting is re-enabled, keep the workflow in `.github/workflows/` and ensure it complements the existing build, smoke, kernel-test, and roadmap-check workflows.
-
-Key steps:
-```yaml
-- name: Install cargo-tarpaulin
-  uses: actions-rs/install@v0.1
-  with:
-    crate: cargo-tarpaulin
-    version: latest
-    
-- name: Run coverage
-  run: cargo tarpaulin --timeout 120 --out Xml --out Lcov
-  
-- name: Upload to Codecov
-  uses: codecov/codecov-action@v3
-  with:
-    files: ./cobertura.xml,./lcov.info
-    flags: unittests
-    fail_ci_if_error: false
-```
-
-## Coverage Thresholds
-
-Target coverage levels:
-- **Overall**: >80% line coverage
-- **Critical modules** (security, memory, scheduler): >90%
-- **Drivers**: >70%
-
-Modules below threshold will generate warnings in CI.
-
-## Interpreting Reports
-
-### Line Coverage
-Percentage of executable lines that were executed during tests.
-
-### Branch Coverage
-Percentage of control flow branches (if/else, match arms) that were taken.
-
-### Function Coverage
-Percentage of functions that were called at least once.
-
-## Excluding Code from Coverage
-
-Some code should be excluded from coverage metrics:
-
-```rust
-#[cfg_attr(tarpaulin, skip)]
-fn debug_only_function() {
-    // Debug code not tested
-}
-
-#[cfg(not(test))]
-mod runtime_only {
-    // Runtime code not suitable for unit tests
-}
-```
-
-## Troubleshooting
-
-### Tarpaulin fails with "unrecognized option"
-Ensure you're using a compatible Rust nightly version:
-```bash
-rustup install nightly-2024-01-01
-rustup default nightly-2024-01-01
-```
-
-### Low coverage on inline functions
-Inline functions may not show correct coverage. Add `#[inline(never)]` for testing.
-
-### Segmentation fault during coverage
-Some kernel code may not be compatible with instrumentation. Exclude those modules:
-```bash
-cargo tarpaulin --exclude src/arch/* --exclude src/boot/*
-```
-
-## Best Practices
-
-1. **Run coverage regularly**: Don't wait for CI to find coverage gaps
-2. **Focus on critical paths**: Prioritize security and correctness-critical code
-3. **Don't chase 100%**: Some code (panic handlers, OOM) is hard to test
-4. **Use coverage as guide**: Not all uncovered code needs tests
-5. **Combine with other metrics**: Coverage doesn't measure test quality
-
-## References
-
-- [cargo-tarpaulin documentation](https://github.com/xd009642/tarpaulin)
-- [grcov documentation](https://github.com/mozilla/grcov)
-- [Codecov documentation](https://docs.codecov.com)
-- [Rust coverage book](https://rustc-dev-guide.rust-lang.org/coverage-instrumentation.html)
+Record source revision, command, target/features, result, and whether the harness uses production code or substitutes. Keep failures and unexecuted gates visible in [the audit](source-audit.md) instead of merging them into a single misleading pass count.

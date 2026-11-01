@@ -1,61 +1,29 @@
-# RustOS Product Milestones
+# Milestones
 
-_Last reviewed: 2026-10-13._
+Milestones describe acceptance gates, not completion inferred from source size or previous roadmap labels. This status follows the `08a14f6` source audit and its executed checks.
 
-The project is working toward **M3**, but the end-to-end full-userspace gate
-is not yet supported. The default `full_kernel` feature selects the normal
-MM/VFS/process/syscall graph and UEFI entry without implying that process
-creation or image replacement is functional. The repository contains ELF image construction, initial-stack setup, process spawning, and an `execve` replacement path. These paths remain unverified as a complete runtime contract. The full smoke path must remain blocked until real QEMU runs prove process entry, successful exec, exact-child reaping, and zero exit status.
+## Current milestone state
 
-| Milestone | Goal | Cargo feature path | CI/local sentinel | Current state |
-|---|---|---|---|---|
-| **M1** | Minimal UEFI boot reaches its explicit minimal completion marker | `boot_minimal` | `BOOT_MINIMAL_OK`, validated against the actual QEMU log | **Separate profile gate; do not infer full-kernel readiness** |
-| **M2** | Build an initramfs, launch `/init`, exec `/smoke`, reap that exact child and validate exit status zero | default `full_kernel` graph with initramfs | Smoke and benchmark children both execute/reap with zero exit; JSON benchmark record plus strict timing parser appear in the same QEMU log | **Blocked** until the kernel provides real spawn/exec semantics |
-| **M3** | Minimum init syscalls have working semantics and bad-pointer safety | full kernel graph and architecture-aware dispatch | init exercises `open/fork/exec/wait/exit`; no `ENOSYS` for required operations; child exits normally with status zero | **Blocked** |
-| **M4** | VFS/initramfs/devfs/procfs support real init workloads | full kernel graph | successful writable-file and IPC workloads plus `/dev/null` and `/proc/version` checks | **Not promoted** |
-| **M5** | Network, display, and input demos run as userspace processes | full kernel graph plus optional device features | an executable demo completes under QEMU with retained logs and metadata | **Experimental/planned** |
+| Milestone | Contract | Current evidence |
+| --- | --- | --- |
+| M1: boot and profile discipline | Reproducible target/profile builds, correct handoff and minimal marker protocol | x86_64/AArch64 slim checks pass; RISC-V slim checks fail; no local QEMU run in this audit |
+| M2: real userspace lifecycle | Init creation, user transition, distinct smoke/bench execution, exact-child waits, `FULL_OS_USERSPACE_OK` | Exec/fork/wait source and x86_64 archive build exist; full kernel fails compilation |
+| M3: reliable memory/process/VFS/IPC core | Correct error paths, descriptor and mapping semantics, bounded ownership/lifetime, filesystem and pipe assertions | Focused host heap/PMM/stack/exit tests pass; guest integration and eventual reclamation remain open |
+| M4: device/services and observability | Validated drivers, service startup/restart, network/display capability, usable diagnostics | Driver/service/debug code exists, but multiple integration gaps and undeclared feature gates remain |
+| M5: resilience and measured readiness | Guest fault recovery, security negatives, persistence/recovery, reproducible performance | Host engine/parser tests pass; no full guest recovery or production-readiness claim |
 
-The detailed, testable requirements for these gates are defined in [Acceptance Criteria](acceptance-criteria.md). These are requirements, not implementation claims; milestone promotion still requires the corresponding executable gate to pass.
+## Sentinel rules
 
-## Marker contracts
+`BOOT_MINIMAL_OK` belongs only to M1's minimal contract. `USERSPACE_BOOT_UNSUPPORTED` records diagnostic-only ELF inspection and must never satisfy M2.
 
-Boot timing markers and userspace execution markers are separate contracts.
-The timing parser validates `BOOT_ENTRY`, `BOOT_MMU_ON`, and, for the full path,
-`BOOT_INITRAMFS_LOADED` and `BOOT_INIT_EXEC`. Those timestamps do not prove that
-a userspace child ran successfully.
+`FULL_OS_USERSPACE_OK` is meaningful only after the complete ordered userspace protocol, actual assertions, exact distinct child reaping, and valid benchmark record. A final string alone cannot promote a milestone.
 
-The minimal boot contract accepts only the explicit `BOOT_MINIMAL_OK` sentinel.
-The generic idle-loop text `entering cpu_idle` is not a success condition.
+## Immediate sequencing
 
-The full execution contract uses these serial markers:
-The full smoke also requires the syscall benchmark to emit its JSON record and `RUSTOS_BENCH marker=complete`, then requires `/init` to reap that benchmark child with status zero before `init_complete`.
+- **Build consistency**: Resolve duplicate socket ownership, missing/empty integration targets, unresolved full-build imports/types, and the RISC-V layout constant.
+- **Test consistency**: Repair stale smoke mocks without weakening guest assertions; reconcile aggregate userspace workspace metadata.
+- **Runtime gate**: Prove full x86_64 init/smoke/bench execution before claiming architecture parity.
+- **Lifetime and failure**: Add real multi-CPU quiescence/reclamation and production fault-site recovery tests.
+- **Service/device validation**: Establish specific hardware or virtual-device workloads and isolation properties.
 
-```text
-RUSTOS_EXEC marker=init_started
-RUSTOS_EXEC marker=smoke_started
-RUSTOS_EXEC marker=smoke_tests_passed
-RUSTOS_EXEC marker=smoke_child_reaped pid=<positive-pid> exit=0
-RUSTOS_BENCH marker=complete
-RUSTOS_EXEC marker=bench_child_reaped pid=<positive-pid> exit=0
-RUSTOS_EXEC marker=init_complete exit=0
-```
-
-The child-reaped markers are emitted only after the corresponding `execve` succeeds, `/init` waits for that exact child's PID, and the child terminates normally with exit code zero. `/bench` emits one JSON record with warmups, fixed measured iterations, elapsed time, mean time per call, architecture, and guest metadata. An exec failure, failed wait, signal termination, or
-nonzero child status must not emit the completion markers. `SMOKE OK` and
-`FULL_OS_USERSPACE_OK` are downstream aliases emitted only after the same
-checks. Timing markers never substitute for this execution protocol.
-
-`cargo xtask smoke` truncates stale logs, enforces a QEMU deadline, applies
-the appropriate boot-timing parser to the actual generated QEMU serial log, and
-writes `target/smoke-<arch>-metadata.json` alongside that log. A successful parser unit test or a source-level marker search does not satisfy either runtime contract. Benchmark thresholds remain advisory until repeated successful runs characterize variance and a reviewed like-for-like baseline is committed.
-
-See `docs/M3_M5_ROADMAP.md` for detailed milestone gates and validation commands.
-
-## Promotion rule
-
-Do not mark a milestone complete unless:
-
-1. `docs/status.md` and `docs/syscalls.md` agree with the code state.
-2. The relevant `cargo xtask smoke` or `cargo xtask check` command succeeds.
-3. Any claimed performance or image-size improvement has a checked-in
-   measurement or a documented command to reproduce it.
+See [M3_M5_ROADMAP.md](M3_M5_ROADMAP.md) for the remaining work and [acceptance criteria](acceptance-criteria.md) for promotion evidence. No deadline or completion percentage is implied by this ordering.

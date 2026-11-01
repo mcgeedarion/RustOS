@@ -1,40 +1,44 @@
-# RustOS Documentation Index
+# RustOS documentation
 
-This directory contains the current project documentation. Outdated one-off implementation summaries and fictional release/install notes have been removed; use the files below as the maintained source of truth.
+This documentation describes the source at `08a14f6` on `main`, audited on 2026-11-01. It distinguishes code that exists, code selected by a build profile, executed host checks, and guest behavior that still needs evidence.
 
-## Authoritative references
+The default Cargo configuration selects the full subsystem graph, not the minimal kernel. That graph currently fails the audited x86_64 compilation check; the explicit slim profiles have a different scope and must not be used as evidence that full userspace execution works.
 
-| File | Use it for |
+## Start here
+
+- **Current state**: [Subsystem status](status.md), [source audit and validation results](source-audit.md), and [milestones](milestones.md).
+- **Build and run**: [Getting started](getting-started.md), [build reference](build-reference.md), and [boot-profile contracts](boot-profile-contracts.md).
+- **Architecture**: [Kernel architecture](architecture.md), [firmware and platforms](firmware-and-platforms.md), and the [complete source-file index](module-map.md).
+- **Contributor workflow**: [Documentation maintenance](maintenance.md), [CI](ci.md), [coverage boundaries](code_coverage.md), and [rustdoc generation](rustdoc_generation.md).
+
+## Subsystem guides
+
+| Area | Guide |
 | --- | --- |
-| `status.md` | Current subsystem maturity, feature gates, and roadmap priorities. |
-| `architecture.md` | Architecture support, boot contracts, and code organization rules. |
-| `milestones.md` | M1-M5 product milestones and supported boot sentinels. |
-| `syscalls.md` | Syscall implementation status, EFAULT-safety expectations, and intentional ENOSYS stubs. |
-| `production_requirements.md` | Release-readiness requirements and current gaps. |
+| Physical memory, heaps, mappings, kernel stacks | [Memory management](memory-management.md) |
+| Tasks, scheduler, fork, exec, signals, exit, wait | [Processes and scheduling](processes-and-scheduling.md) |
+| ABI translation, syscall routers, errno, user copies | [System calls](syscalls.md) |
+| VFS, schemes, descriptors, filesystem backends, block I/O | [Filesystems and storage](filesystems-and-storage.md) |
+| Endpoints, pipes, SysV/POSIX IPC, io_uring | [IPC and asynchronous I/O](ipc-and-async-io.md) |
+| Ethernet, IP, TCP/UDP, DNS/DHCP, sockets | [Networking](networking.md) |
+| PCI, storage/NIC drivers, graphics, input, terminals, media | [Drivers and devices](drivers-and-devices.md) |
+| Locks, wait queues, RCU surfaces, per-CPU state | [Synchronization](synchronization.md) |
+| Permissions, capabilities, namespaces, seccomp, hardening | [Security](security.md) |
+| Freestanding programs and initramfs packaging | [Userspace](userspace.md) |
+| Panic output, tracing, GDB, diagnostic limits | [Debugging](debugging.md) |
 
-## Developer workflow
+## Validation and performance
 
-| File | Use it for |
-| --- | --- |
-| `getting-started.md` | Local setup and first validation commands. |
-| `ci.md` | CI workflow overview and expected gates. |
-| `code_coverage.md` | Coverage collection guidance. |
-| `rustdoc_generation.md` | API documentation generation. |
-| `fault_inject.md` | Fault-injection feature, fault IDs, and test workflow. |
-| `ATOMIC_ORDERING_GUIDELINES.md` | Atomic ordering conventions. |
-| `ERROR_HANDLING_AUDIT.md` | Error-handling audit status and remaining follow-up. |
+- **Runtime acceptance**: [Acceptance criteria](acceptance-criteria.md), [userspace smoke protocol](userspace-smoke.md), and [production requirements](production_requirements.md).
+- **Fault testing**: [Fault-injection engine](fault_inject.md) and [guest fault-recovery contract](fault-recovery.md).
+- **Performance evidence**: [Boot timing](boot-perf.md), [image-size accounting](boot-image-size.md), [syscall benchmark](syscall-perf.md), [compiler settings](compiler-optimizations.md), and [boot optimization checklist](boot-optimization-checklist.md).
+- **Concurrency review**: [Atomic ordering guidelines](ATOMIC_ORDERING_GUIDELINES.md).
 
-## Boot, performance, and architecture notes
+## Design decisions and remaining work
 
-| File | Use it for |
-| --- | --- |
-| `boot-image-size.md` | Boot image size tracking. |
-| `boot-optimization-checklist.md` | Boot performance optimization checklist. |
-| `boot-perf.md` | Boot marker format and performance collection policy. |
-| `compiler-optimizations.md` | Compiler/profile optimization notes. |
-| `syscall-perf.md` | Syscall profiling workflow and data freshness policy. |
-| `architecture-improvements.md` | Follow-up architecture cleanup ideas. |
+- **Architecture backlog**: [Architecture improvements](architecture-improvements.md) and [M3 to M5 roadmap](M3_M5_ROADMAP.md).
+- **Workspace split**: [ADR 0001](adr/0001-workspace-crate-architecture.md).
+- **Error conventions**: [ADR 0002](adr/0002-unified-error-handling.md).
+- **Filesystem registration**: [ADR 0003](adr/0003-vfs-registration.md).
 
-## Architecture Decision Records
-
-ADRs live in `docs/adr/` and record accepted design direction. Keep them as historical decisions; update living status in `status.md` rather than editing ADR history unless the decision itself changes.
+Source comments, historical roadmaps, feature names, and workflow names are not proof of completed functionality. For disagreements, inspect the module declarations, implementation, and recorded validation in [the audit](source-audit.md).

@@ -1,138 +1,83 @@
-# CI and Local Validation Contract
+# Continuous integration
 
-_CI coverage boundary updated: 2026-10-13._
+CI has multiple independent workflows with different contracts, not one universal “kernel passed” gate. This guide maps the checked-in workflows at `08a14f6`; it does not claim that remote workflow runs are currently green.
 
-RustOS uses `cargo xtask` as the canonical automation layer. Raw `cargo` commands
-are useful for debugging, but CI and pre-push validation should go through
-`xtask` so target specs, features, firmware staging, FAT image creation, and
-serial-log checks stay consistent.
+## Workflow map
 
-## Primary commands
+| Workflow file(s) | Actual scope |
+| --- | --- |
+| `ci.yml`, `lint.yml`, `fmt.yml` | Formatting baseline, selected clippy targets, module hygiene; CI also has full build and smoke jobs |
+| `build.yml`, `kernel-test.yml` | Reusable architecture build and selected minimal/kmtest launch paths |
+| `focused-regressions.yml`, `regression-tests.yml` | Hosted filesystem/diagnostic tests, Python parsers, x86_64/AArch64 profile-build matrix |
+| `allocator-repair.yml` | RegionHeap host tests followed by full x86_64 check |
+| `pmm-init.yml` | PMM initialization host tests followed by full check |
+| `kstack-ownership.yml` | Stack registry tests followed by full check |
+| `exit-lifecycle.yml` | Exit/wait/table host tests followed by full check |
+| `boot-smoke.yml`, `qemu-smoke.yml` | Explicitly selected minimal/release-boot image and firmware contracts |
+| `full-kernel-smoke.yml` | Full x86_64 kernel, real init/smoke/bench lifecycle, strict log parser |
+| `boot-perf.yml` | Boot marker parser unit tests and minimal x86_64/AArch64 timing logs |
+| `image-size.yml` | x86_64 release-boot disk-image byte limit |
+| `kmtest.yml` | Kernel-test selection/launch wrapper; does not make all test files reachable |
+| `fault-inject.yml` | Real atomic fault-engine host tests; guest integration is unsupported |
+| `parser-fuzz.yml` | Bounded CPIO/ELF/VFS/ext4 fuzz jobs and production-source coverage guard |
+| `panic-format.yml` | Panic-output validation |
+| `status-check.yml` | `cargo xtask roadmap-check`, a required-topic text check |
+| `workflow-lint.yml` | Workflow syntax/static linting |
+| `task3-smoke-markers.yml`, `task4-fault-sites.yml` | Special patch-application/validation workflows; they modify their checkout before testing |
+| `labeler.yml`, `stale.yml` | Repository maintenance, not kernel validation |
 
-| Command | Purpose |
-|---|---|
-| `cargo xtask check --arch x86_64` | Type-check the default full subsystem graph with x86_64 UEFI entry |
-| `cargo xtask smoke --arch x86_64` | Build the full graph and initramfs, boot QEMU under a deadline, require the full userspace execution protocol, run the timing parser on that real log, and write JSON run metadata |
-| `cargo xtask smoke --arch aarch64` | Same full execution contract for AArch64 UEFI, subject to firmware availability |
-| `cargo xtask smoke --arch x86_64 --features boot_minimal` | Explicit minimal-only QEMU smoke, accepting only `BOOT_MINIMAL_OK` |
-| `cargo xtask build-init --arch x86_64` | Build `/init`, `/smoke`, and `/bench`, stage all three in the initramfs, and pack `initramfs.cpio` |
-| `cargo xtask roadmap-check` | Validate roadmap/status/syscall/fault docs contain required topics |
-| `bash scripts/ci/check-stubs.sh` | Guard documented stub classifications |
-| `cargo xtask ci-local` | Fast aggregate local gate: check, host tests, module lint, stub guard, docs guard |
-| `bash scripts/ci/check-rust-format.sh` | Check all tracked Rust files under src/crates/xtask without traversing absent experimental module declarations |
-| `bash scripts/ci/parse-boot-marks.sh --mode minimal <log>` | Validate the minimal boot contract and entry-to-MMU timing |
-| `bash scripts/ci/parse-boot-marks.sh <log>` | Strict full/userspace marker contract, including `BOOT_INIT_EXEC` |
-| `bash scripts/ci/boot-regression.sh <log>` | Compare boot times against baselines; fails if any phase exceeds baseline by >20% |
+The task3/task4 scripts are code-modifying helpers, not ordinary read-only tests. Do not run them merely to validate documentation or attribute their patched-checkout results to unmodified source.
 
-## Serial success and execution markers
+## Local checks
 
-`cargo xtask smoke` captures a fresh QEMU serial log at
-`target/smoke-<arch>.log`. It truncates any prior log before launching QEMU,
-enforces an architecture-specific deadline, and writes
-`target/smoke-<arch>-metadata.json` with the selected profile, architecture,
-host environment, elapsed time, deadline, result, timing-parser result, log path,
-and expected contract.
-
-The explicit minimal profile accepts only `BOOT_MINIMAL_OK`. It does not accept
-the generic idle-loop message, `FULL_OS_USERSPACE_OK`, or a stale marker from a
-previous run.
-
-The default full-kernel profile requires all of these execution records:
-
-```text
-RUSTOS_EXEC marker=smoke_started
-RUSTOS_EXEC marker=smoke_tests_passed
-RUSTOS_EXEC marker=smoke_child_reaped pid=<positive-pid> exit=0
-RUSTOS_BENCH marker=complete
-RUSTOS_EXEC marker=bench_child_reaped pid=<positive-pid> exit=0
-RUSTOS_EXEC marker=init_complete exit=0
+```bash
+cargo xtask test
+cargo xtask lint-modules
+cargo xtask roadmap-check
+bash scripts/ci/check-stubs.sh
+bash scripts/ci/test-region-heap.sh
+bash scripts/ci/test-pmm-init.sh
+bash scripts/ci/test-kstack-ownership.sh
+bash scripts/ci/test-exit-lifecycle.sh
+python3 scripts/ci/test-boot-marks.py
+python3 -m unittest discover -s scripts/ci/tests -p 'test_*.py'
 ```
 
-These records are emitted across real userspace child paths. `/init` must execute `/smoke` and `/bench`, reap each exact child PID, and observe normal termination with status zero before completion. The benchmark prints one schema-version-2 JSON record with warmup and measured iteration counts, per-operation counts, elapsed nanoseconds, mean latency, sampled min/p50/p90/p99/max latency, PID checksum, architecture, host OS/architecture, compiler version, QEMU version, and guest/build metadata. An exec failure,
-failed wait, signal termination, or nonzero exit is a hard failure. Reaching an
-idle loop is never evidence of a successful userspace boot.
+`cargo xtask ci-local` also includes the full x86_64 check, so it is expected to stop at the existing full-build failures in this revision. A successful isolated host test must not be substituted for that failed gate.
 
-Boot timing markers remain a separate contract. After each QEMU run, xtask
-applies `scripts/ci/parse-boot-marks.sh` with `--mode minimal` or `--mode full`
-to that run's actual serial log. A timing parser pass does not substitute for
-the userspace execution markers, and a marker parser unit test does not count
-as runtime evidence. Benchmark thresholds remain advisory until repeated successful runs characterize variance and a reviewed like-for-like baseline exists. The full smoke gate is expected to remain red until working process creation and image replacement are integrated.
+## Compile matrix
 
-## Boot performance regression checks
+```bash
+cargo xtask check --arch x86_64
+cargo xtask check --arch x86_64 --features boot_minimal
+cargo xtask check --arch x86_64 --features userspace_boot
+cargo xtask check --arch aarch64 --features boot_minimal
+cargo xtask check --arch aarch64 --features userspace_boot
+cargo xtask check --arch riscv64 --features boot_minimal
+cargo xtask check --arch riscv64 --features userspace_boot
+```
 
-RustOS emits machine-parseable boot timing markers (`BOOT_MARK label=<LABEL> ticks=<N>`)
-during every boot. See [`docs/boot-perf.md`](boot-perf.md) for the complete format specification.
+During the audit, x86_64/AArch64 slim checks passed, the full x86_64 check failed, and both RISC-V slim checks failed on `mem_layout.rs::SIZE`. Only `check` was executed for these kernel combinations; final linking and QEMU execution are separate evidence.
 
-The CI boot-performance workflow:
+## Full runtime evidence
 
-1. Boots each supported architecture under QEMU and captures serial output.
-2. Runs `scripts/ci/parse-boot-marks.sh --mode minimal` for the explicitly selected minimal image.
-3. Requires entry/MMU markers and `BOOT_MINIMAL_OK`, rejecting malformed, out-of-order, or failing logs.
-4. Reports entry-to-MMU ticks only; it does not claim initramfs or userspace performance.
-
-The full parser contract remains strict and cannot be satisfied by a minimal
-boot. Baseline comparison is separate tooling, not a measurement performed by
-the current marker-validation workflow.
-
-Baseline files are stored in `docs/` (e.g., `boot-perf-baseline.txt`) and should only be updated via intentional `[perf-update]` commits.
-
-To run locally:
-
-```sh
-cargo xtask smoke --arch x86_64 --features boot_minimal
-bash scripts/ci/parse-boot-marks.sh --mode minimal target/smoke-x86_64.log
+```bash
 cargo xtask smoke --arch x86_64
-# Full smoke also runs the full timing parser against its fresh serial log
-bash scripts/ci/boot-regression.sh target/smoke-x86_64.log
+python3 scripts/ci/parse_smoke_log.py target/smoke-x86_64.log \
+  --metadata target/smoke-x86_64-metadata.json --arch x86_64
+bash scripts/ci/parse-boot-marks.sh --mode full target/smoke-x86_64.log
 ```
 
-## QEMU defaults
+The serial log, metadata, timing-parser result, compiler/build output, and benchmark record must belong to the same run. The parser rejects minimal/diagnostic evidence, failure markers, duplicated or reordered execution milestones, malformed benchmark data, and invalid child reaping.
 
-| Architecture | Machine | Firmware | Timeout | Log path |
-|---|---|---|---:|---|
-| x86_64 | `q35` | `OVMF_CODE` or discovered OVMF | 60s | `target/smoke-x86_64.log` and `target/smoke-x86_64-metadata.json` |
-| aarch64 | `virt` | `QEMU_EFI` or discovered AAVMF/QEMU EFI | 45s | `target/smoke-aarch64.log` and `target/smoke-aarch64-metadata.json` |
+xtask sets its smoke timeout to 60 seconds for x86_64 and 45 seconds for the other architectures. CI job timeouts are separate outer limits, and neither a timeout nor missing artifacts may be recorded as success.
 
+## Guards and limitations
 
-## Coverage issue
+- **Module lint**: Checks a visibility/re-export heuristic. It passes despite the duplicate socket module and therefore cannot replace compilation.
+- **Roadmap check**: Looks for required literal topics in five docs. It protects navigation/content presence, not factual accuracy.
+- **Stub guard**: Inspects nearby cfg lines and warning strings. Its warnings are informational, and it does not compile a symbol table or run a guest.
+- **Production requirements script**: Has a workspace-root calculation problem and relies on string matching. It is not an authoritative production gate.
+- **Fault workflow**: `RUSTOS_ENABLE_UNSUPPORTED_KERNEL_FAULT_GATE=true` selects a job that exits with failure. It does not enable a hidden working guest test.
 
-Track remaining full-kernel execution, fault recovery, writable filesystem/IPC workloads, fuzz campaign validation, and syscall benchmarking under [issue #277](https://github.com/mcgeedarion/RustOS/issues/277). Do not establish benchmark thresholds until warmups, fixed iterations, JSON statistics, environment metadata, and a reviewed like-for-like baseline exist and variance has been measured.
-## Adding CI coverage
-
-1. Prefer adding an `xtask` subcommand or extending an existing one over adding
-   a one-off shell command.
-2. Capture serial output to a file and assert markers, not sleeps.
-3. Update `docs/status.md`, `docs/milestones.md`, and this file when the gate
-   changes what is considered supported.
-4. For boot performance changes, update baselines only via `[perf-update]` commits after validating that regressions are intentional.
-
-## Coverage boundaries and unavailable gates
-
-- **Regression Tests:** Reuses the runnable host tests and UEFI profile build matrix rather than referring to absent integration, fuzz, and benchmark scripts. This is not full-kernel or filesystem compatibility coverage.
-- **Fault Injection Engine:** Runs host tests against the fault-point implementation and retains test logs/artifacts for 14 days. PMM/VMM/syscall injection is not exercised in a guest yet.
-- **Kernel fault integration:** Explicitly skipped by default. `RUSTOS_ENABLE_UNSUPPORTED_KERNEL_FAULT_GATE=true` enables a failing readiness guard, not a fake test run; replace that guard only after a real guest harness produces mandatory injected/recovered markers and passes post-recovery workloads.
-- **Parser Fuzz Smoke:** Bounded nightly/manual/changed-path `cargo-fuzz` campaigns target the production newc CPIO, ELF64 header/program-header, VFS symlink/path, and ext4 metadata decoders. Dictionaries, seed corpora, logs, discovered corpus/crashes, and fuzz artifacts are retained for 14 days. The first CI run is pending; a passing parser campaign would not prove full-kernel execution or filesystem write support.
-- **Full Kernel Execution Smoke:** Requires the strict smoke child and benchmark child protocols, JSON benchmark output, and timing-parser success from the same fresh QEMU log. It remains blocked until the current process-spawn and ELF image-replacement paths pass the full runtime contract on each supported architecture. The workflow retains serial logs, run metadata, image, kernel, init, smoke, and benchmark binaries for 14 days.
-- **Syscall benchmark baseline:** `userspace/bench` measures a fixed `getpid` workload after warmups and emits schema-version-2 JSON with 256 batch-latency samples (p50/p90/p99 plus min/max), operation counts, host/compiler/QEMU metadata, and guest architecture. The workload is staged, but no performance baseline or regression threshold is supported until repeated successful runs quantify variance and a reviewed like-for-like baseline is recorded.
-- **Panic format:** Boots the supported diagnostic profile without an initramfs and validates its real, intentional panic on x86_64 and AArch64. This does not test an OOM or full debug register-dump path.
-- **Formatting and lint:** All existing tracked Rust sources in the original kernel/workspace formatting scope remain checked. Clippy keeps `-D warnings`; missing experimental module files are not fabricated just to satisfy rustfmt's default traversal.
-- **Legacy kmtest label:** The existing separate kmtest workflow still uses boot-smoke plumbing and must not be counted as executed kernel suites. The main CI job now labels its repeat explicitly as minimal smoke.
-- **Workflow structure:** Pinned actionlint validates YAML, expressions, and local workflow references. Its optional shellcheck/pyflakes integrations are not part of this new structural check.
-
-## Image size checks
-
-The `release-boot` profile produces lean boot images optimized for size. A CI size-check step (planned) will:
-
-- Build the kernel with `--profile release-boot --features uefi_boot`.
-- Measure the resulting `boot-x86_64.img` size.
-- Fail if the image exceeds a configured threshold (e.g., 2 MB).
-- Track size trends across commits to detect bloat early.
-
-Run locally:
-
-```sh
-cargo xtask build --arch x86_64 --profile release-boot
-ls -lh target/x86_64-unknown-uefi/release-boot/rustos.efi
-```
-
-Use `cargo bloat --release --target x86_64-unknown-uefi` to analyze which functions contribute most to binary size.
+Use [source-audit.md](source-audit.md) for observed local results and [code_coverage.md](code_coverage.md) for their exact boundaries. CI configuration describes intended checks; only retained run evidence establishes results.

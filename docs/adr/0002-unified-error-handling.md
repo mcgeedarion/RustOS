@@ -1,69 +1,32 @@
-# ADR 0002: Unified Error Handling
+# ADR 0002: Unified error handling
 
-## Status
-Accepted
-
-## Context
-Error handling across RustOS was inconsistent:
-- Different subsystems used different error types
-- Syscall return values mixed positive values and negative errno
-- No automatic conversion between error types and errno
-- Difficult to trace error sources across module boundaries
+Status: retained design direction, incomplete consolidation at `08a14f6`. The source has several error families, and this record must not be read as proof that they already share one representation.
 
 ## Decision
-Implement a unified error handling system with:
 
-### Core Components
-1. **KernelError enum**: Standardized error type with errno mapping
-2. **Automatic conversions**: From<KernelError> for isize/i32/u32
-3. **Syscall wrapper macros**: Automatic errno conversion
-4. **Result type aliases**: KernelResult<T>, SyscallResult<T>
+Use typed internal errors where they preserve subsystem meaning and perform explicit conversion at syscall/protocol boundaries. Negative errno is the syscall-facing convention; internal discriminants or positive codes must not be returned without applying the intended conversion.
 
-### Error Type Design
-```rust
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum KernelError {
-    NotFound = 2,        // ENOENT
-    Io = 5,              // EIO
-    BadFd = 9,           // EBADF
-    OutOfMemory = 12,    // ENOMEM
-    PermissionDenied = 13, // EACCES
-    InvalidArg = 22,     // EINVAL
-    // ... etc
-}
-```
+## Current error surfaces
 
-### Usage Pattern
-```rust
-// Before
-fn open_file(path: &str) -> Result<File, i32> {
-    if !exists(path) { return Err(-2); }
-    // ...
-}
+| Surface | Current role |
+| --- | --- |
+| `src/error.rs` | Declared `KernelError`, `KernelResult`, `SyscallResult`, and conversion helpers |
+| `src/core/error.rs` | Separate smaller `KernelError` and `KResult` used through `kcore`/`core` |
+| `src/error_production.rs` | Additional error/context implementation not declared by the crate root |
+| `scheme-api::SchemeError` | Shared scheme/protocol errors |
+| `vfs-core::VfsError` | Workspace VFS errors; integer conversions use positive discriminants |
+| `mm-core::MmError` | Workspace MM errors; integer conversions use positive discriminants |
+| `syscall/errno.rs` | Syscall negative-error helpers/constants |
+| Subsystem-local enums | ELF, usercopy, io_uring, device and other contextual errors |
 
-// After  
-fn open_file(path: &str) -> KernelResult<File> {
-    if !exists(path) { return Err(KernelError::NotFound); }
-    // ...
-}
+These surfaces are not aliases of one completed type. In particular, converting a workspace error to an integer is not automatically the same as producing a negative syscall return.
 
-// Syscall wrapper
-#[no_mangle]
-pub fn sys_open(path: *const u8) -> isize {
-    syscall_wrapper!(open_file(unsafe { read_string(path) }))
-}
-```
+## Required migration behavior
 
-## Consequences
-### Positive
-- Consistent error handling across all subsystems
-- Automatic errno conversion reduces boilerplate
-- Better error tracing and debugging
-- Type-safe error propagation
+- **Sign tests**: Test successful values and error values at each syscall/protocol adapter.
+- **Information preservation**: Retain useful context internally without leaking kernel addresses or private data to userspace.
+- **No false success**: Do not replace unsupported behavior with `Ok(())`, zero, or a fabricated object merely to satisfy a caller.
+- **Rollback**: Propagate errors only after restoring ownership/accounting invariants for partial operations.
+- **Compatibility**: Update consumers and tests before removing a legacy error type.
 
-### Negative
-- Migration effort for existing code
-- Some performance overhead from enum conversions
-
-## Implementation
-See `src/error.rs` for the complete implementation.
+The [syscall guide](../syscalls.md) describes boundary checks, and [production requirements](../production_requirements.md) explain why a uniform type alone is insufficient for reliability. Error consolidation remains source work, not a documentation-only completion.

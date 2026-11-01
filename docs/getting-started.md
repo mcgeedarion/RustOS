@@ -1,135 +1,89 @@
-# Getting Started — RustOS Developer On-Ramp
+# Getting started
 
-_Last reviewed: 2026-10-13._
+Use `cargo xtask` from the repository root for the supported build and run commands. At the audited revision `08a14f6`, slim-profile checks work independently of the full graph, while the default full x86_64 check fails in existing source.
 
-The default validation command compiles the full subsystem graph:
+## Tooling
+
+The repository pins `nightly-2026-06-07` in `rust-toolchain.toml`; the required components are `rust-src`, `llvm-tools-preview`, `rustfmt`, and `clippy`. The xtask alias explicitly builds an `x86_64-unknown-linux-gnu` host executable, so the documented on-ramp is a Linux x86_64 development environment rather than a verified native Windows or macOS workflow.
 
 ```bash
-cargo xtask check --arch x86_64
+rustup show
+rustc --version
+cargo --version
+cargo xtask help
 ```
 
-The separate known-scope minimal boot smoke is explicit:
+Kernel builds use nightly `build-std`; custom JSON targets also require `-Z json-target-spec`, which xtask supplies. QEMU runs additionally need the matching `qemu-system-*` executable and firmware; xtask packs newc archives in Rust, while the alternative shell packaging scripts use host tools such as `cpio`.
+
+For an Ubuntu-style development environment, the repository's workflows install packages from this group. Package availability is host-dependent; these commands are prerequisites, not test results.
+
+```bash
+sudo apt-get update
+sudo apt-get install -y build-essential clang llvm lld ripgrep cpio \
+  mtools musl-tools qemu-system-x86 qemu-system-arm qemu-system-misc \
+  ovmf qemu-efi-aarch64
+```
+
+## First compile check
+
+Start with an explicitly scoped minimal build rather than expecting the default full graph to compile. This checks Rust compilation, not firmware launch or a running userspace process.
+
+```bash
+cargo xtask check --arch x86_64 --features boot_minimal
+cargo xtask build --arch x86_64 --features boot_minimal
+```
+
+For other target families, use the corresponding architecture selection. UEFI is the default boot mode, and AArch64 additionally accepts `--boot baremetal`.
+
+```bash
+cargo xtask check --arch aarch64 --features boot_minimal
+cargo xtask check --arch riscv64 --features boot_minimal
+```
+
+The AArch64 slim checks passed during this audit. The RISC-V slim checks fail at the existing unresolved `SIZE` constant in `arch/riscv64/mem_layout.rs`; the command is shown for reproduction, not as a passing path.
+
+## Minimal emulator smoke
+
+Use this command only as a first-stage boot test. `BOOT_MINIMAL_OK` verifies that selected path, not MM/VFS/process or userspace behavior.
 
 ```bash
 cargo xtask smoke --arch x86_64 --features boot_minimal
 ```
 
-The default full-kernel runtime gate is `cargo xtask smoke --arch x86_64`.
-It enforces userspace child execution, exact-PID reaping with status zero,
-benchmark JSON, and timing-parser success. It remains blocked until the real
-ELF mapping, initial stack, and process scheduling path are integrated.
+For interactive launch, use `cargo xtask run --arch x86_64 --features boot_minimal`. The x86_64 path resolves OVMF from `OVMF_CODE`, installed firmware paths, or its download cache; an explicit `OVMF_CODE` avoids depending on remote mirrors.
 
-## Prerequisites
+## Inspect an init image
 
-### Rust toolchain
-
-The repository pins nightly Rust in `rust-toolchain.toml`. `rustup` installs the
-specified toolchain/components automatically when you run Cargo in the repo.
-
-### QEMU and firmware
-
-| Need | Debian/Ubuntu | Fedora/RHEL | Arch | macOS/Homebrew |
-|---|---|---|---|---|
-| x86_64 QEMU | `sudo apt install qemu-system-x86` | `sudo dnf install qemu-system-x86` | `sudo pacman -S qemu-system-x86` | `brew install qemu` |
-| x86_64 OVMF | `sudo apt install ovmf` | `sudo dnf install edk2-ovmf` | `sudo pacman -S edk2-ovmf` | bundled with QEMU |
-| AArch64 QEMU/firmware | `sudo apt install qemu-system-arm qemu-efi-aarch64` | distro equivalent | distro equivalent | install QEMU and set `QEMU_EFI` if needed |
-
-`xtask` resolves x86_64 OVMF from `OVMF_CODE`, known system paths, a cached
-`.ovmf/OVMF_CODE.fd`, or an automatic Fedora RPM download when helper tools are
-available. For AArch64, set `QEMU_EFI` if the known firmware paths are absent.
-
-## Golden path
+The diagnostic profile uses the real CPIO reader and ELF metadata checks but intentionally does not execute `/init`. Expect `USERSPACE_BOOT_UNSUPPORTED`; xtask rejects this profile as a successful smoke contract.
 
 ```bash
-git clone https://github.com/mcgeedarion/RustOS.git
-cd RustOS
-cargo xtask check --arch x86_64
-cargo xtask smoke --arch x86_64 --features boot_minimal
+cargo xtask build-init --arch x86_64
+cargo xtask run --arch x86_64 --features userspace_boot --initrd
 ```
 
-The explicit minimal smoke writes serial output to `target/smoke-x86_64.log` and
-passes only when the `BOOT_MINIMAL_OK` sentinel appears. Idle-loop text and a
-userspace alias are not sufficient. The full userspace gate is separate:
+## Work on the full kernel
+
+The commands below select the full graph and its real userspace-execution contract. They are reproduction commands for ongoing integration work, not a promise of a passing build at this revision.
 
 ```bash
+cargo xtask check --arch x86_64
 cargo xtask smoke --arch x86_64
 ```
 
-That gate stays blocked until init can successfully execute/reap `/smoke` and
-`/bench` with normal zero exits from a working userspace process backend.
+Do not add `boot_minimal` to a failing full command and report the result as a fix. Read [current blockers](source-audit.md), [build options](build-reference.md), and [the smoke protocol](userspace-smoke.md) before changing a gate.
 
-## Common commands
+## Fast host checks
+
+These tests avoid the full kernel's compilation blockers and exercise specific production units or parsers. Their scope and observed results are recorded in [coverage](code_coverage.md) and [the audit](source-audit.md).
 
 ```bash
-# Compile only, using the same target/feature handling as the boot path
-cargo xtask check --arch x86_64
-
-# Build the EFI artifact only
-cargo xtask build --arch x86_64
-
-# Build kernel + stage ESP + assemble boot-x86_64.img
-cargo xtask image --arch x86_64
-
-# Interactive QEMU run instead of marker-checked smoke
-cargo xtask run --arch x86_64
-
-# QEMU run with GDB server on tcp::1234
-cargo xtask debug --arch x86_64
-
-# Build init, smoke, benchmark binaries and pack initramfs.cpio
-cargo xtask build-init --arch x86_64
-
-# Validate roadmap/status/syscall/fault documentation contracts
-cargo xtask roadmap-check
-
-# Fast local aggregate gate
-cargo xtask ci-local
+cargo xtask test
+bash scripts/ci/test-region-heap.sh
+bash scripts/ci/test-pmm-init.sh
+bash scripts/ci/test-kstack-ownership.sh
+bash scripts/ci/test-exit-lifecycle.sh
+python3 scripts/ci/test-boot-marks.py
+python3 -m unittest discover -s scripts/ci/tests -p 'test_*.py'
 ```
 
-## Feature/profile notes
-
-| Selection | Purpose |
-|---|---|
-| default `full_kernel` | Selects the normal subsystem graph with UEFI firmware entry |
-| `--features boot_minimal` | Explicit minimal boot path and sentinel contract |
-| `--features userspace_boot --initrd` | Diagnostic-only userspace handoff experiments |
-| `--profile release-boot` | Lean image profile; size baselines are documented separately |
-
-## Disk image layout
-
-```text
-boot-x86_64.img
-└── EFI/
-    └── BOOT/
-        └── BOOTX64.EFI
-STARTUP.NSH
-```
-
-The image is assembled by the built-in FAT16 writer; `mtools` is not required
-for the default path.
-
-## Troubleshooting
-
-### `qemu-system-x86_64: not found`
-
-Install QEMU or set `QEMU` to a specific binary path.
-
-### OVMF firmware not found
-
-Install an OVMF package or set `OVMF_CODE=/path/to/OVMF_CODE.fd`.
-
-### AArch64 firmware not found
-
-Install AAVMF/QEMU EFI firmware or set `QEMU_EFI=/path/to/QEMU_EFI.fd`.
-
-### Build fails because `core`/`alloc` is unavailable
-
-Ensure `rustup` is installed and run any Cargo command from the repository root
-so the pinned nightly and `rust-src` component can be installed.
-
-## Where to look next
-
-- Current subsystem maturity: `docs/status.md`
-- Milestone definitions: `docs/milestones.md`
-- Architecture policy: `docs/architecture.md`
-- Syscall matrix: `docs/syscalls.md`
+Raw `cargo test` inherits the default UEFI target and is not the host-test entry point. For independently testable workspace crates, pass an explicit host target and standard-library build configuration as shown in [the build reference](build-reference.md).

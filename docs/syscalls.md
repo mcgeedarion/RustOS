@@ -1,94 +1,71 @@
-# RustOS Syscall Correctness Matrix
+# System calls
 
-_Last reviewed: 2026-07-01._
+The syscall implementation is a Linux-shaped subset with explicit architecture translation and additional RustOS interfaces. This guide describes routing at `08a14f6`; a syscall number, constant, or match arm is not proof that the target implementation compiles or has complete Linux semantics.
 
-Syscall code currently lives in the **full kernel graph** and is not compiled by
-the default `uefi_boot`/`boot_minimal` profile. The table below reflects the
-current implementation maturity of the syscall surface, not a Linux
-compatibility claim.
+## Entry and routing
 
-## Status legend
+```text
+architecture syscall/trap entry
+  saved user context
+  syscall::dispatch_arch(SyscallAbi, number, arguments, return_pc)
+    architecture-number translation
+    shared dispatch context and policy
+      filesystem / process / memory / IPC / misc routers
+      selected direct compatibility handlers
+```
 
-| Status | Meaning |
-|---|---|
-| `real` | Correct implementation with in-kernel or host-side coverage |
-| `partial` | Main path exists, but semantics, edge cases, or bad-pointer handling are incomplete |
-| `stub` | Routed to a fixed result or `ENOSYS`/similar placeholder |
-| `planned` | Not implemented yet |
+`src/syscall/mod.rs` contains `SyscallAbi`, `dispatch_arch`, canonical dispatch, and many implementation helpers. `dispatcher_context.rs`, `driver.rs`, `errno.rs`, `nr.rs`, `profile.rs`, `routers.rs`, `scheme.rs`, `signal_nr.rs`, and feature-gated `kmtest.rs` are declared submodules.
 
-**EFAULT-safe** means every userspace pointer is validated and the syscall
-returns `-EFAULT` instead of panicking or faulting the kernel. A `partial` value
-means some pointer paths are guarded but the syscall has not been fully audited.
+Four additional files are textually compiled into the parent with `include!`: `p0_gaps.rs`, `openat2_mincore.rs`, `stubs.rs`, and `posix_full.rs`. They are active source fragments, not independent module namespaces, and their functions participate in the parent dispatch implementation.
 
-## Syscall infrastructure
+The current tree also contains undeclared alternatives such as `syscall/fs.rs`, `net.rs`, `sched.rs`, `fault.rs`, and `musl_compat.rs`. Do not include their functions in a supported-API list unless they are actually wired through the module graph and router.
 
-| Component | Status | Notes |
-|---|---|---|
-| `src/syscall/routers.rs` | partial | Routing layer exists for the full-kernel graph |
-| `src/syscall/nr.rs` | partial | Linux syscall number definitions exist |
-| `src/syscall/stubs.rs` | **real** | Documented ENOSYS stubs for deprecated/complex syscalls — intentionally unimplemented by design |
-| `src/syscall/fault.rs` | partial | Fault-injection hooks for resource/fd-table errors |
-| `src/syscall/profile.rs` | partial | Optional `syscall-trace` counters and timing hooks |
-| `src/arch/x86_64/syscall.rs` | partial | x86_64 syscall entry glue exists |
-| `src/arch/aarch64/syscall.rs` | partial | AArch64 syscall entry glue exists |
+## Architecture translation
 
-### Intentionally unimplemented syscalls (ENOSYS by design)
+x86_64 numbers pass directly to canonical dispatch. AArch64 and RISC-V share an explicit translation subset; unlisted numbers return `-38` (`ENOSYS`) rather than falling through to an unrelated x86_64 operation.
 
-The following syscalls return `ENOSYS` intentionally as documented in `src/syscall/stubs.rs`:
+| AArch64/RISC-V number | Canonical number | Operation |
+| --- | --- | --- |
+| 23 / 24 / 25 | 32 / 292 / 72 | dup / dup3 / fcntl |
+| 29 | 16 | ioctl |
+| 35 / 38 | 263 / 264 | unlinkat / renameat |
+| 56 / 57 / 59 | 257 / 3 / 293 | openat / close / pipe2 |
+| 62 / 63 / 64 | 8 / 0 / 1 | lseek / read / write |
+| 65 / 66 | 19 / 20 | readv / writev |
+| 67 / 68 | 17 / 18 | pread64 / pwrite64 |
+| 82 / 83 | 74 / 75 | fsync / fdatasync |
+| 93 / 94 | 60 / 231 | exit / exit_group |
+| 101 / 113 / 124 | 35 / 228 / 24 | nanosleep / clock_gettime / sched_yield |
+| 134 / 135 | 13 / 14 | rt_sigaction / rt_sigprocmask |
+| 160 / 172 / 173 | 63 / 39 / 110 | uname / getpid / getppid |
+| 214 / 215 | 12 / 11 | brk / munmap |
+| 220 | 57 | Fork-compatible clone subset |
+| 221 / 222 / 226 | 59 / 9 / 10 | execve / mmap / mprotect |
+| 260 / 278 / 291 | 61 / 318 / 332 | wait4 / getrandom / statx |
+| `0x8000_0000` / `0x8000_0001` | Same | Private kmtest interfaces |
 
-| Syscall | Line | Reason | Impact |
-|---|---:|---|---|
-| `remap_file_pages` | 408 | Deprecated Linux syscall, obsolete API | None - modern kernels discourage use |
-| `kexec_file_load` | 422 | Requires secure boot handling, architecture-specific | Userspace can fall back to `kexec_load` or `reboot` |
-| `bpf` | 430 | eBPF subsystem requires JIT compiler, verifier, extensive infrastructure | Complex subsystem not required for basic operation |
-| `userfaultfd` | 438 | Advanced memory management requiring userspace page fault handling | Specialized feature not needed for standard workloads |
+For number 220, dispatch replaces architecture-specific clone arguments with zeros before the current fork-compatible route. This is not general `clone`, thread creation, or `clone3` support.
 
-These stubs are **documented, intentional, and not blockers** for basic kernel operation. They represent conscious design decisions to exclude complex/deprecated functionality from the initial kernel surface.
+## Subsystem ownership
 
-## Minimum init syscall set (M3 gate)
+- **Filesystem router**: Read/write/stat/path operations, descriptor duplication, pipes, polling, timer/event/signal FDs, inotify/fanotify, sockets, io_uring, and related controls. Actual backing code spans `fs`, `net`, and `io_uring`.
+- **Process router**: Identity, fork/exec, exit/wait, signals, scheduling, credentials, limits, ptrace, namespaces and related calls. The `clone3` arm refers into an empty `proc/clone.rs`.
+- **Memory router**: mmap, protection/unmap, brk and related VM controls. Mapping and usercopy semantics are architecture-sensitive.
+- **IPC router**: SysV/POSIX queue, semaphore, and shared-memory operations. Userspace-driver endpoint syscalls additionally live in IPC/device glue.
+- **Misc/time helpers**: Clocks, uname, random data, resource/compatibility interfaces, and selected extended calls. Accepted no-ops and explicit unsupported paths must be documented individually.
 
-All rows in this section must become `real` and EFAULT-safe before M3 can be
-closed.
+Seccomp policy and optional profiling surround dispatch. `dispatch_arch` also invokes deferred exec-image cleanup before servicing the next call.
 
-| Syscall | Linux x86_64 number | Status | EFAULT-safe | Notes |
-|---|---:|---|---|---|
-| `read` | 0 | partial | partial | File/socket/pipe paths exist in the tree; semantics need full audit |
-| `write` | 1 | partial | partial | Console/file-backed behavior is still being unified |
-| `open` / `openat` | 2 / 257 | partial | partial | VFS/open helpers exist; compatibility and edge cases remain |
-| `close` | 3 | partial | n/a | fd lifecycle exists but needs broader coverage |
-| `fork` / `clone` | 57 / 56 | partial | n/a | Process/task creation code exists; POSIX semantics incomplete |
-| `execve` | 59 | partial | partial | ELF loader path exists; argv/envp/auxv correctness remains |
-| `exit` / `exit_group` | 60 / 231 | partial | n/a | Teardown paths exist; group semantics need validation |
-| `wait4` | 61 | partial | partial | Wait/child collection code exists; options/status edge cases remain |
+## User-memory and descriptor rules
 
-## Extended M4/M5 syscall areas
+Use `kernel/uaccess.rs` for range validation and copying rather than turning arbitrary user addresses into Rust slices. Validate array-length multiplication, string bounds, pointer-plus-size overflow, read/write permissions, and errors before changing kernel state.
 
-| Area | Representative syscalls | Status | Notes |
-|---|---|---|---|
-| Memory mapping | `mmap`, `mprotect`, `munmap`, `brk`, `mincore` | partial | VMA/mmap modules exist; file-backed and protection edge cases remain |
-| File metadata/directories | `stat`, `fstat`, `getdents`, `fcntl`, `ioctl` | partial | VFS helpers exist but compatibility is incomplete |
-| Polling and events | `poll`, `eventfd`, `timerfd`, `signalfd`, `inotify`, `fanotify` | partial | Modules exist; userspace ABI coverage is incomplete |
-| Pipes and fd movement | `pipe`, `dup`, `dup2`, `splice`, `close_range` | partial | Implementations/scaffolding exist with incomplete semantics |
-| Sockets | `socket`, `bind`, `listen`, `accept`, `connect`, UDP/TCP ops | experimental | Network/socket modules exist but are not M5-supported yet |
-| Scheduling/time | `nanosleep`, futex, rusage/rlimit/time helpers | partial | Core modules exist; conformance needs tests |
-| Security/namespaces | seccomp/capability/namespace-related calls | experimental | Security scaffolding exists; policy semantics are incomplete |
-| io_uring | setup/enter/register and selected ops | experimental | Ring and op modules exist; not a compatibility guarantee |
+Translate process-visible FDs through `fs/process_fd.rs` before using backing stores. A successful `open`, `dup`, or `close` must preserve the correct shared object, open flags, offset, and lifetime rather than merely returning a plausible integer.
 
-## Safety invariants
+EFAULT-safe handling is a required property, not a blanket certification of every routed syscall. Negative errno is the syscall boundary convention; the tree has several internal error families and conversion layers, as described in [ADR 0002](adr/0002-unified-error-handling.md).
 
-1. No syscall should panic on a bad userspace pointer.
-2. Malformed arguments (`fd < 0`, invalid flags, zero lengths, null pointers
-   where not allowed) must return errno values instead of `unwrap()`/`expect()`.
-3. `syscall-trace` must stay off by default and must not add overhead to normal
-   smoke or release-boot images.
-4. New syscall work should add or update `kmtest` coverage before changing a
-   row to `real`.
+## Maturity and tests
 
-## Adding or promoting a syscall
+The full x86_64 compile check fails in the audited revision, and RISC-V slim checks fail independently. RISC-V user signal-handler delivery is intentionally deferred until its signal-frame and return protocol is complete.
 
-1. Add/update the router and implementation under `src/syscall/` or the owning
-   subsystem module.
-2. Add bad-pointer and malformed-argument coverage where applicable.
-3. Update this matrix and `docs/status.md` in the same change.
-4. Run `cargo xtask roadmap-check` and the most relevant `cargo xtask check` or
-   smoke command.
+Guest smoke assertions provide a concrete subset contract; they are not a broad POSIX/Linux conformance suite. Host parser tests, hosted diagnostic tests, and per-file unit harnesses have different coverage and must remain separately reported in [coverage](code_coverage.md).

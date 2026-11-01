@@ -1,123 +1,26 @@
-# RustOS Boot Optimization Checklist
+# Boot optimization checklist
 
-A structured checklist for profiling and optimizing the x86_64 UEFI boot path in RustOS. Work through sections in order — measurement comes first so every subsequent change is validated against data.
+This checklist is a measurement workflow, not a list of completed optimizations. It applies after the selected profile compiles and its required behavior passes.
 
----
+## Establish comparable evidence
 
-## 1. Measurement Infrastructure
+- **Revision and profile**: Pin source, architecture, boot mode, feature set, compiler, and Cargo profile.
+- **Runtime environment**: Record firmware, QEMU version/machine/CPU/acceleration, memory, disk layout, and host details.
+- **Correctness**: Require the matching minimal or full execution gate before accepting a faster result.
+- **Timing**: Validate single-boot markers, identify the counter/frequency, and keep raw ticks distinct from converted time.
+- **Size**: Measure EFI payload separately from the fixed 64 MiB image container.
+- **Repeatability**: Compare multiple equivalent runs and keep diagnostic/instrumentation differences visible.
 
-Before changing anything, establish a timing baseline.
+## Inspect before changing
 
-- [ ] Add `boot_timer::mark(tag)` calls around each boot phase in `src/arch/x86_64/uefi_entry.rs`:
-  - `FIRMWARE_ENTRY` — first instruction in `uefi_start`
-  - `MMAP_CAPTURED` — after UEFI memory map is read and `ExitBootServices()` returns
-  - `INITRAMFS_LOCATED` — after initramfs range is resolved from the ESP
-  - `BOOT_INFO_BUILT` — after `BootInfo` is fully populated
-  - `KERNEL_MAIN_ENTER` — first line of `kernel_main`
-  - `ARCH_INIT_DONE` — after `arch::init()` returns
-- [ ] Emit all timing marks to the serial log in a parseable format, using the `BOOT_MARK label=<LABEL> ticks=<U64>` format documented in `docs/boot-perf.md`
-- [ ] Add a CI step in `xtask smoke / repository CI` that greps the serial log for `BOOT_MARK` markers and records them as job annotations
-- [ ] Record a cold-boot baseline in `docs/boot-perf-baseline.txt` so future PRs can diff against it
-- [ ] Use identical QEMU flags for every measurement run to eliminate timing noise
+- **Initialization order**: Identify real dependencies before deferring a service or enabling interrupts earlier.
+- **Logging**: Measure serial-output cost; do not remove markers or failure diagnostics needed by CI.
+- **Allocation**: Distinguish slim bump heaps from the full reclaiming heap and PMM boot metadata.
+- **Loading**: Separate CPIO/ELF inspection from actual mappings, scheduler activation, and user-mode transfer.
+- **Linking**: Inspect sections and retained data before attributing size changes to LTO or strip settings.
 
----
+## Current blockers
 
-## 2. UEFI Entry Path (`src/arch/x86_64/uefi_entry.rs`)
+The full x86_64 graph fails compilation, RISC-V slim checks fail, and the documentation audit ran no QEMU timing experiment. Guest performance optimization is therefore not an achieved outcome of this refresh.
 
-Keep the pre-`ExitBootServices()` window as short as possible.
-
-- [ ] Audit every UEFI protocol handle open/close — close handles as soon as they are no longer needed
-- [ ] Remove any `BootServices::stall()` or `BootServices::set_watchdog_timer()` calls that add delay
-- [ ] Eliminate repeated GOP framebuffer probes; probe once and cache the result
-- [ ] Do not iterate all loaded images unless the cmdline requires it
-- [ ] Confirm `ExitBootServices()` is called exactly once with no retry loop unless firmware requires it
-- [ ] Ensure the stack switch (if any) happens after `ExitBootServices()`, not before
-
----
-
-## 3. BootInfo Construction (`src/init/boot_info.rs and related `src/init/` boot handoff code`)
-
-The handoff struct should be built with zero heap allocation and no redundant copies.
-
-- [ ] Verify all `BootRange` fields are physical addresses — no virtual translation during boot
-- [ ] Confirm `EfiMemoryMapInfo` stores only the pointer and sizes, not a copied slice
-- [ ] Remove any `memcpy` or `clone()` of the UEFI memory descriptor buffer before `kernel_main`
-- [ ] Confirm `BootInfo` fits in a single cache line or is at minimum `#[repr(C, align(64))]`
-
----
-
-## 4. Memory Map Processing (`src/mm/memmap.rs`, `src/arch/x86_64/memory.rs`)
-
-Parsing the memory map is often the single most expensive operation during early boot.
-
-- [ ] Use a single-pass iterator over the UEFI descriptor buffer — no sort, no dedup, no Vec allocation
-- [ ] Remove the now-dead `BootSource::Multiboot2` arm (already done) — confirm no dead branches remain
-- [ ] Cap the number of regions processed early; defer full map walk to the PMM initialisation path
-- [ ] Consider a `#[inline(never)]` boundary between the boot map walk and PMM init to isolate profiling
-
----
-
-## 5. Initramfs Discovery (`src/init/initramfs.rs / src/fs/initramfs.rs`)
-
-- [ ] Use the `LoadFile2` protocol pointer stored by the UEFI stub — do not scan the ESP directory
-- [ ] Confirm `set_initramfs_range()` is called exactly once before the heap is initialised
-- [ ] If the initramfs is not present, `set_initramfs_range()` should be a no-op with no filesystem probe
-
----
-
-## 6. Serial / Logging Overhead
-
-Debug output is often the largest single source of boot latency.
-
-- [x] Gate all `log::debug!` and `log::trace!` calls in the boot path behind a `cfg(feature = "boot_debug")` feature flag
-- [ ] Ensure `log::info!` boot banners are flushed synchronously only once (not per-region)
-- [ ] Remove any spinloop-based serial flush that polls longer than one character time
-- [ ] In CI smoke runs, pipe QEMU serial output to a file rather than a terminal to avoid PTY buffering
-
----
-
-## 7. Build and Image Size
-
-A smaller boot image loads faster from the virtual disk.
-
-- [ ] Run `cargo bloat --release --target x86_64-unknown-uefi` and review the top 20 functions
-- [ ] Strip `.comment` and `.eh_frame` sections (already in `linker/x86_64.ld` — verify they stay stripped on release builds)
-- [x] Confirm `opt-level = "z"` or `opt-level = 3` is set in `[profile.release]` in the root `Cargo.toml`
-- [x] Confirm LTO is enabled: `lto = "thin"` at minimum for the release profile
-- [ ] Keep `boot-x86_64.img` under 2 MB for CI; add a size check step to `xtask smoke / repository CI`
-
----
-
-## 8. QEMU / CI Tuning
-
-Reduce overhead in the test environment without masking real-hardware issues.
-
-- [ ] Keep default smoke/kmtest runs on explicit TCG (`-accel tcg`) for deterministic CI and to avoid host KVM/nested-virtualization exposure; only opt into KVM on patched, trusted hosts.
-- [ ] If a local performance run uses KVM, require `-cpu host`, confirm host kernel KVM fixes are applied, and keep nested virtualization disabled unless a test explicitly needs it.
-- [ ] Add `-m 256M` as the floor; do not allocate more than needed for smoke/kmtest runs
-- [ ] Add `-no-reboot -no-shutdown` so QEMU exits immediately on triple fault rather than waiting
-- [ ] Pass `-serial stdio` and redirect to a log file; do not use `-serial mon:stdio` in CI
-- [ ] Set an explicit QEMU timeout in `run_qemu.sh` (e.g. `--timeout 30` for smoke, `--timeout 90` for kmtest)
-
----
-
-## 9. Regression Gate
-
-- [x] Add a `boot-perf` job to `repository CI` that fails if any phase exceeds its baseline by more than 20%
-- [x] Store the baseline in `docs/boot-perf-baseline.txt` and update it intentionally via a `[perf-update]` commit flag
-- [ ] Run the full smoke boot on every PR, not just pushes to `main`
-
----
-
-## Priority Order
-
-| # | Item | Expected win | Effort |
-|---|------|-------------|--------|
-| 1 | Add timing markers | Baseline only | Low |
-| 2 | Gate debug logging behind feature flag | Medium | Low |
-| 3 | Single-pass memory map walk | Medium | Medium |
-| 4 | Remove redundant UEFI protocol probes | Small–Medium | Low |
-| 5 | Enable LTO + `opt-level=3` | Medium | Low |
-| 6 | Add CI size and perf regression checks | Long-term safety | Medium |
-| 7 | `LoadFile2` initramfs (vs ESP scan) | Large if scanning | Medium |
-| 8 | BootInfo zero-copy handoff | Small | Low |
+`boot-regression.sh` and the current timing parser do not share a generated JSON schema, and the image-size gate measures a fixed-capacity container. Resolve those evidence boundaries before presenting automated regression thresholds as operational guarantees.

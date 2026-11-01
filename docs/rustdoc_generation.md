@@ -1,162 +1,35 @@
-# RustOS API Documentation Generation
+# Generating API documentation
 
-## Generating rustdoc API Documentation
+The Markdown guides describe subsystem contracts and limitations, while rustdoc describes the selected Rust compilation graph. There is no checked-in dedicated rustdoc-generation script or rustdoc workflow at `08a14f6`.
 
-This document describes how to generate comprehensive API documentation for the RustOS kernel.
+## Minimal-profile rustdoc
 
-### Prerequisites
-
-```bash
-# Ensure you have the Rust toolchain installed
-rustup install nightly
-rustup component add rust-docs
-```
-
-### Generate Documentation
-
-#### Standard Documentation
+The following command passed during the audit and generated the selected library documentation. It emitted two existing intra-doc-link warnings from source comments and does not document the excluded full subsystems.
 
 ```bash
-# Generate documentation for all crates
-cargo doc --all-features --no-deps
-
-# Open in browser (Linux)
-xdg-open target/doc/rustos_kernel/index.html
-
-# Open in browser (macOS)
-open target/doc/rustos_kernel/index.html
+cargo doc -p rustos-kernel --lib --no-deps \
+  --target x86_64-unknown-uefi -Z build-std=core,alloc \
+  --no-default-features --features boot_minimal
 ```
 
-#### With Private Items
+The output is `target/x86_64-unknown-uefi/doc/rustos_kernel/index.html`. Treat generated HTML as a build artifact rather than a Markdown documentation replacement.
+
+## Portable crates
 
 ```bash
-# Include private items for kernel developers
-cargo doc --all-features --document-private-items --no-deps
+cargo doc -p scheme-api -p vfs-core -p mm-core -p sync-primitives \
+  --no-deps --target x86_64-unknown-linux-gnu \
+  -Z build-std=std,panic_abort
 ```
 
-#### Nightly Features
+This is a scoped generation command, not a recorded audit result. Workspace re-exports and feature gates influence which API appears.
 
-```bash
-# Use nightly for unstable features
-cargo +nightly doc --all-features --no-deps \
-    -Z unstable-options \
-    --enable-index-page
-```
+## Full graph and feature conflicts
 
-### Documentation Structure
+Default full-kernel rustdoc is limited by the same unresolved module/type integration as the full compile check. Do not hide those failures by replacing a full documentation claim with a minimal-profile output.
 
-The generated documentation includes:
+Do not use `--all-features`: `boot_minimal` and `userspace_boot` are explicitly mutually exclusive. Root `[package.metadata.docs.rs] all-features = true` conflicts with that contract and remains a source/configuration issue outside this docs-only change.
 
-1. **Kernel Core** (`src/`)
-   - Architecture-specific implementations
-   - Memory management
-   - Process scheduler
-   - System call interface
+## Keeping generated and handwritten docs aligned
 
-2. **Filesystem Drivers** (`src/fs/`)
-   - VFS layer
-   - ext4/ext2 driver
-   - FAT32 driver
-   - tmpfs/ramfs
-   - JBD2 journaling
-
-3. **SMP Subsystem** (`src/smp/`)
-   - CPU hotplug state machine
-   - Per-CPU data structures
-   - IPI handling
-
-4. **Device Drivers** (`src/drivers/`)
-   - VirtIO drivers
-   - PCIe subsystem
-   - ACPI integration
-
-5. **IPC Mechanisms** (`src/ipc/`)
-   - Message queues
-   - Pipes
-   - Shared memory
-
-### Custom Documentation Themes
-
-Create a custom theme in `docs/rustdoc-theme.css`:
-
-```css
-/* Custom RustOS documentation theme */
-.sidebar-logo {
-    content: url("logo.png");
-}
-
-.docblock {
-    background-color: #f8f9fa;
-}
-```
-
-Apply with:
-```bash
-cargo doc --theme-files docs/rustdoc-theme.css
-```
-
-### Documentation Tests
-
-Run doctests to ensure examples compile:
-
-```bash
-cargo test --doc --all-features
-```
-
-### Continuous Documentation
-
-Documentation is automatically generated and deployed on every merge to main via GitHub Actions.
-
-See `.github/workflows/docs.yml` for configuration.
-
-### Viewing Documentation Locally
-
-After generating docs, serve them locally:
-
-```bash
-# Using Python
-cd target/doc
-python3 -m http.server 8000
-
-# Then open http://localhost:8000/rustos_kernel/
-```
-
-### Documentation Guidelines
-
-When adding new modules or functions:
-
-1. **Module-level docs**: Explain purpose and architecture
-2. **Function docs**: Document parameters, return values, errors
-3. **Examples**: Include usage examples in code blocks
-4. **Safety**: Mark unsafe functions and explain invariants
-5. **Panics**: Document panic conditions
-
-Example:
-```rust
-/// Bring a CPU online through the hotplug state machine.
-///
-/// Transitions the CPU through states:
-/// `Offline → Starting → Online`
-///
-/// # Arguments
-/// * `cpu_id` - Logical CPU ID to bring online
-///
-/// # Returns
-/// * `Ok(())` - CPU successfully brought online
-/// * `Err(HotplugError)` - Operation failed
-///
-/// # Safety
-/// Caller must ensure the CPU is physically present
-///
-/// # Example
-/// ```rust,no_run
-/// use rustos_kernel::smp::hotplug::cpu_up;
-///
-/// unsafe {
-///     cpu_up(2).expect("Failed to bring up CPU 2");
-/// }
-/// ```
-pub unsafe fn cpu_up(cpu_id: u32) -> HotplugResult<()> {
-    // ...
-}
-```
+Update [the module index](module-map.md), the appropriate subsystem guide, and validation results when declarations, includes, features, or exported contracts change. Do not edit generated HTML manually or infer implemented behavior solely from an exported type's name.

@@ -1,48 +1,47 @@
-# Fault-recovery validation catalog
+# Guest fault-recovery contract
 
-This catalog is the acceptance contract for future guest fault-integration work.
-The current fault-injection CI job tests the atomic one-shot engine on the host.
-It does not exercise PMM, VMM, syscall, or process recovery inside a booted kernel.
-The kernel-integration workflow must remain disabled until an executable guest
-harness can inject each scenario, observe fired and recovered markers, and prove
-that follow-up workloads succeed.
+This is the required evidence protocol for future guest fault integration, not a report of working kernel recovery. At `08a14f6`, the atomic engine is host-tested, but the production hook wrappers and guest test registration are incomplete.
 
-## Scenario catalog
+## Scenario vocabulary
 
-| Scenario | Intended injection | Expected recovery | Required guest follow-up |
-|---|---|---|---|
-| pmm_alloc_oom_once | Fail one physical-page allocation | Return allocation failure without corrupting allocator metadata | Allocate and free a fresh page; run a small userspace workload |
-| pmm_contiguous_alloc_once | Fail one contiguous allocation request | Return a bounded allocation error and restore temporary state | Retry a smaller allocation and free it |
-| vmm_map_once | Fail one page-table mapping | Unwind allocated tables/frames and report mapping failure | Map a different page, read/write it, then unmap |
-| vmm_reserve_once | Fail one virtual-region reservation | Leave VMA metadata unchanged | Reserve and release a valid region |
-| syscall_emfile_once | Make one file-descriptor allocation fail with EMFILE | Preserve existing descriptor state | Close a descriptor and verify open/read/write/close succeeds |
-| syscall_eagain_once | Return one transient EAGAIN from a retryable operation | Leave queue and process state consistent | Retry IPC send/receive and verify payload equality |
+| Scenario | Required failure path |
+| --- | --- |
+| `pmm_alloc_oom_once` | One single-frame PMM allocation failure |
+| `pmm_contiguous_alloc_once` | One contiguous PMM allocation failure |
+| `vmm_map_once` | One page-map failure |
+| `vmm_reserve_once` | One virtual-region reservation failure |
+| `syscall_emfile_once` | Descriptor exhaustion/error rollback |
+| `syscall_eagain_once` | Transient resource failure and recovery |
 
-## Marker protocol
+Each requested scenario needs the complete ordered chain below from the same real guest run. The snippet is a format example and must never be presented as captured test evidence.
 
-Guest integration must emit exact standalone marker records with a stable scenario
-identifier. A fired marker must only be printed when the corresponding production
-fault site actually injects the failure. A recovered marker must only be printed
-after the affected subsystem completes its cleanup/recovery path.
+```text
+RUSTOS_FAULT marker=fired scenario=pmm_alloc_oom_once
+RUSTOS_FAULT marker=recovered scenario=pmm_alloc_oom_once
+RUSTOS_FAULT marker=post_recovery_pass scenario=pmm_alloc_oom_once workload=allocation_probe exit=0
+```
 
-~~~~text
-RUSTOS_FAULT marker=fired scenario=<scenario>
-RUSTOS_FAULT marker=recovered scenario=<scenario>
-RUSTOS_FAULT marker=post_recovery_pass scenario=<scenario> workload=<name> exit=0
-~~~~
+`fired` proves the selected production check actually consumed a failure. `recovered` follows error handling and invariant/accounting checks; `post_recovery_pass` follows a later successful workload rather than merely resetting the fault budget.
 
-The post-recovery marker requires a real workload result, not merely a return from
-the fault-injection helper. The guest harness must fail on a missing marker, a
-kernel panic, a nonzero workload exit, or a result from the wrong scenario.
+## Validation command
 
-## Current evidence boundary
+The strict parser also requires the normal full userspace smoke/benchmark protocol. The fault flags do not create a standalone synthetic-log acceptance mode.
 
-scripts/ci/tests/fault_engine.rs emits scope=host_engine fired/recovered records
-to make host test logs searchable. Those records verify one-shot engine behavior
-only. They are deliberately not interchangeable with the guest marker protocol
-above.
+```bash
+python3 scripts/ci/parse_smoke_log.py target/smoke-x86_64.log \
+  --metadata target/smoke-x86_64-metadata.json --arch x86_64 \
+  --require-fault-scenarios \
+pmm_alloc_oom_once,pmm_contiguous_alloc_once,vmm_map_once,vmm_reserve_once,syscall_emfile_once,syscall_eagain_once
+```
 
-.github/workflows/fault-inject.yml keeps kernel integration behind the unsupported
-readiness guard. Do not enable that job until production callsites exist for the
-catalogued failures and the real guest harness retains QEMU logs, metadata, and
-post-recovery workload results.
+Unknown, duplicated, incomplete, or out-of-order scenario records fail validation. Host-scope logs, extra/malformed fields, nonzero workload exits, panic output, and diagnostic/minimal boot evidence are not acceptable substitutes.
+
+## Outstanding work
+
+- **Hook wiring**: Declare and call the production PMM/VMM/syscall wrappers at real resource boundaries.
+- **Test registration**: Connect the guest fault suite to a buildable full kernel and an actual runtime harness.
+- **Rollback checks**: Validate page/region/FD accounting, object ownership, error values, and cleanup after partial progress.
+- **Recovery workload**: Demonstrate continued allocation, mapping, process, filesystem, and IPC activity after injection.
+- **Artifacts**: Retain serial, metadata, fault configuration, assertion output, and exact source revision.
+
+The current source cannot be described as passing this gate. See [fault_inject.md](fault_inject.md) for the narrower engine implementation and [source-audit.md](source-audit.md) for executed tests.

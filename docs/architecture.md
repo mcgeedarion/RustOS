@@ -1,69 +1,71 @@
-# RustOS Architecture Support Policy
+# Kernel architecture
 
-_Last reviewed: 2026-10-13._
+RustOS declares a hybrid-kernel design in `src/kernel/architecture.rs`: privileged core services stay in the kernel, while schemes and IPC provide a boundary for userspace servers. This is the intended architecture at `08a14f6`, not a claim that all proposed servers or the full boot path currently work.
 
-RustOS currently has two maintained architecture paths. The repository is in a
-boot-first stabilization state: x86_64 UEFI is the primary path and AArch64 is
-kept buildable for UEFI and bare-metal bring-up. The default selects the full
-subsystem graph; minimal and diagnostic profiles are explicit opt-ins. A full
-subsystem build does not yet prove that userspace execution works.
+## Repository layers
 
-## Primary architecture: x86_64
+```text
+src/main.rs
+  architecture firmware entry
+    BootInfo + selected kernel_main
+      boot_minimal        early console + idle
+      userspace_boot      CPIO/ELF inspection + explicit unsupported marker
+      full graph          MM, scheduler, VFS, drivers, IPC, syscalls
 
-- **Boot method:** UEFI PE/COFF image using the `x86_64-unknown-uefi` target.
-- **Default feature path:** `full_kernel`, with UEFI firmware entry independent
-  of the selected subsystem graph.
-- **Minimal smoke command:** `cargo xtask smoke --arch x86_64 --features boot_minimal`.
-- **Full smoke command:** `cargo xtask smoke --arch x86_64`.
-- **Success contract:** minimal smoke requires `BOOT_MINIMAL_OK`; full smoke
-  requires the exact-PID userspace execution protocol, benchmark JSON, and timing
-  parser success from the same fresh QEMU log. The full path is blocked until
-  real ELF mapping, user-stack setup, and process scheduling are implemented.
-- **QEMU contract:** Q35 machine, OVMF firmware, 256 MiB RAM, serial captured to
-  `target/smoke-x86_64.log`.
+userspace programs
+  architecture syscall ABI
+    syscall::dispatch_arch -> canonical routers
+      process / memory / filesystem / IPC / time
+        kernel schemes or IPC-backed userspace service
+```
 
-## Secondary architecture: aarch64
+The selection rule is in `src/lib.rs`, not the presence of a `full_kernel` cfg around every subsystem. With neither `boot_minimal` nor `userspace_boot`, the full graph is selected even if default Cargo features were disabled.
 
-- **Boot methods:** UEFI PE/COFF via `aarch64-unknown-uefi`, and bare-metal ELF
-  via `targets/aarch64-kernel.json` plus `linker/aarch64.ld`.
-- **Minimal smoke command:** `cargo xtask smoke --arch aarch64 --features boot_minimal`.
-- **Full smoke command:** `cargo xtask smoke --arch aarch64` (execution currently blocked).
-- **Firmware requirement:** install AAVMF/QEMU EFI firmware or set `QEMU_EFI`.
-- **Status:** kept aligned with the shared `BootInfo`, early console, boot
-  marker, and idle-loop contracts. Full userspace execution remains blocked until
-  the architecture-aware process/address-space backend is integrated.
+## Kernel roots
 
----
+| Root | Responsibility | Documentation |
+| --- | --- | --- |
+| `arch`, `init`, `boot_perf`, `console`, `kernel`, `error` | Boot contracts, architecture dispatch, diagnostics, common error surface | [Platforms](firmware-and-platforms.md), [debugging](debugging.md) |
+| `allocator`, `mm` | Global heap, physical pages, virtual mappings, stacks | [Memory](memory-management.md) |
+| `proc`, `syscall`, `exec` | Process lifetime, scheduling, ABI boundary, ELF validation | [Processes](processes-and-scheduling.md), [syscalls](syscalls.md) |
+| `fs`, `block` | VFS, schemes, FDs, mounts, block devices | [Storage](filesystems-and-storage.md) |
+| `ipc`, `io_uring`, `sync` | Messaging, asynchronous requests, wait/wake primitives | [IPC](ipc-and-async-io.md), [synchronization](synchronization.md) |
+| `device`, `drivers`, `display`, `input`, `tty` | Enumeration, hardware access, graphics/input/terminal surfaces | [Drivers](drivers-and-devices.md) |
+| `net`, `security` | Protocol stack and policy enforcement | [Networking](networking.md), [security](security.md) |
+| `firmware`, `irq`, `smp`, `time` | Platform tables, interrupts, CPU bring-up, clock/timer services | [Platforms](firmware-and-platforms.md) |
+| `kcore` / compatibility alias `core` | Collections, CPU-local helpers, errors, panic helpers | [Synchronization](synchronization.md), [ADR 0002](adr/0002-unified-error-handling.md) |
+| `debug`, `kmtest`, `fault_inject` | Optional observability and testing surfaces | [Debugging](debugging.md), [coverage](code_coverage.md) |
 
-## Build-profile/module policy
+Some roots compile only in full builds, and `kmtest` and `fault_inject` add their own feature gates. Slim `mm` is an inline compatibility surface exposing the common bump allocator, not the full MM tree.
 
-The crate root intentionally selects one of three module graphs:
+## Workspace boundaries
 
-| Feature selection | Active path | Current purpose |
-|---|---|---|
-| `boot_minimal` only | first-stage boot only | firmware handoff, `BootInfo`, early console, boot marker, idle loop |
-| `userspace_boot` only | initramfs/ELF diagnostics | validates image metadata, then reports execution unavailable; never counts as a full userspace execution pass |
-| both slim features | rejected | the kernel crate emits a compile-time error to prevent ambiguous module selection |
-| `full_kernel` / Cargo defaults | full kernel graph with UEFI entry | compiles mm/fs/proc/net/security/drivers/syscalls; end-to-end userspace execution remains blocked |
+The root Cargo workspace contains the kernel, `xtask`, and seven library crates. The `userspace` and `fuzz` trees have separate workspace manifests and must be invoked separately.
 
-`full_kernel` is the default and enables `uefi_boot` without selecting `boot_minimal`.
-Use `--features boot_minimal` for the separate minimal smoke contract and
-`--features userspace_boot` for diagnostic-only experiments.
+- **`scheme-api`**: Shared no_std protocol types, errors, messages, flags, and raw syscall interface. This is the interface crate used across kernel/userspace boundaries.
+- **`vfs-core`**: Generic filesystem traits and an independent runtime registry. It is not the kernel's `fs::scheme_table`.
+- **`fs-ext4`, `fs-fat32`, `fs-tmpfs`**: Extraction-stage filesystem adapters. The first two contain `kernel_impl` conditional branches and fallback behavior; tmpfs is still a skeleton.
+- **`mm-core`**: Address and memory-management abstractions with NUMA/page metadata surfaces. The operational PMM remains under `src/mm`.
+- **`sync-primitives`**: Independently testable queued spinlock, RCU, and reader/writer primitives. The kernel also retains its own `src/sync` implementation.
+
+The kernel depends on these libraries and re-exports `mm_core_exports`, `sync_primitives_exports`, and `vfs_core_exports`. Dependency or re-export presence is not proof that every legacy implementation has been replaced.
+
+## Important integration boundaries
+
+The existing roadmap guard uses the labels “Primary architecture: x86_64” and “Secondary architecture: aarch64.” These are prioritization labels rather than runtime certification; RISC-V is a third source target with separately documented compile blockers.
+
+- **Syscall translation**: Architecture numbers are translated before canonical routing. Passing an AArch64 or RISC-V number directly to an x86-oriented router is not a portable call.
+- **Descriptor identity**: A process-visible FD, a scheme backing FD, a scheme-local `FileId`, and a raw VFS handle are different namespaces. Use the conversion and duplication helpers rather than treating them as interchangeable integers.
+- **Process identity and lifetime**: PCB snapshots support table inspection; identity-checked reaping removes a zombie only if it is still the same object. Scheduler raw pointers require longer-lived task storage than the PID index.
+- **Memory ownership**: Kernel stacks retain physical backing after retirement. Reclamation requires a stronger scheduler/TLB quiescence contract than “the process exited.”
+- **Service isolation**: IPC endpoints, driver handles, and `IpcProxyScheme` are present, but the userspace NIC prototype is not a packaged, proven server.
+
+## Current consistency limits
+
+The x86_64 full check fails at this revision, so this guide documents source relationships rather than a working complete system. Duplicate socket modules, missing declarations, empty integration files, and undeclared feature gates are tracked in [the source audit](source-audit.md).
+
+Legacy compatibility surfaces are retained deliberately in the documentation. [ADR 0001](adr/0001-workspace-crate-architecture.md) and [architecture improvements](architecture-improvements.md) describe what must be reconciled before the workspace split can be considered complete.
 
 ## Code organisation rules
 
-1. ISA-specific code lives under `src/arch/<arch>/`.
-2. Shared boot and kernel code should use architecture traits/functions from
-   `src/arch/` rather than open-coding target-specific branches.
-3. Cross-architecture handoff state must flow through the shared `BootInfo`
-   path in `src/init/`.
-4. Avoid adding new `#[cfg(target_arch = "...")]` outside architecture glue,
-   crate-root module selection, and minimal entry-point shims.
-
-## Adding a new architecture
-
-1. Add a target spec under `targets/` or use a supported Rust builtin target.
-2. Add `src/arch/<arch>/` with entry, paging, serial, interrupt, and syscall
-   glue as appropriate.
-3. Teach `xtask` the new `--arch` value and valid boot modes.
-4. Document smoke/build expectations here and in `docs/milestones.md`.
+Keep hardware register/entry code under the relevant architecture or driver, syscall argument validation at the boundary, and object ownership in the responsible subsystem. Explicitly record every `mod`, `#[path]`, `include!`, and feature change; a file added to the tree is not automatically compiled.

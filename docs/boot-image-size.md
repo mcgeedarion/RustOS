@@ -1,58 +1,27 @@
-# Boot Image Size
+# Boot image size
 
-_Last reviewed: 2026-07-01._
+The x86_64 size workflow measures the entire `boot-x86_64.img` container after a release-boot build. It does not directly measure kernel code size, heap use, resident memory, or initramfs payload.
 
-This document tracks how to measure RustOS boot image size. The repository has a
-`release-boot` profile intended for lean smoke/normal boot images, but the size
-baseline must be refreshed on the machine/toolchain that is used for release or
-CI reporting.
+## Current image contract
 
-## Current build intent
+xtask's partitioned FAT-image builder fixes `DISK_SECTORS` at 131,072 with 512-byte sectors, producing a 64 MiB container with GPT/ESP structures. `.github/workflows/image-size.yml` sets `IMAGE_SIZE_LIMIT_BYTES` to 67,108,864, the same container capacity.
 
-| Profile | Intent | Feature expectations |
-|---|---|---|
-| `dev` / `debug` | Developer build with symbols | Useful for GDB/debugging |
-| `release` | Optimized developer/integration build | Full optimization, symbols not stripped by profile |
-| `release-boot` | Lean boot image | `opt-level = "z"`, fat LTO, one codegen unit, debuginfo stripped |
-
-The default feature path is `uefi_boot`, which enables `boot_minimal`.
-
-## Measurement commands
+Because the image is fixed-size, unchanged container bytes cannot demonstrate a smaller kernel. The builder separately rejects an EFI payload that will not fit the data-cluster allocation.
 
 ```bash
-# Build default x86_64 UEFI images
-cargo xtask build --arch x86_64 --profile dev
-cargo xtask build --arch x86_64 --profile release
-cargo xtask build --arch x86_64 --profile release-boot
-
-# Compare byte sizes
-stat -c '%n %s' \
-  target/x86_64-unknown-uefi/debug/rustos.efi \
-  target/x86_64-unknown-uefi/release/rustos.efi \
-  target/x86_64-unknown-uefi/release-boot/rustos.efi
-
-# Optional section inspection when llvm tools are installed
-llvm-size -A target/x86_64-unknown-uefi/release-boot/rustos.efi
+cargo xtask image --arch x86_64 --profile release-boot
+stat -c '%n %s' boot-x86_64.img
+stat -c '%n %s' target/esp/x86_64/EFI/BOOT/BOOTX64.EFI
 ```
 
-## Current baseline
+These are measurement commands, not results from this documentation audit. Release-boot selects the minimal graph through xtask, so its payload size is not the size of the full OS.
 
-No fresh checked-in byte baseline is claimed in this repository state. Record a
-new table here after running the commands above in a reproducible environment.
+## What to report
 
-| Profile | Path | Total size (bytes) | Status |
-|---|---|---:|---|
-| dev | `target/x86_64-unknown-uefi/debug/rustos.efi` | _measure locally_ | pending refresh |
-| release | `target/x86_64-unknown-uefi/release/rustos.efi` | _measure locally_ | pending refresh |
-| release-boot | `target/x86_64-unknown-uefi/release-boot/rustos.efi` | _measure locally_ | pending refresh |
+- **Container size**: Total `.img` bytes and configured capacity.
+- **EFI payload**: Actual `BOOT*.EFI` or `rustos.efi` bytes from the same build.
+- **Initramfs**: Archive size and whether it is embedded/staged for that profile.
+- **Sections**: Code, readonly data, writable data, and zero-fill sections from a tool compatible with the artifact format.
+- **Build identity**: Revision, target, features, profile, compiler, link/strip settings, and input archive fingerprint.
 
-## Update rule
-
-When changing boot code, linker scripts, features, or profiles in a way that may
-materially change image size:
-
-1. Rebuild the affected profiles.
-2. Update the baseline table with exact byte counts and the host/toolchain if
-   the numbers are meant to be compared over time.
-3. Keep `release-boot` free of `kmtest`, `fault-inject`, `syscall-trace`,
-   `debug`, `gdbstub`, and `trace` unless explicitly measuring those features.
+The workflow uploads `image-size.json` and build output for trend inspection. A smaller payload is only an optimization result after the same required behavior still passes.

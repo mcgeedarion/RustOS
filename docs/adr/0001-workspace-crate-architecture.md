@@ -1,57 +1,25 @@
-# ADR 0001: Workspace Crate Architecture
+# ADR 0001: Workspace crate architecture
 
-## Status
-Accepted
+Status: retained design direction, partially implemented at `08a14f6`. This updated record distinguishes the intended dependency split from the current source graph.
 
-## Context
-The RustOS kernel had grown into a monolithic structure with:
-- 55+ files in src/fs/ totaling ~19K lines
-- Tightly coupled subsystems making independent testing difficult
-- No clear separation between core abstractions and implementations
-- Difficulty in reusing components across different build profiles
+## Context and decision
 
-## Decision
-We will restructure the codebase into a Cargo workspace with separate crates:
+Separate portable interfaces and implementations from architecture-dependent kernel code so they can be built and tested independently. Keep firmware entry, scheduler integration, interrupt handling, and privileged memory/device operations in the kernel until a concrete safe boundary exists.
 
-### New Workspace Crates
-1. **vfs-core**: Core VFS traits, error types, and registration system
-2. **fs-ext4**: EXT4 filesystem implementation
-3. **fs-fat32**: FAT32 filesystem implementation  
-4. **fs-tmpfs**: Tmpfs implementation
-5. **mm-core**: Memory management abstractions with NUMA support
-6. **sync-primitives**: Advanced synchronization (queued spinlocks, RCU)
+The root workspace currently includes the kernel, xtask, `scheme-api`, `vfs-core`, `fs-ext4`, `fs-fat32`, `fs-tmpfs`, `mm-core`, and `sync-primitives`. The kernel depends on the seven library crates and keeps compatibility re-exports.
 
-### Benefits
-- Clear separation between interfaces and implementations
-- Independent compilation and testing of subsystems
-- Reduced compile times through incremental builds
-- Better encapsulation of implementation details
-- Easier to swap filesystem implementations
+## Current implementation
 
-### Migration Strategy
-1. Phase 1: Create new crate skeletons with minimal APIs
-2. Phase 2: Migrate core traits to vfs-core
-3. Phase 3: Move filesystem implementations incrementally
-4. Phase 4: Update kernel to use workspace crates
-5. Phase 5: Remove legacy monolithic modules
+- **Shared API**: `scheme-api` is a real shared protocol crate.
+- **VFS interfaces**: `vfs-core` defines traits and an independent registry, while kernel VFS/schemes remain active separate systems.
+- **Filesystem extraction**: ext4/FAT32 adapters retain `kernel_impl` conditionals and fallbacks; workspace tmpfs remains a skeleton.
+- **Memory/synchronization**: `mm-core` and `sync-primitives` coexist with operational kernel MM and synchronization code. Re-exporting them is not complete migration.
+- **Userspace**: Independent init/smoke/bench/raw-syscall workspace roots build separately. The aggregate userspace workspace metadata is inconsistent.
 
-## Consequences
-### Positive
-- Improved modularity and maintainability
-- Faster incremental builds
-- Clearer dependency boundaries
-- Better testability
+## Consequences and remaining work
 
-### Negative
-- Initial migration effort required
-- Some code duplication during transition
-- Need to maintain backward compatibility shims
+Portable host tests can run without compiling the full graph, which is useful while kernel integration fails. However, parallel implementations, duplicate registries, and error types create divergence risks.
 
-### Risks
-- Breaking existing functionality during migration
-- Performance regression from additional abstraction layers
+Do not introduce a larger crate split merely by moving files and preserving unresolved imports. Define ownership, API/error boundaries, feature propagation, tests, and removal of superseded paths before declaring migration complete.
 
-## Mitigation
-- Comprehensive test suite before and after migration
-- Performance benchmarks to catch regressions
-- Gradual migration with feature flags
+The [architecture guide](../architecture.md), [source audit](../source-audit.md), and [workspace backlog](../architecture-improvements.md) describe the current state. This ADR does not certify a completed microkernel or fully userspace-driver architecture.
