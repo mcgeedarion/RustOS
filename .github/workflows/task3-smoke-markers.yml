@@ -1,0 +1,119 @@
+name: Apply and validate Task 3 smoke domain markers
+
+on:
+  push:
+    branches: [ci/smoke-fault-tasks-2-4]
+    paths:
+      - scripts/ci/apply-task3-smoke-markers.py
+      - .github/workflows/task3-smoke-markers.yml
+
+permissions:
+  contents: read
+
+jobs:
+  apply-and-host-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    outputs:
+      revision: ${{ steps.commit.outputs.revision }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Install pinned Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
+          components: rust-src
+      - name: Apply SHA-checked Task 3 edits
+        run: |
+          test "$GITHUB_REF" = refs/heads/ci/smoke-fault-tasks-2-4
+          mkdir -p target
+          python3 scripts/ci/apply-task3-smoke-markers.py --apply
+      - name: Test smoke assertions and success-only domain markers
+        run: |
+          set -o pipefail
+          rustc --edition=2021 --target x86_64-unknown-linux-gnu --test \
+            userspace/smoke/tests/assertions.rs -o "$RUNNER_TEMP/smoke-assertions"
+          "$RUNNER_TEMP/smoke-assertions" 2>&1 | tee target/task3-assertions.log
+      - name: Test xtask exact-line marker requirements
+        run: |
+          set -o pipefail
+          cargo test --manifest-path xtask/Cargo.toml --locked \
+            --target x86_64-unknown-linux-gnu -Z build-std=std,test \
+            smoke_marker_tests 2>&1 | tee target/task3-xtask.log
+      - name: Test strict parser regressions
+        run: |
+          set -o pipefail
+          python3 -m unittest discover -s scripts/ci/tests -p test_parse_smoke_log.py -v \
+            2>&1 | tee target/task3-parser.log
+      - name: Commit the five Task 3 sources only after host tests pass
+        id: commit
+        run: |
+          git add -- userspace/smoke/src/checks.rs userspace/smoke/src/main.rs \
+            userspace/smoke/tests/assertions.rs xtask/src/main.rs xtask/src/smoke_marker_tests.rs
+          if ! git diff --cached --quiet; then
+            git config user.name github-actions[bot]
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git commit -m "smoke: require success-only filesystem and IPC roundtrip markers"
+            git push origin HEAD:refs/heads/ci/smoke-fault-tasks-2-4
+          fi
+          echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Upload host test evidence and generated sources
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: task3-host-evidence
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            target/task3-*.log
+            userspace/smoke/src/checks.rs
+            userspace/smoke/src/main.rs
+            userspace/smoke/tests/assertions.rs
+            xtask/src/main.rs
+            xtask/src/smoke_marker_tests.rs
+
+  qemu:
+    needs: apply-and-host-test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.apply-and-host-test.outputs.revision }}
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
+          components: rust-src, llvm-tools-preview
+      - name: Install QEMU and build dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends clang lld llvm qemu-system-x86 ovmf mtools python3
+          mkdir -p target
+      - name: Run strict full-kernel QEMU smoke
+        run: |
+          set -o pipefail
+          cargo xtask smoke --arch x86_64 2>&1 | tee target/task3-qemu.log
+      - name: Validate strict smoke log and metadata
+        run: |
+          python3 scripts/ci/parse_smoke_log.py target/smoke-x86_64.log \
+            --metadata target/smoke-x86_64-metadata.json --arch x86_64
+      - name: Upload QEMU evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: task3-qemu-evidence
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            target/task3-qemu.log
+            target/smoke-x86_64.log
+            target/smoke-x86_64-metadata.json
