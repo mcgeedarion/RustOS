@@ -69,7 +69,7 @@ fn charge_lock_bytes(bytes: usize) -> isize {
         return 0;
     }
     let pid = current_pid();
-    with_proc_mut(pid, |p| {
+    with_proc_mut(pid, |p, _owner| {
         let (soft, _) = p.rlimits.get(RLIMIT_MEMLOCK);
         let privileged = p.caps.has(crate::security::Cap::IpcLock);
         if !privileged {
@@ -89,7 +89,7 @@ fn discharge_lock_bytes(bytes: usize) {
         return;
     }
     let pid = current_pid();
-    let _ = with_proc_mut(pid, |p| {
+    let _ = with_proc_mut(pid, |p, _owner| {
         p.locked_bytes = p.locked_bytes.saturating_sub(bytes as u64);
     });
 }
@@ -117,7 +117,7 @@ pub fn sys_mlock2(addr: usize, len: usize, _flags: u32) -> isize {
     // We check the limit BEFORE marking any VMAs so there is no window
     // where another observer sees locked==true on pages whose charge was
     // subsequently rejected (TOCTOU fix).
-    let newly_locked = with_proc_mut(pid, |p| {
+    let newly_locked = with_proc_mut(pid, |p, _owner| {
         let mut n: usize = 0;
         for vma in p.vmas.iter() {
             let vstart = vma.start.max(base);
@@ -141,7 +141,7 @@ pub fn sys_mlock2(addr: usize, len: usize, _flags: u32) -> isize {
     }
 
     // ── Step 3: charge accepted — now mark the VMAs.
-    let _ = with_proc_mut(pid, |p| {
+    let _ = with_proc_mut(pid, |p, _owner| {
         for vma in p.vmas.iter_mut() {
             let vstart = vma.start.max(base);
             let vend = vma.end.min(end);
@@ -166,7 +166,7 @@ pub fn sys_munlock(addr: usize, len: usize) -> isize {
     let end = base + plen;
 
     let pid = current_pid();
-    let freed = with_proc_mut(pid, |p| {
+    let freed = with_proc_mut(pid, |p, _owner| {
         let mut bytes: usize = 0;
         for vma in p.vmas.iter_mut() {
             let vstart = vma.start.max(base);
@@ -195,14 +195,14 @@ pub fn sys_mlockall(flags: u32) -> isize {
     let pid = current_pid();
 
     if flags & MCL_FUTURE != 0 {
-        let _ = with_proc_mut(pid, |p| {
+        let _ = with_proc_mut(pid, |p, _owner| {
             p.mcl_future = true;
         });
     }
 
     if flags & MCL_CURRENT != 0 {
         // ── Step 1: dry run — count newly-lockable bytes and save pre-call state.
-        let (newly_locked, saved_bytes) = with_proc_mut(pid, |p| {
+        let (newly_locked, saved_bytes) = with_proc_mut(pid, |p, _owner| {
             let saved = p.locked_bytes;
             let mut bytes: usize = 0;
             for vma in p.vmas.iter() {
@@ -220,7 +220,7 @@ pub fn sys_mlockall(flags: u32) -> isize {
             if rc < 0 {
                 // Roll back: restore exactly the pre-call locked_bytes value
                 // (not zero — that would wipe pre-existing locked regions).
-                let _ = with_proc_mut(pid, |p| {
+                let _ = with_proc_mut(pid, |p, _owner| {
                     for vma in p.vmas.iter_mut() {
                         vma.locked = false;
                     }
@@ -231,7 +231,7 @@ pub fn sys_mlockall(flags: u32) -> isize {
             }
 
             // ── Step 3: charge accepted — mark all VMAs.
-            let _ = with_proc_mut(pid, |p| {
+            let _ = with_proc_mut(pid, |p, _owner| {
                 for vma in p.vmas.iter_mut() {
                     if !vma.locked {
                         vma.locked = true;
@@ -246,7 +246,7 @@ pub fn sys_mlockall(flags: u32) -> isize {
 /// `sys_munlockall()` — NR 152
 pub fn sys_munlockall() -> isize {
     let pid = current_pid();
-    let _ = with_proc_mut(pid, |p| {
+    let _ = with_proc_mut(pid, |p, _owner| {
         p.mcl_future = false;
         p.locked_bytes = 0;
         for vma in p.vmas.iter_mut() {

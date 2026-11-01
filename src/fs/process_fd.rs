@@ -31,6 +31,7 @@ extern crate alloc;
 use crate::core::fast_hash::KernelFastMap;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use spin::Mutex;
 
@@ -55,6 +56,16 @@ pub struct FdEntry {
     pub cloexec: bool,
     pub nonblock: bool,
     pub fl_flags: i32,
+    lifetime: Arc<BackingLifetime>,
+}
+
+#[derive(Debug)]
+struct BackingLifetime(usize);
+
+impl Drop for BackingLifetime {
+    fn drop(&mut self) {
+        close_backing(self.0);
+    }
 }
 
 impl FdEntry {
@@ -75,6 +86,7 @@ impl FdEntry {
             cloexec: flags & O_CLOEXEC_FLAG != 0,
             nonblock: flags & O_NONBLOCK != 0,
             fl_flags: fl,
+            lifetime: Arc::new(BackingLifetime(backing_fd)),
         }
     }
 }
@@ -127,48 +139,9 @@ fn check_nofile(pid: usize, table: &ProcFdTable) -> bool {
         .unwrap_or(false)
 }
 
-fn dup_backing(bfd: usize) -> usize {
-    if crate::fs::pipe::is_pipe(bfd) {
-        crate::fs::pipe::pipe_dup(bfd);
-        bfd
-    } else if crate::net::socket::is_socket_fd(bfd) {
-        crate::net::socket::socket_dup(bfd);
-        bfd
-    } else if crate::security::landlock::is_landlock_fd(bfd) {
-        crate::security::landlock::dup_landlock_fd(bfd)
-    } else if crate::security::bpf::is_bpf_fd(bfd) {
-        crate::security::bpf::dup_bpf_fd(bfd);
-        bfd
-    } else if crate::fs::eventfd::is_eventfd(bfd) {
-        crate::fs::eventfd::efd_dup(bfd);
-        bfd
-    } else if crate::fs::timerfd::is_timerfd(bfd) {
-        crate::fs::timerfd::tfd_dup(bfd);
-        bfd
-    } else if crate::fs::signalfd::is_signalfd(bfd) {
-        crate::fs::signalfd::sfd_dup(bfd);
-        bfd
-    } else if crate::fs::inotify::is_inotify_fd(bfd) {
-        crate::fs::inotify::inotify_dup(bfd);
-        bfd
-    } else if crate::fs::fanotify::is_fanotify_fd(bfd) {
-        crate::fs::fanotify::fanotify_dup(bfd);
-        bfd
-    } else if crate::fs::devfs::get_dev_fd(bfd).is_some() {
-        bfd
-    } else if crate::fs::procfs::is_procfs_fd(bfd)
-        || crate::fs::sysfs::is_sysfs_fd(bfd)
-        || crate::fs::cgroupfs::is_cgroupfs_fd(bfd)
-    {
-        bfd
-    } else {
-        let r = crate::fs::vfs::dup_from(bfd, bfd);
-        if r >= 0 {
-            r as usize
-        } else {
-            bfd
-        }
-    }
+fn nofile_limit(pid: usize) -> usize {
+    crate::proc::scheduler::with_proc(pid, |p| p.rlimits.get(RLIMIT_NOFILE).0)
+        .unwrap_or(1024).min(isize::MAX as u64) as usize
 }
 
 pub fn proc_fd_alloc(pid: usize, stdin_bfd: usize, stdout_bfd: usize, stderr_bfd: usize) {
@@ -181,6 +154,7 @@ pub fn proc_fd_alloc(pid: usize, stdin_bfd: usize, stdout_bfd: usize, stderr_bfd
             cloexec: false,
             nonblock: false,
             fl_flags: O_RDONLY,
+            lifetime: Arc::new(BackingLifetime(stdin_bfd)),
         },
     );
     table.insert(
@@ -191,6 +165,7 @@ pub fn proc_fd_alloc(pid: usize, stdin_bfd: usize, stdout_bfd: usize, stderr_bfd
             cloexec: false,
             nonblock: false,
             fl_flags: O_WRONLY,
+            lifetime: Arc::new(BackingLifetime(stdout_bfd)),
         },
     );
     table.insert(
@@ -201,6 +176,7 @@ pub fn proc_fd_alloc(pid: usize, stdin_bfd: usize, stdout_bfd: usize, stderr_bfd
             cloexec: false,
             nonblock: false,
             fl_flags: O_WRONLY,
+            lifetime: Arc::new(BackingLifetime(stderr_bfd)),
         },
     );
     PROC_FD_TABLES.lock().insert(pid, table);
@@ -215,21 +191,7 @@ pub fn proc_fd_fork(parent_pid: usize, child_pid: usize) {
 
     let mut child_table = ProcFdTable::default();
     for (fd, entry) in &parent.fds {
-        let new_bfd = if *fd <= 2 {
-            entry.backing_fd
-        } else {
-            dup_backing(entry.backing_fd)
-        };
-        child_table.insert(
-            *fd,
-            FdEntry {
-                backing_fd: new_bfd,
-                path: entry.path.clone(),
-                cloexec: entry.cloexec,
-                nonblock: entry.nonblock,
-                fl_flags: entry.fl_flags,
-            },
-        );
+        child_table.insert(*fd, entry.clone());
     }
     PROC_FD_TABLES.lock().insert(child_pid, child_table);
 }
@@ -247,19 +209,14 @@ pub fn proc_fd_close_on_exec(pid: usize) {
                 .collect(),
         }
     };
-    for (fd, bfd) in cloexec_fds {
-        close_backing(bfd);
-        PROC_FD_TABLES.lock().get_mut(&pid).map(|t| t.remove(fd));
+    for (fd, _) in cloexec_fds {
+        proc_fd_close(pid, fd);
     }
 }
 
 pub fn proc_fd_free(pid: usize) {
     let table = PROC_FD_TABLES.lock().remove(&pid);
-    if let Some(t) = table {
-        for (_, entry) in t.fds {
-            close_backing(entry.backing_fd);
-        }
-    }
+    drop(table);
 }
 
 fn posix_to_scheme_open_flags(flags: u32) -> scheme_api::OpenFlags {
@@ -320,21 +277,26 @@ pub fn proc_fd_open(pid: usize, path: &str, flags: u32, _mode: u32) -> isize {
             }
         } else {
             match crate::fs::devfs::try_open(path, flags) {
-                Ok(Some(fd)) => (fd as isize, None),
-                Err(e) => (e, None),
-                Ok(None) if path.starts_with("/proc") => {
+                Some(fd) => (fd as isize, Some(path.into())),
+                None if path == "/proc" || path.starts_with("/proc/") => {
                     let fd = crate::fs::procfs::procfs_open(path, flags);
                     (fd, Some(path.into()))
                 },
-                Ok(None) if path.starts_with("/sys/fs/cgroup") => {
+                None if path == "/sys/fs/cgroup" || path.starts_with("/sys/fs/cgroup/") => {
                     let fd = crate::fs::cgroupfs::cgroupfs_open(path);
                     (fd, Some(path.into()))
                 },
-                Ok(None) if path.starts_with("/sys") => {
+                None if path == "/sys" || path.starts_with("/sys/") => {
                     let fd = crate::fs::sysfs::sysfs_open(path, flags);
                     (fd, Some(path.into()))
                 },
-                Ok(None) => match crate::fs::vfs::open(path, flags) {
+                None if crate::fs::vfs_ops::stat(path).map(|s| s.mode & 0o170000 == 0o010000).unwrap_or(false) => {
+                    match crate::fs::pipe::open_named(path, flags) {
+                        Ok(fd) => (fd as isize, Some(path.into())),
+                        Err(e) => (e, None),
+                    }
+                },
+                None => match crate::fs::vfs::open(path, flags) {
                     Ok(fd) => (fd as isize, Some(path.into())),
                     Err(e) => {
                         if flags & O_CREAT != 0 && e == -2 {
@@ -359,25 +321,7 @@ pub fn proc_fd_open(pid: usize, path: &str, flags: u32, _mode: u32) -> isize {
     }
     let bfd = bfd as usize;
 
-    if flags & O_TRUNC != 0 && stored_path.is_some() {
-        let _ = crate::fs::vfs_ops::truncate_fd(bfd, 0);
-    }
-
-    let entry = FdEntry::new(bfd, stored_path, flags);
-    let local_fd = {
-        let mut lock = PROC_FD_TABLES.lock();
-        if !lock.contains_key(&pid) {
-            lock.insert(pid, ProcFdTable::default());
-        }
-        let table = lock.get_mut(&pid).unwrap_or_else(|| {
-            panic!("proc fd table inserted");
-        });
-        let fd = table.alloc_fd(3);
-        table.insert(fd, entry);
-        fd
-    };
-
-    local_fd as isize
+    proc_fd_install(pid, bfd, stored_path, flags, None) as isize
 }
 
 pub fn proc_fd_close(pid: usize, fd: usize) -> isize {
@@ -388,22 +332,12 @@ pub fn proc_fd_close(pid: usize, fd: usize) -> isize {
 
     match entry {
         None => -9,
-        Some(e) => {
-            if fd > 2 {
-                close_backing(e.backing_fd);
-            }
-            crate::fs::fcntl::close_fd_meta(e.backing_fd);
-            0
-        },
+        Some(e) => { drop(e); 0 },
     }
 }
 
 pub fn proc_fd_dup2(pid: usize, old_fd: usize, new_fd: usize) -> isize {
-    if old_fd == new_fd {
-        return old_fd as isize;
-    }
-
-    let old_entry = {
+    let mut old_entry = {
         let lock = PROC_FD_TABLES.lock();
         match lock.get(&pid).and_then(|t| t.get(old_fd)).cloned() {
             Some(e) => e,
@@ -411,25 +345,40 @@ pub fn proc_fd_dup2(pid: usize, old_fd: usize, new_fd: usize) -> isize {
         }
     };
 
-    let new_bfd = dup_backing(old_entry.backing_fd);
-    let _ = proc_fd_close(pid, new_fd);
-
-    let new_entry = FdEntry {
-        backing_fd: new_bfd,
-        path: old_entry.path.clone(),
-        cloexec: false,
-        nonblock: old_entry.nonblock,
-        fl_flags: old_entry.fl_flags,
-    };
+    if old_fd == new_fd {
+        return old_fd as isize;
+    }
+    if new_fd >= nofile_limit(pid) { return -9; }
+    old_entry.cloexec = false;
 
     let mut lock = PROC_FD_TABLES.lock();
     if !lock.contains_key(&pid) {
         lock.insert(pid, ProcFdTable::default());
     }
-    lock.get_mut(&pid)
+    let replaced = lock.get_mut(&pid)
         .unwrap_or_else(|| panic!("proc fd table inserted"))
-        .insert(new_fd, new_entry);
+        .fds.insert(new_fd, old_entry);
+    drop(lock);
+    drop(replaced);
+    new_fd as isize
+}
 
+/// Duplicate an existing open-file description without reopening its backing
+/// object. Snapshots and duplicate descriptors share its final-close lifetime.
+pub fn proc_fd_dup_into(from_pid: usize, fd: usize, to_pid: usize, min: usize, cloexec: bool) -> isize {
+    let limit = nofile_limit(to_pid);
+    if min >= limit { return -22; }
+    let mut lock = PROC_FD_TABLES.lock();
+    let mut entry = match lock.get(&from_pid).and_then(|t| t.get(fd)).cloned() {
+        Some(entry) => entry,
+        None => return -9,
+    };
+    entry.cloexec = cloexec;
+    if !lock.contains_key(&to_pid) { lock.insert(to_pid, ProcFdTable::default()); }
+    let table = lock.get_mut(&to_pid).unwrap();
+    let new_fd = table.alloc_fd(min);
+    if new_fd >= limit { return -24; }
+    table.insert(new_fd, entry);
     new_fd as isize
 }
 
@@ -499,6 +448,14 @@ pub fn proc_fd_install(
     flags: u32,
     preferred: Option<usize>,
 ) -> usize {
+    proc_fd_install_checked(pid, bfd, path, flags, preferred).unwrap_or_else(|e| e as usize)
+}
+
+/// Consumes ownership of the backing descriptor, including on failure.
+pub fn proc_fd_install_checked(
+    pid: usize, bfd: usize, path: Option<String>, flags: u32, preferred: Option<usize>,
+) -> Result<usize, isize> {
+    let limit = nofile_limit(pid);
     let entry = FdEntry::new(bfd, path, flags);
     let mut lock = PROC_FD_TABLES.lock();
     if !lock.contains_key(&pid) {
@@ -509,19 +466,43 @@ pub fn proc_fd_install(
         .unwrap_or_else(|| panic!("proc fd table inserted"));
     let fd = match preferred {
         Some(n) => n,
-        None => table.alloc_fd(3),
+        None => table.alloc_fd(0),
     };
+    if fd >= limit {
+        drop(lock);
+        drop(entry);
+        return Err(-24);
+    }
+    if table.get(fd).is_some() {
+        drop(lock);
+        drop(entry);
+        return Err(-16);
+    }
     table.insert(fd, entry);
-    fd
+    Ok(fd)
 }
 
 fn close_backing(bfd: usize) {
-    if crate::fs::devfs::get_dev_fd(bfd).is_some() {
+    if bfd <= 2 { return; }
+    crate::fs::fcntl::close_fd_meta(bfd);
+    crate::fs::poll::on_backing_close(bfd);
+    if crate::fs::poll::is_epoll_fd(bfd) {
+        crate::fs::poll::epoll_close(bfd);
+    } else if crate::fs::scheme_fd::is_scheme_fd(bfd) {
+        crate::fs::scheme_fd::scheme_fd_close(bfd);
+    } else if crate::proc::namespace::is_ns_fd(bfd) {
+        crate::proc::namespace::ns_fd_close(bfd);
+        crate::fs::procfs::procfs_close(bfd);
+    } else if crate::fs::proc_debug::is_proc_debug_fd(bfd) {
+        crate::fs::proc_debug::proc_debug_close(bfd);
+    } else if crate::fs::devfs::get_dev_fd(bfd).is_some() {
         crate::fs::devfs::close(bfd);
     } else if crate::fs::cgroupfs::is_cgroupfs_fd(bfd) {
         crate::fs::cgroupfs::cgroupfs_close(bfd);
     } else if crate::fs::procfs::is_procfs_fd(bfd) {
+        crate::fs::procfs::procfs_close(bfd);
     } else if crate::fs::sysfs::is_sysfs_fd(bfd) {
+        crate::fs::sysfs::sysfs_close(bfd);
     } else if crate::fs::inotify::is_inotify_fd(bfd) {
         crate::fs::inotify::inotify_close(bfd);
     } else if crate::fs::fanotify::is_fanotify_fd(bfd) {
@@ -534,12 +515,12 @@ fn close_backing(bfd: usize) {
         crate::fs::eventfd::sys_close_efd(bfd);
     } else if crate::fs::timerfd::is_timerfd(bfd) {
         crate::fs::timerfd::sys_close_tfd(bfd);
+    } else if crate::fs::signalfd::is_signalfd(bfd) {
+        crate::fs::signalfd::sys_close_sfd(bfd);
     } else if crate::fs::pipe::is_pipe(bfd) {
         crate::fs::pipe::sys_close_pipe(bfd);
     } else if crate::net::socket::is_socket_fd(bfd) {
         crate::net::socket::sys_close_socket(bfd);
-    } else if crate::fs::scheme_fd::is_scheme_fd(bfd) {
-        crate::fs::scheme_fd::scheme_fd_close(bfd);
     } else {
         crate::fs::vfs::close(bfd);
     }

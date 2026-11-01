@@ -4,9 +4,9 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use spin::Mutex;
 
-pub fn read_block<'a>(fs: &'a Ext2Fs, blkno: u32) -> Option<&'a [u8]> {
-    fs.block_slice(blkno)
+pub fn read_block(fs: &Ext2Fs, blkno: u32) -> Vec<u8> {
+    fs.read_block(blkno)
 }
-pub fn write_block<'a>(fs: &'a mut Ext2Fs, blkno: u32) -> Option<&'a mut [u8]> {
-    fs.block_slice_mut(blkno)
+pub fn write_block(fs: &Ext2Fs, blkno: u32, data: &[u8]) {
+    fs.write_block(blkno, data)
 }

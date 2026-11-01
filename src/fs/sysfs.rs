@@ -41,10 +41,11 @@
 //!   All reads are synthesised on-the-fly; there is no backing storage.
 
 extern crate alloc;
+use alloc::string::ToString;
 use alloc::{string::String, vec, vec::Vec};
 use spin::Mutex;
 
-pub const SYSFS_FD_BASE: usize = 0x7000_0000;
+pub const SYSFS_FD_BASE: usize = 0x7100_0000;
 
 struct SysEntry {
     content: Vec<u8>,
@@ -118,6 +119,43 @@ pub struct DirEntry {
 pub fn sysfs_list_dir(path: &str) -> Option<Vec<DirEntry>> {
     let entries = static_children(path)?;
     Some(entries)
+}
+
+fn full_path(path: &str) -> String {
+    if path == "/sys" || path.starts_with("/sys/") { path.trim_end_matches('/').into() }
+    else { alloc::format!("/sys/{}", path.trim_matches('/')).trim_end_matches('/').into() }
+}
+
+fn inode_for(path: &str) -> u64 {
+    path.bytes().fold(0xcbf29ce484222325u64, |hash, b| (hash ^ b as u64).wrapping_mul(0x100000001b3))
+}
+
+pub fn read_all(path: &str) -> Result<Vec<u8>, isize> {
+    match generate(&full_path(path)) {
+        Some((_, true)) => Err(-21),
+        Some((data, false)) => Ok(data),
+        None => Err(-2),
+    }
+}
+
+pub fn stat(path: &str) -> Result<crate::fs::vfs_ops::KStat, isize> {
+    let path = full_path(path);
+    let (content, is_dir) = generate(&path).ok_or(-2isize)?;
+    Ok(crate::fs::vfs_ops::KStat {
+        ino: inode_for(&path), mode: if is_dir { 0o040555 } else { 0o100444 },
+        nlink: if is_dir { 2 } else { 1 }, size: content.len() as u64,
+        blksize: 4096, is_dir, ..Default::default()
+    })
+}
+
+pub fn readdir(path: &str) -> Result<Vec<crate::fs::vfs::ops::DirEntry>, isize> {
+    let path = full_path(path);
+    Ok(static_children(&path).ok_or(-20isize)?.into_iter().map(|entry| {
+        crate::fs::vfs::ops::DirEntry {
+            ino: inode_for(&alloc::format!("{}/{}", path, entry.name)), name: entry.name,
+            is_dir: entry.is_dir, mode: if entry.is_dir { 0o040555 } else { 0o100444 }, size: 0,
+        }
+    }).collect())
 }
 
 /// Build "0000:BB:DD.F" BDF strings for every enumerated PCI device.
@@ -339,13 +377,12 @@ fn static_children(path: &str) -> Option<Vec<DirEntry>> {
         path if path.starts_with("/sys/bus/pci/devices/") => {
             let tail = &path["/sys/bus/pci/devices/".len()..];
             if tail.contains('/') {
-                // No subdirectories inside a BDF dir yet.
-                Vec::new()
+                return None;
             } else {
                 // Only show children for BDF dirs that actually exist.
                 pci_lookup_by_bdf(tail)
                     .map(|_| vec![fil("vendor"), fil("device"), fil("class")])
-                    .unwrap_or_default()
+                    ?
             }
         },
         "/sys/class" => vec![dir("net")],
@@ -360,15 +397,7 @@ fn static_children(path: &str) -> Option<Vec<DirEntry>> {
 }
 
 fn cpu_count() -> usize {
-    let mut n = 0usize;
-    crate::firmware::acpi::with_cpus(|_| {
-        n += 1;
-    });
-    if n == 0 {
-        1
-    } else {
-        n
-    }
+    crate::smp::num_cpus().max(1)
 }
 
 struct SysSchemeFd {

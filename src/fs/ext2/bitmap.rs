@@ -5,10 +5,10 @@ use alloc::vec::Vec;
 use spin::Mutex;
 
 pub fn alloc_block(fs: &mut Ext2Fs) -> Result<u32, i32> {
-    fs.alloc_block()
+    fs.alloc_block_inner().ok_or(-ENOSPC)
 }
 pub fn alloc_inode(fs: &mut Ext2Fs) -> Result<u32, i32> {
-    fs.alloc_inode()
+    fs.alloc_inode_inner(false).ok_or(-ENOSPC)
 }
 pub fn free_block(fs: &mut Ext2Fs, blkno: u32) {
     fs.free_block(blkno)

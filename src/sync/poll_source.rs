@@ -97,8 +97,14 @@ pub fn wait_any(
         src.wait_queue().register_forwarder(&agg, *mask);
     }
 
-    // 4. ONE scheduler sleep.
-    let reason = agg.wait(aggregate_mask, cancel, deadline);
+    // Registration precedes the authoritative check. An event after this
+    // check is sticky in the aggregate until wait() observes it.
+    let ready = sources.iter().any(|(src, mask)| src.poll(*mask) != 0);
+    let reason = if ready {
+        WakeReason::Ready
+    } else {
+        agg.wait(aggregate_mask, cancel, deadline)
+    };
 
     // 5. Remove forwarders — must always run, even on cancel/timeout.
     for (src, _) in sources {

@@ -260,7 +260,7 @@ pub fn tmpfs_write_all(path: &str, data: &[u8]) -> Result<(), isize> {
     match &mut node.kind {
         TmpfsKind::Regular { data: old } => {
             let delta = data.len().saturating_sub(old.len());
-            if delta > 0 && !fs.can_alloc(delta) {
+            if delta > fs.size_limit.saturating_sub(fs.used_bytes) {
                 return Err(-28);
             } // ENOSPC
             fs.used_bytes = fs.used_bytes.saturating_sub(old.len());
@@ -327,10 +327,10 @@ pub fn tmpfs_pwrite(path: &str, offset: usize, new: &[u8]) -> Result<usize, isiz
     let node = fs.inodes.get_mut(&ino).ok_or(-2isize)?;
     match &mut node.kind {
         TmpfsKind::Regular { data } => {
-            let end = offset + new.len();
+            let end = offset.checked_add(new.len()).ok_or(-27isize)?;
             if end > data.len() {
                 let extra = end - data.len();
-                if !fs.can_alloc(extra) {
+                if extra > fs.size_limit.saturating_sub(fs.used_bytes) {
                     return Err(-28);
                 }
                 data.resize(end, 0);
@@ -354,7 +354,7 @@ pub fn tmpfs_truncate(path: &str, len: usize) -> Result<(), isize> {
         TmpfsKind::Regular { data } => {
             if len > data.len() {
                 let extra = len - data.len();
-                if !fs.can_alloc(extra) {
+                if extra > fs.size_limit.saturating_sub(fs.used_bytes) {
                     return Err(-28);
                 }
                 fs.used_bytes += extra;
@@ -666,6 +666,32 @@ pub fn tmpfs_chown(path: &str, uid: u32, gid: u32) -> Result<(), isize> {
         node.uid = uid;
         node.gid = gid;
     }
+    Ok(())
+}
+
+pub fn tmpfs_set_times(path: &str, atime_ns: u64, mtime_ns: u64) -> Result<(), isize> {
+    let mp = resolve_mp(path).ok_or(-2isize)?;
+    let sub = subpath(&mp, path);
+    let mut mounts = MOUNTS.lock();
+    let fs = mounts.get_mut(&mp).ok_or(-2isize)?;
+    let ino = fs.lookup(&sub)?;
+    let node = fs.inodes.get_mut(&ino).ok_or(-2isize)?;
+    node.atime = atime_ns;
+    node.mtime = mtime_ns;
+    node.ctime = crate::arch::time::current_unix_time_secs() * 1_000_000_000;
+    Ok(())
+}
+
+/// Materialize a special inode. Device I/O still routes through the device
+/// subsystem; the inode supplies POSIX type/ownership and directory identity.
+pub fn tmpfs_mknod(path: &str, mode: u16) -> Result<(), isize> {
+    tmpfs_create(path)?;
+    let mp = resolve_mp(path).ok_or(-2isize)?;
+    let sub = subpath(&mp, path);
+    let mut mounts = MOUNTS.lock();
+    let fs = mounts.get_mut(&mp).ok_or(-2isize)?;
+    let ino = fs.lookup(&sub)?;
+    fs.inodes.get_mut(&ino).ok_or(-2isize)?.mode = mode;
     Ok(())
 }
 

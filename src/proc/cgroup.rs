@@ -132,7 +132,9 @@ impl CgroupTable {
     }
 }
 
-static CGROUPS: Mutex<CgroupTable> = Mutex::new(CgroupTable::new());
+// Root creation allocates, so defer it until after heap initialization.
+static CGROUPS: spin::Lazy<Mutex<CgroupTable>> =
+    spin::Lazy::new(|| Mutex::new(CgroupTable::new()));
 
 /// Called once from `kernel_main` after `dhcp::init()` and before
 /// `proc::spawn_init()`.

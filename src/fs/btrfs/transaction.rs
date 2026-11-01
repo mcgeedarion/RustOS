@@ -1,4 +1,5 @@
-//! Btrfs transaction facade.
+//! Staged single-leaf transactions. Abort/drop discards all staged mutations.
+//! Commit is synchronous, but not crash-atomic in-place disk I/O.
 
 extern crate alloc;
 
@@ -18,18 +19,22 @@ pub struct BtrfsTransaction<'a> {
     generation: u64,
     dirty: bool,
     aborted: bool,
+    original: Vec<u8>,
 }
 
 impl<'a> BtrfsTransaction<'a> {
     /// Start a new transaction on a mounted Btrfs instance.
     pub fn begin(fs: &'a mut BtrfsFs) -> Self {
-        let generation = fs.superblock.generation.saturating_add(1);
+        let generation = fs.superblock.generation;
+        let original = fs.read_node_bytes(fs.fs_tree_root).unwrap_or_default();
+        fs.staged = Some(original.clone());
 
         Self {
             fs,
             generation,
             dirty: false,
             aborted: false,
+            original,
         }
     }
 
@@ -76,17 +81,17 @@ impl<'a> BtrfsTransaction<'a> {
 
     /// Commit the transaction.
     ///
-    /// Because writes are synchronous in this driver, commit only advances the
-    /// in-memory superblock generation when mutations occurred.
+    /// Persist the staged leaf without pretending to advance tree generations
+    /// or perform a CoW superblock commit.
     pub fn commit(mut self) -> Result<(), isize> {
         if self.aborted {
             return Err(-5);
         }
 
-        if self.dirty {
-            self.fs.superblock.generation = self.generation;
+        let staged = self.fs.staged.take().ok_or(-5isize)?;
+        if staged != self.original {
+            self.fs.persist_leaf(&self.original, &staged)?;
         }
-
         Ok(())
     }
 
@@ -190,6 +195,12 @@ impl<'a> BtrfsTransaction<'a> {
     /// Transaction-aware read helper.
     pub fn read_all(&self, path: &str) -> Result<Vec<u8>, isize> {
         self.fs.read_all(path)
+    }
+}
+
+impl Drop for BtrfsTransaction<'_> {
+    fn drop(&mut self) {
+        self.fs.staged = None;
     }
 }
 

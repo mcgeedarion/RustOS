@@ -95,13 +95,13 @@ unsafe fn scan_bif(aml: &[u8]) {
         }
         // Expect Package opcode (0x12) followed by a 9-DWord body.
         let mut j = i + 4;
-        if *aml.get(j)? != 0x12 {
+        if aml.get(j) != Some(&0x12) {
             i += 1;
             continue;
         }
         j += 1;
         // Skip PkgLength.
-        let lead = *aml.get(j)?;
+        let Some(&lead) = aml.get(j) else { return; };
         j += 1 + (lead >> 6) as usize;
         j += 1; // NumElements
         let mut vals = [0u32; 9];
@@ -150,12 +150,12 @@ unsafe fn scan_bst(aml: &[u8]) {
             continue;
         }
         let mut j = i + 4;
-        if *aml.get(j)? != 0x12 {
+        if aml.get(j) != Some(&0x12) {
             i += 1;
             continue;
         }
         j += 1;
-        let lead = *aml.get(j)?;
+        let Some(&lead) = aml.get(j) else { return; };
         j += 1 + (lead >> 6) as usize;
         j += 1;
         let mut vals = [0u32; 4];

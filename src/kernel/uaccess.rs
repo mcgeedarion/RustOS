@@ -18,7 +18,6 @@
 //!   prevents execution from user pages regardless.
 
 use core::mem;
-use core::ptr;
 
 /// Upper bound (exclusive) of the user virtual address space on aarch64
 /// (48-bit VA, top half reserved for kernel).
@@ -74,107 +73,67 @@ pub fn validate_user_ptr(addr: usize, len: usize) -> bool {
     addr != 0 && user_access_ok(addr, len)
 }
 
-/// Executes `f` inside an architecture-specific "user access window".
-///
-/// On x86_64 this is a `STAC … CLAC` bracket with page-fault recovery.
-/// AArch64 and RISC-V currently return `EFAULT` without executing the closure.
-///
-/// The closure `f` is expected to do raw pointer reads/writes.  If a page
-/// fault occurs inside `f` the architecture's trap handler will set a
-/// per-CPU "fixup" flag that causes [`run_in_user_access`] to return
-/// `Err(UaccessError::Fault)`.
-///
-/// # Safety
-/// Caller must have verified that the address range is within user space and
-/// that `len` bytes are within that range before entering the window.
-#[inline]
-unsafe fn run_in_user_access<F, T>(f: F) -> UaccessResult<T>
-where
-    F: FnOnce() -> T,
-{
-    #[cfg(target_arch = "aarch64")]
-    {
-        // Fail closed until an exception-table/fault-fixup path exists.
-        // Disabling PAN alone cannot convert translation faults into EFAULT,
-        // and the previous SCTLR_EL1 bit manipulation did not control PAN.
-        // Never execute an unchecked user pointer dereference on this target.
-        let _ = f;
-        Err(UaccessError::Fault)
-    }
+/// Copy through the architecture's narrowly scoped fault-recoverable loop.
+/// Arbitrary Rust closures cannot be safely skipped after a page fault.
+unsafe fn guarded_copy(dst: *mut u8, src: *const u8, len: usize) -> UaccessResult {
     #[cfg(target_arch = "x86_64")]
     {
-        arch_x86_64::with_user_access_enabled(f)
+        let _interrupts = crate::allocator::InterruptGuard::new();
+        let cr4: usize;
+        core::arch::asm!("mov {}, cr4", out(reg) cr4, options(nostack, nomem));
+        let status = x86_copy_bytes(dst, src, len, cr4 & (1 << 21) != 0);
+        if status == 0 { Ok(()) } else { Err(UaccessError::Fault) }
     }
-    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64",)))]
+    #[cfg(not(target_arch = "x86_64"))]
     {
-        let _ = f;
+        let _ = (dst, src, len);
         Err(UaccessError::Fault)
     }
 }
 
-// AArch64 user access intentionally fails closed until PAN handling and
-// exception-table fault recovery are implemented together.
-
 #[cfg(target_arch = "x86_64")]
-mod arch_x86_64 {
-    use super::UaccessError;
-    use super::UaccessResult;
+#[unsafe(naked)]
+unsafe extern "sysv64" fn x86_copy_bytes(
+    _dst: *mut u8, _src: *const u8, _len: usize, _smap: bool,
+) -> usize {
+    core::arch::naked_asm!(
+        "mov r8, rcx",
+        "mov rcx, rdx",
+        "cld",
+        "test r8b, r8b",
+        "jz 2f",
+        "stac",
+        "2:",
+        ".global rustos_user_copy_fault_site",
+        "rustos_user_copy_fault_site:",
+        "rep movsb",
+        "xor eax, eax",
+        "jmp 3f",
+        ".global rustos_user_copy_fixup",
+        "rustos_user_copy_fixup:",
+        "mov eax, 14",
+        "3:",
+        "test r8b, r8b",
+        "jz 4f",
+        "clac",
+        "4:",
+        "ret",
+    );
+}
 
-    /// Per-CPU flag set by the fault fixup path in the IDT #PF handler.
-    ///
-    /// The `#[thread_local]` attribute maps this to the GS-relative segment so
-    /// each CPU has its own independent copy.
-    #[thread_local]
-    static mut USER_FAULT_OCCURRED: bool = false;
-
-    /// Entry point from the kernel's `#PF` (page-fault) handler.
-    ///
-    /// Called when a page fault occurs and `rip` is inside a `stac`-guarded
-    /// copy loop.  Sets the per-CPU fault flag so the copy loop can bail out.
-    ///
-    /// # Safety
-    /// Must only be called from the IDT `#PF` handler while SMAP is active.
-    pub unsafe fn signal_user_fault() {
-        USER_FAULT_OCCURRED = true;
+/// Recover only faults at the dedicated copy instruction, never unrelated
+/// kernel bugs. The handler retries valid demand/COW faults before this hook.
+#[cfg(target_arch = "x86_64")]
+pub(crate) fn fixup_user_copy_fault(rip: &mut u64) -> bool {
+    extern "C" {
+        static rustos_user_copy_fault_site: u8;
+        static rustos_user_copy_fixup: u8;
     }
-
-    /// Clears the per-CPU fault flag.  Call before entering a new user-access
-    /// window so stale faults from a previous call don't pollute the result.
-    #[inline]
-    unsafe fn clear_fault_flag() {
-        USER_FAULT_OCCURRED = false;
-    }
-
-    /// Returns whether a fault occurred since the last [`clear_fault_flag`].
-    #[inline]
-    unsafe fn fault_occurred() -> bool {
-        USER_FAULT_OCCURRED
-    }
-
-    /// Runs `f` between `STAC` and `CLAC` instructions.
-    ///
-    /// The `STAC` instruction sets `EFLAGS.AC`, which overrides `CR4.SMAP`
-    /// for supervisor-mode accesses to user pages until `CLAC` clears it.
-    #[inline]
-    pub unsafe fn with_user_access_enabled<F, T>(f: F) -> UaccessResult<T>
-    where
-        F: FnOnce() -> T,
-    {
-        clear_fault_flag();
-
-        // STAC — allow supervisor access to user pages.
-        core::arch::asm!("stac", options(nostack, preserves_flags));
-
-        let result = f();
-
-        // CLAC — restore SMAP protection.
-        core::arch::asm!("clac", options(nostack, preserves_flags));
-
-        if fault_occurred() {
-            Err(UaccessError::Fault)
-        } else {
-            Ok(result)
-        }
+    if *rip == core::ptr::addr_of!(rustos_user_copy_fault_site) as u64 {
+        *rip = core::ptr::addr_of!(rustos_user_copy_fixup) as u64;
+        true
+    } else {
+        false
     }
 }
 
@@ -195,27 +154,7 @@ unsafe fn copy_from_user_bytes(dst: *mut u8, src: usize, len: usize) -> UaccessR
         return Err(UaccessError::Fault);
     }
 
-    // SAFETY: We have verified the range is within user space.  The
-    // `run_in_user_access` wrapper converts hardware faults to EFAULT.
-    unsafe {
-        run_in_user_access(|| {
-            // Optimize for large, aligned transfers using word-sized copies
-            if len >= 8 && src % 8 == 0 && dst as usize % 8 == 0 {
-                // Copy in 8-byte chunks for better performance
-                let mut i = 0;
-                while i + 8 <= len {
-                    ptr::copy_nonoverlapping((src + i) as *const u64, (dst.add(i)) as *mut u64, 1);
-                    i += 8;
-                }
-                // Handle remainder bytes
-                for j in i..len {
-                    *dst.add(j) = *((src + j) as *const u8);
-                }
-            } else {
-                ptr::copy_nonoverlapping(src as *const u8, dst, len);
-            }
-        })
-    }
+    unsafe { guarded_copy(dst, src as *const u8, len) }
 }
 
 /// Copies `len` bytes **to** a user-space address from `src`.
@@ -232,26 +171,7 @@ unsafe fn copy_to_user_bytes(dst: usize, src: *const u8, len: usize) -> UaccessR
         return Err(UaccessError::Fault);
     }
 
-    // SAFETY: verified range; faults become EFAULT via the access window.
-    unsafe {
-        run_in_user_access(|| {
-            // Optimize for large, aligned transfers using word-sized copies
-            if len >= 8 && dst % 8 == 0 && src as usize % 8 == 0 {
-                // Copy in 8-byte chunks for better performance
-                let mut i = 0;
-                while i + 8 <= len {
-                    ptr::copy_nonoverlapping((src.add(i)) as *const u64, (dst + i) as *mut u64, 1);
-                    i += 8;
-                }
-                // Handle remainder bytes
-                for j in i..len {
-                    *((dst + j) as *mut u8) = *src.add(j);
-                }
-            } else {
-                ptr::copy_nonoverlapping(src, dst as *mut u8, len);
-            }
-        })
-    }
+    unsafe { guarded_copy(dst as *mut u8, src, len) }
 }
 
 /// Copies user memory into a safe kernel slice.
@@ -358,13 +278,7 @@ pub fn get_user<T: UserPod>(user_addr: usize) -> UaccessResult<T> {
 
     // SAFETY: size and alignment are checked above; faults become EFAULT.
     unsafe {
-        run_in_user_access(|| {
-            ptr::copy_nonoverlapping(
-                user_addr as *const u8,
-                val.as_mut_ptr() as *mut u8,
-                mem::size_of::<T>(),
-            );
-        })?;
+        copy_from_user_bytes(val.as_mut_ptr() as *mut u8, user_addr, mem::size_of::<T>())?;
         Ok(val.assume_init())
     }
 }
@@ -387,9 +301,7 @@ pub fn put_user<T: UserPod>(user_addr: usize, val: T) -> UaccessResult {
 
     // SAFETY: verified range; faults become EFAULT.
     unsafe {
-        run_in_user_access(|| {
-            ptr::write_volatile(user_addr as *mut T, val);
-        })
+        copy_to_user_bytes(user_addr, &val as *const T as *const u8, mem::size_of::<T>())
     }
 }
 
@@ -428,7 +340,7 @@ impl<T: UserPod> UserPtr<T> {
     /// Creates a `UserPtr` from a raw `*mut T` (useful when the syscall ABI
     /// hands pointers through a `usize`-cast argument).
     #[inline]
-    pub const fn from_raw(ptr: *mut T) -> Self {
+    pub fn from_raw(ptr: *mut T) -> Self {
         Self::new(ptr as usize)
     }
 
@@ -670,7 +582,7 @@ pub fn strncpy_from_user(buf: &mut [u8], user_addr: usize) -> UaccessResult<usiz
             if !user_access_ok(addr, 1) {
                 return Err(UaccessError::Fault);
             }
-            let byte = run_in_user_access(|| ptr::read_volatile(addr as *const u8))??;
+            let byte = get_user::<u8>(addr)?;
 
             buf[i] = byte;
             if byte == 0 {
@@ -721,12 +633,14 @@ pub fn clear_user(dst: usize, len: usize) -> UaccessResult {
         return Err(UaccessError::Fault);
     }
 
-    // SAFETY: verified range; faults become EFAULT.
-    unsafe {
-        run_in_user_access(|| {
-            ptr::write_bytes(dst as *mut u8, 0, len);
-        })
+    let zeros = [0u8; 256];
+    let mut offset = 0;
+    while offset < len {
+        let count = (len - offset).min(zeros.len());
+        copy_to_user(dst + offset, &zeros[..count])?;
+        offset += count;
     }
+    Ok(())
 }
 
 #[cfg(test)]

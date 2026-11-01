@@ -20,7 +20,7 @@ use alloc::sync::Arc;
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use spin::Mutex;
 
-use super::ns::{NsSet, CLONE_NEWNET, CLONE_NEWNS, CLONE_NEWPID, CLONE_NEWUSER, CLONE_NEWUTS};
+use super::{NsSet, CLONE_NEWNET, CLONE_NEWNS, CLONE_NEWPID, CLONE_NEWUSER, CLONE_NEWUTS};
 
 /// Global flag indicating whether namespace isolation is enforced
 static ISOLATION_ENFORCED: AtomicBool = AtomicBool::new(false);
@@ -106,8 +106,8 @@ impl NamespaceType {
 /// Child user namespaces can access parent resources (with mapping),
 /// but not vice versa.
 fn check_user_ns_access(
-    current: &Arc<super::ns::user_ns::UserNs>,
-    target: &Arc<super::ns::user_ns::UserNs>,
+    current: &Arc<super::user_ns::UserNs>,
+    target: &Arc<super::user_ns::UserNs>,
 ) -> bool {
     // Same namespace - always allow
     if Arc::ptr_eq(current, target) {
@@ -129,8 +129,8 @@ fn check_user_ns_access(
 /// Validate PID namespace isolation for signal operations.
 /// Prevents processes in child PID namespaces from signaling parent namespace processes.
 pub fn validate_pid_signal(
-    sender_ns: &Arc<super::ns::pid_ns::PidNs>,
-    target_ns: &Arc<super::ns::pid_ns::PidNs>,
+    sender_ns: &Arc<super::pid_ns::PidNs>,
+    target_ns: &Arc<super::pid_ns::PidNs>,
 ) -> Result<(), i32> {
     if !ISOLATION_ENFORCED.load(Ordering::Acquire) {
         return Ok(());
@@ -158,8 +158,8 @@ pub fn validate_pid_signal(
 /// Validate mount namespace isolation for mount operations.
 /// Ensures mounts only affect the current namespace.
 pub fn validate_mount_operation(
-    ns: &Arc<super::ns::mnt_ns::MntNs>,
-    target_mnt: Option<&Arc<super::ns::mnt_ns::MntNs>>,
+    ns: &Arc<super::mnt_ns::MntNs>,
+    target_mnt: Option<&Arc<super::mnt_ns::MntNs>>,
 ) -> Result<(), i32> {
     if !ISOLATION_ENFORCED.load(Ordering::Acquire) {
         return Ok(());
@@ -178,8 +178,8 @@ pub fn validate_mount_operation(
 /// Validate network namespace isolation for socket operations.
 /// Prevents cross-namespace socket access.
 pub fn validate_net_socket_access(
-    socket_ns: &Arc<super::ns::net_ns::NetNs>,
-    process_ns: &Arc<super::ns::net_ns::NetNs>,
+    socket_ns: &Arc<super::net_ns::NetNs>,
+    process_ns: &Arc<super::net_ns::NetNs>,
 ) -> Result<(), i32> {
     if !ISOLATION_ENFORCED.load(Ordering::Acquire) {
         return Ok(());

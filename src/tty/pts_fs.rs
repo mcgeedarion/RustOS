@@ -113,8 +113,7 @@ pub fn vfs_open(path: &str) -> Result<PtsFd, isize> {
         if pair.is_locked() {
             return Err(-5);
         } // EIO — slave locked
-        pair.slave_open
-            .store(true, core::sync::atomic::Ordering::SeqCst);
+        pair.open_slave()?;
         return Ok(PtsFd::Slave { pair });
     }
     Err(-2) // ENOENT

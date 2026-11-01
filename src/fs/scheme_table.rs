@@ -45,6 +45,12 @@ use scheme_api::{OpenFlags, SchemeError, SchemeFileId};
 /// implementations below do exactly that so that minimal handlers only need to
 /// implement `open`, `read`, and `close`.
 pub trait Scheme: Send + Sync {
+    fn poll_source(&self, _fid: SchemeFileId) -> Option<Arc<dyn crate::sync::poll_source::PollSource>> {
+        None
+    }
+
+    fn pipe_backing_fd(&self, _fid: SchemeFileId) -> Option<usize> { None }
+
     /// Open the resource at `path` (the part of the URL after the colon).
     ///
     /// Returns an opaque file-ID that is passed to every subsequent I/O call.

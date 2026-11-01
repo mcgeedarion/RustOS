@@ -115,6 +115,36 @@ pub struct InterruptFrame {
     pub ss: u64,
 }
 
+const _: () = {
+    assert!(core::mem::offset_of!(InterruptFrame, error_code) == 120);
+    assert!(core::mem::offset_of!(InterruptFrame, rip) == 128);
+    assert!(core::mem::offset_of!(InterruptFrame, cs) == 136);
+};
+
+// Called only after all GPRs have been saved. RBX retains the frame pointer
+// across the SysV call; the saved RBX is restored by pop_all.
+macro_rules! enter_rust {
+    () => { concat!(
+        "cld\n",
+        "test byte ptr [rsp + 136], 3\n",
+        "jz 2f\n",
+        "swapgs\n",
+        "2:\n",
+        "mov rbx, rsp\n",
+        "and rsp, -16\n",
+    ) };
+}
+
+macro_rules! leave_rust {
+    () => { concat!(
+        "mov rsp, rbx\n",
+        "test byte ptr [rsp + 136], 3\n",
+        "jz 3f\n",
+        "swapgs\n",
+        "3:\n",
+    ) };
+}
+
 pub type IrqHandler = fn(&mut InterruptFrame);
 
 static IRQ_HANDLERS: SpinLock<[Option<IrqHandler>; 256]> = SpinLock::new([None; 256]);
@@ -553,7 +583,7 @@ pub fn load() {
 }
 
 #[no_mangle]
-pub extern "C" fn generic_irq_dispatch(frame: &mut InterruptFrame, vector: u64) {
+pub extern "sysv64" fn generic_irq_dispatch(frame: &mut InterruptFrame, vector: u64) {
     let v = vector as usize;
     let handler = IRQ_HANDLERS.lock()[v];
     if let Some(h) = handler {
@@ -565,7 +595,7 @@ pub extern "C" fn generic_irq_dispatch(frame: &mut InterruptFrame, vector: u64) 
 }
 
 #[no_mangle]
-pub extern "C" fn generic_exception_handler(frame: &mut InterruptFrame, vector: u64) {
+pub extern "sysv64" fn generic_exception_handler(frame: &mut InterruptFrame, vector: u64) {
     let mnemonic = EXCEPTION_NAMES
         .get(vector as usize)
         .copied()
@@ -587,13 +617,13 @@ pub extern "C" fn generic_exception_handler(frame: &mut InterruptFrame, vector: 
         crate::proc::scheduler::schedule();
     } else {
         loop {
-            crate::arch::api::Cpu::halt();
+            <crate::arch::Arch as crate::arch::api::Cpu>::halt();
         }
     }
 }
 
 #[no_mangle]
-pub extern "C" fn nmi_handler(frame: &mut InterruptFrame) {
+pub extern "sysv64" fn nmi_handler(frame: &mut InterruptFrame) {
     let count = NMI_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
     let status = NmiStatus::read();
 
@@ -624,7 +654,7 @@ pub extern "C" fn nmi_handler(frame: &mut InterruptFrame) {
         dump_registers(frame);
 
         loop {
-            crate::arch::api::Cpu::halt();
+            <crate::arch::Arch as crate::arch::api::Cpu>::halt();
         }
     }
 }
@@ -689,7 +719,7 @@ unsafe fn outb(port: u16, val: u8) {
 const RFLAGS_TF: u64 = 1 << 8;
 
 #[no_mangle]
-pub unsafe extern "C" fn db_handler(frame: *mut InterruptFrame) {
+pub unsafe extern "sysv64" fn db_handler(frame: *mut InterruptFrame) {
     #[cfg(feature = "gdbstub")]
     {
         let f = &mut *frame;
@@ -718,7 +748,7 @@ pub unsafe extern "C" fn db_handler(frame: *mut InterruptFrame) {
 // SwBreakpointTable).
 
 #[no_mangle]
-pub unsafe extern "C" fn bp_handler(frame: *mut InterruptFrame) {
+pub unsafe extern "sysv64" fn bp_handler(frame: *mut InterruptFrame) {
     #[cfg(feature = "gdbstub")]
     {
         let f = &mut *frame;
@@ -735,7 +765,7 @@ pub unsafe extern "C" fn bp_handler(frame: *mut InterruptFrame) {
 }
 
 #[no_mangle]
-pub extern "C" fn page_fault_handler(frame: &mut InterruptFrame, faulting_va: u64) {
+pub extern "sysv64" fn page_fault_handler(frame: &mut InterruptFrame, faulting_va: u64) {
     let error_code = frame.error_code;
     let va = faulting_va as usize;
     let present = error_code & 0x1 != 0;
@@ -747,6 +777,9 @@ pub extern "C" fn page_fault_handler(frame: &mut InterruptFrame, faulting_va: u6
         }
     }
     if crate::proc::cow_fault::handle_cow_fault(va, error_code) {
+        return;
+    }
+    if !user && crate::kernel::uaccess::fixup_user_copy_fault(&mut frame.rip) {
         return;
     }
 
@@ -767,7 +800,7 @@ pub extern "C" fn page_fault_handler(frame: &mut InterruptFrame, faulting_va: u6
     }
     dump_registers(frame);
     loop {
-        crate::arch::api::Cpu::halt();
+        <crate::arch::Arch as crate::arch::api::Cpu>::halt();
     }
 }
 
@@ -810,32 +843,34 @@ static EXCEPTION_NAMES: &[&str] = &[
 
 #[unsafe(naked)]
 unsafe extern "C" fn exc_noerr_asm<const N: u64>() {
-    core::arch::asm!(
+    core::arch::naked_asm!(
         "push 0",
         push_all!(),
         "mov rdi, rsp",
         "mov rsi, {N}",
+        enter_rust!(),
         "call generic_exception_handler",
+        leave_rust!(),
         pop_all!(),
         "add rsp, 8",
         "iretq",
         N = const N,
-        options(noreturn)
     );
 }
 
 #[unsafe(naked)]
 unsafe extern "C" fn exc_err_asm<const N: u64>() {
-    core::arch::asm!(
+    core::arch::naked_asm!(
         push_all!(),
         "mov rdi, rsp",
         "mov rsi, {N}",
+        enter_rust!(),
         "call generic_exception_handler",
+        leave_rust!(),
         pop_all!(),
         "add rsp, 8",
         "iretq",
         N = const N,
-        options(noreturn)
     );
 }
 
@@ -844,86 +879,92 @@ unsafe extern "C" fn exc_err_asm<const N: u64>() {
 /// This replaces the old single `generic_irq_asm_stub` that passed rsi=0.
 #[unsafe(naked)]
 unsafe extern "C" fn generic_irq_asm<const N: u64>() {
-    core::arch::asm!(
+    core::arch::naked_asm!(
         "push 0",
         push_all!(),
         "mov rdi, rsp",
         "mov rsi, {N}",
+        enter_rust!(),
         "call generic_irq_dispatch",
+        leave_rust!(),
         pop_all!(),
         "add rsp, 8",
         "iretq",
         N = const N,
-        options(noreturn)
     );
 }
 
 #[unsafe(naked)]
 unsafe extern "C" fn db_asm() {
-    core::arch::asm!(
+    core::arch::naked_asm!(
         "push 0",
         push_all!(),
         "mov rdi, rsp",
+        enter_rust!(),
         "call db_handler",
+        leave_rust!(),
         pop_all!(),
         "add rsp, 8",
         "iretq",
-        options(noreturn)
     );
 }
 
 #[unsafe(naked)]
 unsafe extern "C" fn nmi_asm() {
-    core::arch::asm!(
+    core::arch::naked_asm!(
         "push 0",
         push_all!(),
         "mov rdi, rsp",
+        enter_rust!(),
         "call nmi_handler",
+        leave_rust!(),
         pop_all!(),
         "add rsp, 8",
         "iretq",
-        options(noreturn)
     );
 }
 
 #[unsafe(naked)]
 unsafe extern "C" fn bp_asm() {
-    core::arch::asm!(
+    core::arch::naked_asm!(
         "push 0",
         push_all!(),
         "mov rdi, rsp",
+        enter_rust!(),
         "call bp_handler",
+        leave_rust!(),
         pop_all!(),
         "add rsp, 8",
         "iretq",
-        options(noreturn)
     );
 }
 
 #[unsafe(naked)]
 unsafe extern "C" fn page_fault_asm() {
-    core::arch::asm!(
+    core::arch::naked_asm!(
         push_all!(),
         "mov rdi, rsp",
         "mov rsi, cr2",
+        enter_rust!(),
         "call page_fault_handler",
+        leave_rust!(),
         pop_all!(),
         "add rsp, 8",
         "iretq",
-        options(noreturn)
     );
 }
 
 #[unsafe(naked)]
 unsafe extern "C" fn timer_irq_asm() {
-    core::arch::asm!(
+    core::arch::naked_asm!(
         "push 0",
         push_all!(),
         "mov rdi, rsp",
+        enter_rust!(),
         "call timer_irq_handler",
+        leave_rust!(),
         pop_all!(),
         "add rsp, 8",
         "iretq",
-        options(noreturn)
     );
 }

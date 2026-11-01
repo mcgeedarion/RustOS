@@ -40,8 +40,7 @@ fn read_iovecs(iov_va: usize, count: usize) -> Result<Vec<UserIovec>, isize> {
     }
 
     let bytes = count.checked_mul(size_of::<UserIovec>()).ok_or(EINVAL)?;
-    let mut iovecs = Vec::with_capacity(count);
-    unsafe { iovecs.set_len(count) };
+    let mut iovecs = alloc::vec![UserIovec { base: 0, len: 0 }; count];
     unsafe { crate::uaccess::copy_from_user_raw_result(iovecs.as_mut_ptr() as *mut u8, iov_va, bytes) }
         .map_err(|_| EFAULT)?;
 

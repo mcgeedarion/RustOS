@@ -287,7 +287,7 @@ pub fn futex_wait_bitset(
     }
 
     match reason {
-        WakeReason::Ready(_) => Ok(()),
+        WakeReason::Ready => Ok(()),
         WakeReason::Cancelled => Err(-4), // EINTR
         WakeReason::Timeout => Err(-110), // ETIMEDOUT
     }
@@ -489,7 +489,7 @@ pub fn futex_lock_pi(addr: usize) -> isize {
         match reason {
             WakeReason::Cancelled => return -4, // EINTR
             WakeReason::Timeout => return -110, // ETIMEDOUT
-            WakeReason::Ready(_) => return 0,   // owner wrote our TID; done
+            WakeReason::Ready => return 0,   // owner wrote our TID; done
         }
     }
 }
@@ -507,7 +507,7 @@ pub fn futex_trylock_pi(addr: usize) -> isize {
     if (word & FUTEX_TID_MASK) != 0 {
         return -11;
     } // EAGAIN
-    if !copy_to_user(addr, &(tid as u32).to_ne_bytes()) {
+    if copy_to_user(addr, &(tid as u32).to_ne_bytes()).is_err() {
         return -14;
     }
     chain.remove(&key);
@@ -533,14 +533,14 @@ pub fn futex_unlock_pi(addr: usize) -> isize {
         let mut chain = PI_CHAIN.lock();
         match chain.get_mut(&key) {
             None => {
-                if !copy_to_user(addr, &0u32.to_ne_bytes()) {
+                if copy_to_user(addr, &0u32.to_ne_bytes()).is_err() {
                     return -14;
                 }
                 successor = None;
             },
             Some(rec) => {
                 if rec.waiters.is_empty() {
-                    if !copy_to_user(addr, &0u32.to_ne_bytes()) {
+                    if copy_to_user(addr, &0u32.to_ne_bytes()).is_err() {
                         return -14;
                     }
                     chain.remove(&key);
@@ -550,7 +550,7 @@ pub fn futex_unlock_pi(addr: usize) -> isize {
                     let still_contested = !rec.waiters.is_empty();
                     let new_word = (next_pid as u32 & FUTEX_TID_MASK)
                         | if still_contested { FUTEX_WAITERS } else { 0 };
-                    if !copy_to_user(addr, &new_word.to_ne_bytes()) {
+                    if copy_to_user(addr, &new_word.to_ne_bytes()).is_err() {
                         return -14;
                     }
                     rec.owner_pid = next_pid;
@@ -838,10 +838,10 @@ pub fn sys_get_robust_list(tid: usize, headp: usize, lenp: usize) -> isize {
             Some(x) => x,
             None => return -3,
         };
-    if !copy_to_user(headp, &head.to_ne_bytes()) {
+    if copy_to_user(headp, &head.to_ne_bytes()).is_err() {
         return -14;
     }
-    if !copy_to_user(lenp, &len.to_ne_bytes()) {
+    if copy_to_user(lenp, &len.to_ne_bytes()).is_err() {
         return -14;
     }
     0

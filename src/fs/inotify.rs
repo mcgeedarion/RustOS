@@ -56,7 +56,7 @@ pub const IN_NONBLOCK: u32 = 0x0000_0800;
 
 const MAX_QUEUE: usize = 16384;
 
-pub const INOTIFY_FD_BASE: usize = 0x8000_0000;
+pub const INOTIFY_FD_BASE: usize = 0x7300_0000;
 
 struct QueuedEvent {
     wd: i32,
@@ -80,22 +80,20 @@ struct InotifyInstance {
 }
 
 static TABLE: Mutex<BTreeMap<usize, InotifyInstance>> = Mutex::new(BTreeMap::new());
+static BACKINGS: Mutex<BTreeMap<usize, usize>> = Mutex::new(BTreeMap::new());
 static COUNTER: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 
 /// Translate a scheme backing fd to the inotify TABLE fdno.
 pub fn scheme_bfd_to_table_fdno(scheme_bfd: usize) -> Option<usize> {
-    let (_, fid) = crate::fs::scheme_fd::scheme_fd_get_fid(scheme_bfd)?;
-    let table_fdno = fid.0 as usize;
-    if table_fdno >= INOTIFY_FD_BASE && TABLE.lock().contains_key(&table_fdno) {
-        Some(table_fdno)
-    } else {
-        None
-    }
+    BACKINGS.lock().get(&scheme_bfd).copied()
 }
 
 pub struct InotifyScheme;
 
 impl Scheme for InotifyScheme {
+    fn poll_source(&self, fid: SchemeFileId) -> Option<alloc::sync::Arc<dyn crate::sync::poll_source::PollSource>> {
+        is_inotify_fd(fid.0 as usize).then(|| crate::fs::poll::inotify_source(fid.0 as usize))
+    }
     fn open(&self, _url: &str, _flags: OpenFlags) -> Result<SchemeFileId, SchemeError> {
         Err(SchemeError::InvalidArg)
     }
@@ -148,6 +146,7 @@ pub fn sys_inotify_init1(flags: u32) -> isize {
     let scheme: Arc<dyn Scheme> = Arc::new(InotifyScheme);
     let scheme_bfd = alloc_scheme_backing_fd();
     scheme_fd_register(scheme_bfd, scheme, SchemeFileId(table_fdno as u64));
+    BACKINGS.lock().insert(scheme_bfd, table_fdno);
 
     let pid = crate::proc::scheduler::current_pid();
     let install_flags = if flags & IN_CLOEXEC != 0 {
@@ -278,6 +277,7 @@ pub fn inotify_read(fdno: usize, buf: &mut [u8]) -> isize {
 }
 
 pub fn inotify_close(fdno: usize) {
+    BACKINGS.lock().retain(|_, raw| *raw != fdno);
     TABLE.lock().remove(&fdno);
 }
 

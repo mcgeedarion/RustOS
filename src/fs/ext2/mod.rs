@@ -20,7 +20,7 @@ pub mod symlink;
 pub use api::{
     create_file, mount, read_file, readdir, set_times, stat, sys_chmod, sys_chown, sys_link,
     sys_lstat, sys_mkdir, sys_readlink, sys_rename, sys_rmdir, sys_stat, sys_statfs, sys_symlink,
-    sys_truncate, sys_unlink, write_file,
+    sys_truncate, sys_unlink, write_file, sync_inode,
 };
 pub use inode::Ext2DirEntry;
 pub use superblock::{Ext2Stat, Ext2Statfs};

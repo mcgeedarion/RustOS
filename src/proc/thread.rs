@@ -11,7 +11,7 @@ use crate::proc::scheduler;
 use crate::uaccess::copy_to_user;
 
 pub fn register_thread(pid: usize, tgid: usize) {
-    scheduler::with_proc_mut(pid, |p| p.tgid = tgid);
+    scheduler::with_proc_mut(pid, |p, _owner| p.tgid = tgid);
 }
 
 pub fn unregister_thread(_pid: usize) {}
@@ -24,8 +24,8 @@ pub fn threads_of(tgid: usize) -> alloc::vec::Vec<usize> {
     scheduler::with_procs_ro(|procs| {
         procs
             .iter()
-            .filter(|p| p.tgid == tgid)
-            .map(|p| p.pid)
+            .filter(|p| p.tgid as usize == tgid)
+            .map(|p| p.pid as usize)
             .collect()
     })
 }
@@ -67,7 +67,7 @@ pub fn sys_tgkill(tgid: usize, tid: usize, sig: u32) -> isize {
 
 pub fn sys_set_tid_address(tidptr: usize) -> isize {
     let pid = scheduler::current_pid();
-    scheduler::with_proc_mut(pid, |p| {
+    scheduler::with_proc_mut(pid, |p, _owner| {
         p.clear_child_tid_va = tidptr;
     });
     pid as isize
@@ -84,9 +84,11 @@ pub fn sys_arch_prctl(code: usize, addr: usize) -> isize {
     let pid = scheduler::current_pid();
     match code {
         ARCH_SET_FS => {
-            scheduler::with_proc_mut(pid, |p| {
+            if addr >= crate::uaccess::USER_SPACE_END {
+                return -1;
+            }
+            scheduler::with_proc_mut(pid, |p, _owner| {
                 p.tls_base = addr;
-                p.ctx.fs_base = addr;
             });
             unsafe {
                 let lo = addr as u32;

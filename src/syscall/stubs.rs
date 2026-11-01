@@ -1,7 +1,7 @@
 // Syscall stubs — thin wrappers and minor implementations that do not
 // warrant their own module.
 
-use crate::fs::path::resolve_path;
+use crate::fs::stat_syscalls::resolve_path;
 use crate::proc::scheduler;
 
 // Named errno helpers — all sourced from the shared errno module.
@@ -57,17 +57,17 @@ pub(super) fn sys_getcwd_impl(buf_va: usize, size: usize) -> isize {
     if copy_to_user(buf_va + bytes.len(), &[0u8]).is_err() {
         return efault();
     }
-    buf_va as isize
+    (bytes.len() + 1) as isize
 }
 
 /// NR 80  chdir(path_va)
 pub(super) fn sys_chdir_impl(path_va: usize) -> isize {
-    crate::fs::io_syscalls::sys_chdir(path_va)
+    crate::fs::stat_syscalls::sys_chdir(path_va)
 }
 
 /// NR 81  fchdir(fd)
 pub(super) fn sys_fchdir_impl(fd: usize) -> isize {
-    crate::fs::io_syscalls::sys_fchdir(fd)
+    crate::fs::stat_syscalls::sys_fchdir(fd)
 }
 
 /// NR 82  rename(old_va, new_va) — delegates to renameat with AT_FDCWD.
@@ -90,7 +90,7 @@ pub(super) fn sys_renameat_impl(
         Ok(p) => p,
         Err(e) => return e,
     };
-    crate::fs::vfs_ops::rename(&old, &new)
+    crate::fs::vfs_ops::rename(&old, &new).map_or_else(|e| e, |_| 0)
 }
 
 /// NR 316  renameat2(old_dirfd, old_va, new_dirfd, new_va, flags)
@@ -121,7 +121,7 @@ pub(super) fn sys_renameat2_impl(
     };
 
     // Pass flags to VFS rename_with_flags for advanced operations
-    crate::fs::vfs_ops::rename_with_flags(&old, &new, flags)
+    crate::fs::vfs_ops::rename_with_flags(&old, &new, flags).map_or_else(|e| e, |_| 0)
 }
 
 /// NR 83  mkdir(path_va, mode)
@@ -179,9 +179,9 @@ pub(super) fn sys_unlinkat_impl(dirfd: i32, path_va: usize, flags: u32) -> isize
         Err(e) => return e,
     };
     if flags & AT_REMOVEDIR != 0 {
-        crate::fs::vfs_ops::rmdir(&path)
+        crate::fs::vfs_ops::rmdir(&path).map_or_else(|e| e, |_| 0)
     } else {
-        crate::fs::vfs_ops::unlink(&path)
+        crate::fs::vfs_ops::unlink(&path).map_or_else(|e| e, |_| 0)
     }
 }
 
@@ -190,7 +190,7 @@ pub(super) fn sys_rmdir_impl(path_va: usize) -> isize {
         Ok(p) => p,
         Err(e) => return e,
     };
-    crate::fs::vfs_ops::rmdir(&path)
+    crate::fs::vfs_ops::rmdir(&path).map_or_else(|e| e, |_| 0)
 }
 
 pub(super) fn sys_unlink_impl(path_va: usize) -> isize {
@@ -206,7 +206,7 @@ pub(super) fn sys_symlinkat_impl(target_va: usize, new_dirfd: i32, linkpath_va: 
         Ok(p) => p,
         Err(e) => return e,
     };
-    crate::fs::vfs_ops::symlink(&target, &link)
+    crate::fs::vfs_ops::symlink(&target, &link).map_or_else(|e| e, |_| 0)
 }
 
 pub(super) fn sys_symlink_impl(target_va: usize, linkpath_va: usize) -> isize {
@@ -254,7 +254,7 @@ pub(super) fn sys_linkat_impl(
         Ok(p) => p,
         Err(e) => return e,
     };
-    crate::fs::vfs_ops::link(&old, &new)
+    crate::fs::vfs_ops::link(&old, &new).map_or_else(|e| e, |_| 0)
 }
 
 pub(super) fn sys_link_impl(old_va: usize, new_va: usize) -> isize {
@@ -266,7 +266,7 @@ pub(super) fn sys_chmod_impl(path_va: usize, mode: u32) -> isize {
         Ok(p) => p,
         Err(e) => return e,
     };
-    crate::fs::vfs_ops::chmod(&path, mode & 0o7777)
+    crate::fs::vfs_ops::chmod(&path, (mode & 0o7777) as u16).map_or_else(|e| e, |_| 0)
 }
 
 pub(super) fn sys_chown_impl(path_va: usize, uid: u32, gid: u32) -> isize {
@@ -274,7 +274,7 @@ pub(super) fn sys_chown_impl(path_va: usize, uid: u32, gid: u32) -> isize {
         Ok(p) => p,
         Err(e) => return e,
     };
-    crate::fs::vfs_ops::chown(&path, uid, gid)
+    crate::fs::vfs_ops::chown(&path, uid, gid).map_or_else(|e| e, |_| 0)
 }
 
 pub(super) fn sys_lchown_impl(path_va: usize, uid: u32, gid: u32) -> isize {
@@ -328,7 +328,7 @@ pub(super) fn sys_fstatfs_impl(fd: usize, buf_va: usize) -> isize {
 }
 
 pub(super) fn sys_getdents64_impl(fd: usize, buf_va: usize, count: usize) -> isize {
-    crate::fs::io_syscalls::sys_getdents64(fd, buf_va, count)
+    crate::fs::getdents::sys_getdents64(fd, buf_va, count)
 }
 
 /// NR 260  fchownat(dirfd, path_va, uid, gid, flags)
@@ -345,7 +345,7 @@ pub(super) fn sys_fchownat_impl(
     if flags & AT_EMPTY_PATH != 0 && path_va == 0 {
         let pid = crate::proc::scheduler::current_pid();
         match crate::fs::process_fd::proc_fd_path(pid, dirfd as usize) {
-            Some(p) => return crate::fs::vfs_ops::chown(&p, uid, gid),
+            Some(p) => return crate::fs::vfs_ops::chown(&p, uid, gid).map_or_else(|e| e, |_| 0),
             None => return ebadf(),
         }
     }
@@ -358,7 +358,7 @@ pub(super) fn sys_fchownat_impl(
     if flags & AT_SYMLINK_NOFOLLOW != 0 {
         crate::fs::vfs_ops::lchown(&path, uid, gid)
     } else {
-        crate::fs::vfs_ops::chown(&path, uid, gid)
+        crate::fs::vfs_ops::chown(&path, uid, gid).map_or_else(|e| e, |_| 0)
     }
 }
 
@@ -366,7 +366,7 @@ pub(super) fn sys_fchownat_impl(
 pub(super) fn sys_fchown_impl(fd: usize, uid: u32, gid: u32) -> isize {
     let pid = crate::proc::scheduler::current_pid();
     match crate::fs::process_fd::proc_fd_path(pid, fd) {
-        Some(p) => crate::fs::vfs_ops::chown(&p, uid, gid),
+        Some(p) => crate::fs::vfs_ops::chown(&p, uid, gid).map_or_else(|e| e, |_| 0),
         None => ebadf(),
     }
 }
@@ -381,14 +381,14 @@ pub(super) fn sys_fchmodat_impl(dirfd: i32, path_va: usize, mode: u32, flags: i3
         Ok(p) => p,
         Err(e) => return e,
     };
-    crate::fs::vfs_ops::chmod(&path, mode & 0o7777)
+    crate::fs::vfs_ops::chmod(&path, (mode & 0o7777) as u16).map_or_else(|e| e, |_| 0)
 }
 
 /// NR 91  fchmod(fd, mode) — operate on an open file descriptor.
 pub(super) fn sys_fchmod_impl(fd: usize, mode: u32) -> isize {
     let pid = crate::proc::scheduler::current_pid();
     match crate::fs::process_fd::proc_fd_path(pid, fd) {
-        Some(p) => crate::fs::vfs_ops::chmod(&p, mode & 0o7777),
+        Some(p) => crate::fs::vfs_ops::chmod(&p, (mode & 0o7777) as u16).map_or_else(|e| e, |_| 0),
         None => ebadf(),
     }
 }
@@ -451,7 +451,7 @@ fn ptrace_validate_word_addr(addr: usize) -> Result<(), isize> {
 /// Validate that `addr` is 8-byte-aligned and fits within the user_regs block.
 #[inline]
 fn ptrace_validate_ureg_slot(addr: usize, user_regs_bytes: usize) -> Result<usize, isize> {
-    if addr & 7 != 0 || addr + 8 > user_regs_bytes {
+    if addr & 7 != 0 || addr.checked_add(8).map_or(true, |end| end > user_regs_bytes) {
         return Err(einval());
     }
     Ok(addr / 8)
@@ -463,12 +463,12 @@ fn ptrace_validate_ureg_slot(addr: usize, user_regs_bytes: usize) -> Result<usiz
 fn ptrace_resolve_remote_pa(pid: i32, addr: usize) -> Result<usize, isize> {
     use crate::arch::api::Paging;
     use crate::mm::pmm::PAGE_SIZE;
-    let cr3 = match crate::proc::scheduler::with_proc(pid as usize, |p| p.cr3) {
+    let cr3 = match crate::proc::scheduler::with_proc(pid as usize, |p| p.user_pagetable) {
         Some(cr3) => cr3,
         None => return Err(esrch()),
     };
-    match Paging::virt_to_phys_cr3(cr3, addr) {
-        Some(pa) => Ok(pa + (addr & (PAGE_SIZE - 1))),
+    match <crate::arch::Arch as Paging>::virt_to_phys(cr3, addr) {
+        Some(pa) => Ok(pa),
         None => Err(efault()),
     }
 }
@@ -480,10 +480,11 @@ fn ptrace_check_permission(caller: usize, target_pid: i32) -> Result<(), isize> 
     if target_pid as usize == caller {
         return Err(eperm());
     }
-    match crate::proc::scheduler::with_proc(target_pid as usize, |_| ()) {
-        Some(_) => Ok(()),
-        None => Err(esrch()),
-    }
+    let (uid, privileged) = scheduler::with_proc(caller, |p|
+        (p.uid, p.caps.has(crate::security::cap::SYS_PTRACE))).ok_or_else(esrch)?;
+    scheduler::with_proc(target_pid as usize, |p| {
+        if privileged || (uid == p.uid && uid == p.euid && uid == p.suid) { Ok(()) } else { Err(eperm()) }
+    }).ok_or_else(esrch)?
 }
 
 /// Read `N` u64 register values from userspace at `va`.
@@ -530,33 +531,46 @@ pub(crate) fn sys_ptrace_impl(request: i32, pid: i32, addr: usize, data: usize) 
 
     let caller = crate::proc::scheduler::current_pid();
 
+    // Every operation except TRACEME/ATTACH requires an existing tracing
+    // relationship and a stopped target. Merely knowing a PID is not authority
+    // to read or overwrite its address space.
+    if request != PTRACE_TRACEME && request != PTRACE_ATTACH {
+        let allowed = scheduler::with_proc(pid as usize, |p| matches!(p.ptrace_state,
+            PtraceState::Stopped { tracer, .. } if tracer == caller)).unwrap_or(false);
+        if !allowed { return esrch(); }
+    }
+
     match request {
         PTRACE_TRACEME => {
             let ppid = crate::proc::scheduler::current_ppid();
-            crate::proc::scheduler::with_proc_mut(caller, |p, _| {
+            return crate::proc::scheduler::with_proc_mut(caller, |p, _| {
+                if p.ptrace_state != PtraceState::None { return -1; }
                 p.ptrace_state = PtraceState::Tracee {
-                    tracer: ppid,
+                    tracer: (ppid) as usize,
                     options: 0,
                     in_syscall_stop: false,
                 };
+                0
             })
-            .unwrap_or(());
-            0
+            .unwrap_or_else(esrch);
         },
 
         PTRACE_ATTACH => {
             if let Err(e) = ptrace_check_permission(caller, pid) {
                 return e;
             }
-            crate::proc::scheduler::with_proc_mut(pid as usize, |p, _| {
+            let result = crate::proc::scheduler::with_proc_mut(pid as usize, |p, _| {
+                if p.ptrace_state != PtraceState::None { return -1; }
                 p.ptrace_state = PtraceState::Tracee {
                     tracer: caller,
                     options: 0,
                     in_syscall_stop: false,
                 };
+                0
             })
-            .unwrap_or(());
-            crate::proc::signal::send_signal(pid as usize, SIGSTOP);
+            .unwrap_or_else(esrch);
+            if result != 0 { return result; }
+            crate::proc::signal::send_signal(pid as usize, SIGSTOP as i32);
             0
         },
 
@@ -569,7 +583,7 @@ pub(crate) fn sys_ptrace_impl(request: i32, pid: i32, addr: usize, data: usize) 
             if data != 0 {
                 crate::proc::signal::send_signal(target, data as i32);
             }
-            crate::proc::scheduler::wake(target);
+            crate::proc::scheduler::wake_pid(target);
             0
         },
 
@@ -592,7 +606,8 @@ pub(crate) fn sys_ptrace_impl(request: i32, pid: i32, addr: usize, data: usize) 
                     in_syscall_stop: in_syscall,
                 };
                 #[cfg(target_arch = "x86_64")]
-                if let Some(kstack) = p.kstack_top {
+                if p.kstack_top >= FRAME_SZ {
+                    let kstack = p.kstack_top;
                     let f = unsafe {
                         core::slice::from_raw_parts_mut((kstack - FRAME_SZ) as *mut usize, 17)
                     };
@@ -603,7 +618,7 @@ pub(crate) fn sys_ptrace_impl(request: i32, pid: i32, addr: usize, data: usize) 
             if data != 0 {
                 crate::proc::signal::send_signal(pid as usize, data as i32);
             }
-            crate::proc::scheduler::wake(pid as usize);
+            crate::proc::scheduler::wake_pid(pid as usize);
             0
         },
 
@@ -611,7 +626,8 @@ pub(crate) fn sys_ptrace_impl(request: i32, pid: i32, addr: usize, data: usize) 
             let target = pid as usize;
             crate::proc::scheduler::with_proc_mut(target, |p, _| {
                 #[cfg(target_arch = "x86_64")]
-                if let Some(kstack) = p.kstack_top {
+                if p.kstack_top >= FRAME_SZ {
+                    let kstack = p.kstack_top;
                     let f = unsafe {
                         core::slice::from_raw_parts_mut((kstack - FRAME_SZ) as *mut usize, 17)
                     };
@@ -636,12 +652,12 @@ pub(crate) fn sys_ptrace_impl(request: i32, pid: i32, addr: usize, data: usize) 
             if data != 0 {
                 crate::proc::signal::send_signal(pid as usize, data as i32);
             }
-            crate::proc::scheduler::wake(pid as usize);
+            crate::proc::scheduler::wake_pid(pid as usize);
             0
         },
 
         PTRACE_KILL => {
-            crate::proc::signal::send_signal(pid as usize, SIGKILL);
+            crate::proc::signal::send_signal(pid as usize, SIGKILL as i32);
             0
         },
 
@@ -680,9 +696,9 @@ pub(crate) fn sys_ptrace_impl(request: i32, pid: i32, addr: usize, data: usize) 
                 Err(e) => return e,
             };
             let val = crate::proc::scheduler::with_proc(pid as usize, |p| {
-                p.kstack_top
-                    .map(|ks| {
-                        let regs = build_user_regs_pub(ks, p.fs_base);
+                (p.kstack_top >= FRAME_SZ)
+                    .then(|| {
+                        let regs = build_user_regs_pub(p.kstack_top, p.tls_base);
                         if slot < UREG_COUNT {
                             regs[slot]
                         } else {
@@ -706,8 +722,9 @@ pub(crate) fn sys_ptrace_impl(request: i32, pid: i32, addr: usize, data: usize) 
                 Err(e) => return e,
             };
             crate::proc::scheduler::with_proc_mut(pid as usize, |p, _| {
-                if let Some(ks) = p.kstack_top {
-                    let mut regs = build_user_regs_pub(ks, p.fs_base);
+                if p.kstack_top >= FRAME_SZ {
+                    let ks = p.kstack_top;
+                    let mut regs = build_user_regs_pub(ks, p.tls_base);
                     if slot < UREG_COUNT {
                         regs[slot] = data as u64;
                         apply_user_regs_pub(ks, &regs);
@@ -720,7 +737,7 @@ pub(crate) fn sys_ptrace_impl(request: i32, pid: i32, addr: usize, data: usize) 
 
         PTRACE_GETREGS => {
             let regs_opt = crate::proc::scheduler::with_proc(pid as usize, |p| {
-                p.kstack_top.map(|ks| build_user_regs_pub(ks, p.fs_base))
+                (p.kstack_top >= FRAME_SZ).then(|| build_user_regs_pub(p.kstack_top, p.tls_base))
             });
             match regs_opt {
                 Some(Some(regs)) => match ptrace_copy_regs_to_user::<UREG_COUNT>(data, &regs) {
@@ -737,8 +754,8 @@ pub(crate) fn sys_ptrace_impl(request: i32, pid: i32, addr: usize, data: usize) 
                 Err(e) => return e,
             };
             crate::proc::scheduler::with_proc_mut(pid as usize, |p, _| {
-                if let Some(ks) = p.kstack_top {
-                    apply_user_regs_pub(ks, &regs);
+                if p.kstack_top >= FRAME_SZ {
+                    apply_user_regs_pub(p.kstack_top, &regs);
                 }
             })
             .unwrap_or(());
@@ -760,7 +777,7 @@ pub(crate) fn sys_ptrace_impl(request: i32, pid: i32, addr: usize, data: usize) 
         },
 
         PTRACE_GETEVENTMSG => {
-            let msg = crate::proc::scheduler::with_proc(pid as usize, |p| p.ptrace_event_msg)
+            let msg = crate::proc::scheduler::with_proc(pid as usize, |p| p.ptrace_event)
                 .unwrap_or(0);
             if copy_to_user(data, &msg.to_le_bytes()).is_err() {
                 return efault();
@@ -769,8 +786,21 @@ pub(crate) fn sys_ptrace_impl(request: i32, pid: i32, addr: usize, data: usize) 
         },
 
         PTRACE_GETSIGINFO => {
-            let si = crate::proc::signal::get_pending_siginfo(pid as usize);
-            if copy_to_user(data, &si).is_err() {
+            let Some(si) = crate::proc::signal::get_pending_siginfo(pid as usize) else {
+                return einval();
+            };
+            let mut bytes = [0u8; 128];
+            bytes[..4].copy_from_slice(&si.sig.to_ne_bytes());
+            bytes[8..12].copy_from_slice(&si.code.to_ne_bytes());
+            if si.code > 0 && [4, 5, 7, 8, 11].contains(&si.sig) {
+                bytes[16..24].copy_from_slice(&si.addr.to_ne_bytes());
+            } else {
+                bytes[16..20].copy_from_slice(&si.pid.to_ne_bytes());
+                bytes[20..24].copy_from_slice(&si.uid.to_ne_bytes());
+                if si.sig == 17 { bytes[24..28].copy_from_slice(&si.status.to_ne_bytes()); }
+                else { bytes[24..32].copy_from_slice(&si.value.to_ne_bytes()); }
+            }
+            if copy_to_user(data, &bytes).is_err() {
                 return efault();
             }
             0

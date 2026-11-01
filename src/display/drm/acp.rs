@@ -279,13 +279,17 @@ impl AcpDevice {
     /// Set the sample rate for an endpoint. Reprograms the BCLK/LRCK dividers.
     pub fn set_sample_rate(&mut self, ep: AcpEndpointId, hz: u32) -> Result<(), AcpError> {
         let ep = self.endpoint_mut(ep)?;
-        ep.sample_rate = hz;
         // BCLK = sample_rate × channels × bit_depth
         // DIV = ACP_REF_CLK / BCLK  (ACP ref clock = 200 MHz)
-        let bclk = hz * ep.channels as u32 * ep.bit_depth as u32;
-        let div = 200_000_000u32.checked_div(bclk).unwrap_or(1);
+        let bit_depth = ep.bit_depth as u32;
+        let bclk = hz.checked_mul(ep.channels as u32)
+            .and_then(|value| value.checked_mul(bit_depth))
+            .filter(|value| *value != 0).ok_or(AcpError::HardwareError)?;
+        let div = 200_000_000u32.checked_div(bclk).filter(|value| *value != 0)
+            .ok_or(AcpError::HardwareError)?;
+        ep.sample_rate = hz;
         self.mmio_write(regs::ACP_I2S_MASTER_BCLK_DIV, div);
-        self.mmio_write(regs::ACP_I2S_MASTER_LRCK_DIV, div * ep.bit_depth as u32);
+        self.mmio_write(regs::ACP_I2S_MASTER_LRCK_DIV, div * bit_depth);
         Ok(())
     }
 
@@ -318,7 +322,7 @@ impl AcpDevice {
         ep.ring
             .push(AcpDmaDescriptor {
                 src_addr: phys_addr,
-                dst_addr: self.tx_fifo_addr(ep.kind),
+                dst_addr: Self::tx_fifo_addr(ep.kind),
                 count: size,
                 flags: 0,
             })
@@ -331,9 +335,9 @@ impl AcpDevice {
         if ep.running {
             return Ok(());
         }
-        let ctrl_reg = self.ctrl_reg(ep.kind);
-        self.mmio_write(ctrl_reg, 0x1);
+        let ctrl_reg = Self::ctrl_reg(ep.kind);
         ep.running = true;
+        self.mmio_write(ctrl_reg, 0x1);
         Ok(())
     }
 
@@ -343,9 +347,9 @@ impl AcpDevice {
         if !ep.running {
             return Ok(());
         }
-        let ctrl_reg = self.ctrl_reg(ep.kind);
-        self.mmio_write(ctrl_reg, 0x0);
+        let ctrl_reg = Self::ctrl_reg(ep.kind);
         ep.running = false;
+        self.mmio_write(ctrl_reg, 0x0);
         Ok(())
     }
 
@@ -375,7 +379,7 @@ impl AcpDevice {
             .ok_or(AcpError::InvalidEndpoint)
     }
 
-    fn tx_fifo_addr(&self, kind: AcpEndpointKind) -> u32 {
+    fn tx_fifo_addr(kind: AcpEndpointKind) -> u32 {
         match kind {
             AcpEndpointKind::I2sPlayback => regs::I2S_TX_FIFO_ADDR,
             AcpEndpointKind::I2sCapture => regs::I2S_RX_FIFO_ADDR,
@@ -385,7 +389,7 @@ impl AcpDevice {
         }
     }
 
-    fn ctrl_reg(&self, kind: AcpEndpointKind) -> u32 {
+    fn ctrl_reg(kind: AcpEndpointKind) -> u32 {
         match kind {
             AcpEndpointKind::I2sPlayback => regs::I2S_TX_CONTROL,
             AcpEndpointKind::I2sCapture => regs::I2S_RX_CONTROL,

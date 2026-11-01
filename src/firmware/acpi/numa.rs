@@ -81,55 +81,30 @@ static NODE_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// else; overwritten by `parse_slit()` when the table is present.
 static DISTANCES: Once<[[u8; MAX_NODES]; MAX_NODES]> = Once::new();
 
-/// Get mutable reference to NODES array during initialization.
-///
-/// # Safety
-/// - Must only be called during single-threaded boot before SMP
-/// - NODES must not have been initialized yet
-unsafe fn get_nodes_mut() -> &'static mut [NumaNode; MAX_NODES] {
-    NODES
-        .get_or_try_init(|| {
-            let mut nodes = [NumaNode::empty(); MAX_NODES];
-            Ok::<[NumaNode; MAX_NODES], ()>(nodes)
-        })
-        .unwrap()
-}
-
-/// Get mutable reference to DISTANCES array during initialization.
-///
-/// # Safety
-/// - Must only be called during single-threaded boot before SMP
-/// - DISTANCES must not have been initialized yet
-unsafe fn get_distances_mut() -> &'static mut [[u8; MAX_NODES]; MAX_NODES] {
-    DISTANCES
-        .get_or_try_init(|| {
-            let mut d = [[20u8; MAX_NODES]; MAX_NODES];
-            for i in 0..MAX_NODES {
-                d[i][i] = SRAT_DISTANCE_LOCAL;
-            }
-            Ok::<[[u8; MAX_NODES]; MAX_NODES], ()>(d)
-        })
-        .unwrap()
-}
-
-unsafe fn node_for_domain(domain: u32) -> Option<&'static mut NumaNode> {
-    let count = NODE_COUNT.load(Ordering::Relaxed);
-    let nodes = get_nodes_mut();
-
-    // Look for existing entry.
-    for n in &mut nodes[..count] {
-        if n.domain == domain {
-            return Some(n);
-        }
+fn default_distances() -> [[u8; MAX_NODES]; MAX_NODES] {
+    let mut matrix = [[20; MAX_NODES]; MAX_NODES];
+    for (i, row) in matrix.iter_mut().enumerate() {
+        row[i] = SRAT_DISTANCE_LOCAL;
     }
-    // Allocate a new slot.
-    if count >= MAX_NODES {
+    matrix
+}
+
+fn node_for_domain<'a>(
+    nodes: &'a mut [NumaNode; MAX_NODES],
+    count: &mut usize,
+    domain: u32,
+) -> Option<&'a mut NumaNode> {
+    if let Some(index) = nodes[..*count].iter().position(|node| node.domain == domain) {
+        return Some(&mut nodes[index]);
+    }
+    if *count >= MAX_NODES {
         return None;
     }
-    nodes[count].domain = domain;
-    nodes[count].present = true;
-    NODE_COUNT.store(count + 1, Ordering::Relaxed);
-    Some(&mut nodes[count])
+    let index = *count;
+    nodes[index].domain = domain;
+    nodes[index].present = true;
+    *count += 1;
+    Some(&mut nodes[index])
 }
 
 #[repr(C, packed)]
@@ -177,15 +152,18 @@ struct SratX2Apic {
 /// - Must be called after `super::init()` during single-threaded boot
 /// - Must complete before SMP initialization
 pub unsafe fn parse_srat() {
+    if NODES.get().is_some() { return; }
+    let mut nodes = [NumaNode::empty(); MAX_NODES];
+    let mut count = 0;
     let hdr = match super::find_table(b"SRAT") {
         Some(p) => p,
         None => {
             println!("acpi/numa: no SRAT — assuming single node");
             // Populate a synthetic node 0 with no memory ranges.
-            let nodes = get_nodes_mut();
             nodes[0].domain = 0;
             nodes[0].present = true;
-            NODE_COUNT.store(1, Ordering::Relaxed);
+            NODES.call_once(|| nodes);
+            NODE_COUNT.store(1, Ordering::Release);
             return;
         },
     };
@@ -226,7 +204,7 @@ pub unsafe fn parse_srat() {
                     | ((e.prox_hi[1] as u32) << 16)
                     | ((e.prox_hi[2] as u32) << 24);
                 let lid = e.lapic_id;
-                if let Some(node) = node_for_domain(domain) {
+                if let Some(node) = node_for_domain(&mut nodes, &mut count, domain) {
                     if lid < 64 {
                         node.lapic_mask |= 1u64 << lid;
                     }
@@ -247,7 +225,7 @@ pub unsafe fn parse_srat() {
                 let range_len = (e.len_hi as u64) << 32 | e.len_lo as u64;
                 let hotplug = e.flags & (1 << 1) != 0;
                 let persist = e.flags & (1 << 2) != 0;
-                if let Some(node) = node_for_domain(domain) {
+                if let Some(node) = node_for_domain(&mut nodes, &mut count, domain) {
                     let idx = node.mem_range_cnt;
                     if idx < MAX_MEM_RANGES {
                         node.mem_ranges[idx] = MemRange {
@@ -272,7 +250,7 @@ pub unsafe fn parse_srat() {
                 }
                 let domain = e.prox_dom;
                 let xid = e.x2apic_id;
-                if let Some(node) = node_for_domain(domain) {
+                if let Some(node) = node_for_domain(&mut nodes, &mut count, domain) {
                     if xid < 64 {
                         node.lapic_mask |= 1u64 << xid;
                     }
@@ -283,11 +261,9 @@ pub unsafe fn parse_srat() {
         p += len;
     }
 
-    let count = NODE_COUNT.load(Ordering::Relaxed);
+    NODES.call_once(|| nodes);
+    NODE_COUNT.store(count, Ordering::Release);
     println!("acpi/numa: {} NUMA node(s) discovered from SRAT", count);
-
-    // Ensure NODES is initialized before reading
-    let _ = get_nodes_mut();
 
     let nodes = NODES.get().unwrap();
     for i in 0..count {
@@ -307,10 +283,13 @@ pub unsafe fn parse_srat() {
 }
 
 pub unsafe fn parse_slit() {
+    if DISTANCES.get().is_some() { return; }
+    let mut distances = default_distances();
     let hdr = match super::find_table(b"SLIT") {
         Some(p) => p,
         None => {
             println!("acpi/numa: no SLIT, using default distances");
+            DISTANCES.call_once(|| distances);
             return;
         },
     };
@@ -326,7 +305,7 @@ pub unsafe fn parse_slit() {
     let locality_count = count_ptr.read_unaligned() as usize;
     let matrix_off = body_off + 8;
     let matrix_bytes = total.saturating_sub(matrix_off);
-    let expected = locality_count * locality_count;
+    let Some(expected) = locality_count.checked_mul(locality_count) else { return; };
 
     if matrix_bytes < expected {
         println!(
@@ -337,19 +316,21 @@ pub unsafe fn parse_slit() {
     }
 
     let matrix = (hdr as usize + matrix_off) as *const u8;
-    let n = locality_count.min(MAX_NODES);
-
-    // Get mutable reference to distances during init
-    let distances = get_distances_mut();
+    let nodes = nodes();
+    let n = nodes.len();
     for i in 0..n {
         for j in 0..n {
-            distances[i][j] = *matrix.add(i * locality_count + j);
+            let from = nodes[i].domain as usize;
+            let to = nodes[j].domain as usize;
+            if from < locality_count && to < locality_count {
+                distances[i][j] = *matrix.add(from * locality_count + to);
+            }
         }
     }
+    DISTANCES.call_once(|| distances);
     println!("acpi/numa: SLIT {}×{} distance matrix loaded", n, n);
     // Print first row as a quick sanity check.
-    let row: &[u8] = core::slice::from_raw_parts(matrix, n);
-    print_distance_row(0, row);
+    if n > 0 { print_distance_row(0, &distances[0][..n]); }
 }
 
 fn print_distance_row(node: usize, row: &[u8]) {
@@ -376,10 +357,8 @@ pub fn node_count() -> usize {
 /// # Panics
 /// Panics if called before `init()` has initialized the NUMA subsystem.
 pub fn nodes() -> &'static [NumaNode] {
-    // Ensure initialization has completed
-    let _ = NODES.get().expect("NUMA nodes not initialized");
     let count = NODE_COUNT.load(Ordering::Acquire);
-    unsafe { core::slice::from_raw_parts(NODES.get().unwrap().as_ptr(), count) }
+    NODES.get().map_or(&[], |nodes| &nodes[..count.min(MAX_NODES)])
 }
 
 /// Relative access distance from `from` to `to`.
@@ -391,8 +370,8 @@ pub fn distance(from: usize, to: usize) -> u8 {
     if from >= MAX_NODES || to >= MAX_NODES {
         return u8::MAX;
     }
-    let distances = DISTANCES.get().expect("NUMA distances not initialized");
-    distances[from][to]
+    DISTANCES.get().map_or(if from == to { SRAT_DISTANCE_LOCAL } else { 20 },
+        |distances| distances[from][to])
 }
 
 /// Return the NUMA node that owns the physical address `pa`, if known.
@@ -401,7 +380,7 @@ pub fn node_for_phys(pa: u64) -> Option<usize> {
     for (idx, node) in nodes.iter().enumerate() {
         for r in 0..node.mem_range_cnt {
             let mr = &node.mem_ranges[r];
-            if pa >= mr.base && pa < mr.base + mr.len {
+            if pa >= mr.base && pa - mr.base < mr.len {
                 return Some(idx);
             }
         }

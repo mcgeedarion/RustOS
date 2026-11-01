@@ -34,7 +34,7 @@ fn block_write(lba: u64, data: &[u8]) {
         data.len() % 512 == 0,
         "block_write: data not sector-aligned"
     );
-    crate::drivers::block::write_sectors(lba, data);
+    crate::drivers::block::write_sectors(lba, (data.len() / 512) as u32, data);
 }
 
 const BTRFS_MAGIC: u64 = 0x4D5F53665248425F; // "_BHRfS_M"
@@ -50,19 +50,19 @@ const BTRFS_SYSTEM_CHUNK_ARRAY_SIZE: usize = 2048;
 const BTRFS_ROOT_TREE_OBJECTID: u64 = 1;
 const BTRFS_EXTENT_TREE_OBJECTID: u64 = 2;
 const BTRFS_CHUNK_TREE_OBJECTID: u64 = 3;
-const BTRFS_FS_TREE_OBJECTID: u64 = 5;
+pub(super) const BTRFS_FS_TREE_OBJECTID: u64 = 5;
 const BTRFS_ROOT_TREE_DIR_OBJECTID: u64 = 6;
 const BTRFS_FIRST_FREE_OBJECTID: u64 = 256;
 const BTRFS_LAST_FREE_OBJECTID: u64 = u64::MAX - 255;
 
 // Item-type constants
-const BTRFS_INODE_ITEM_KEY: u8 = 1;
+pub(super) const BTRFS_INODE_ITEM_KEY: u8 = 1;
 const BTRFS_INODE_REF_KEY: u8 = 12;
-const BTRFS_DIR_ITEM_KEY: u8 = 84;
+pub(super) const BTRFS_DIR_ITEM_KEY: u8 = 84;
 const BTRFS_DIR_INDEX_KEY: u8 = 96;
 const BTRFS_EXTENT_DATA_KEY: u8 = 108;
 const BTRFS_CSUM_ITEM_KEY: u8 = 120;
-const BTRFS_ROOT_ITEM_KEY: u8 = 132;
+pub(super) const BTRFS_ROOT_ITEM_KEY: u8 = 132;
 const BTRFS_CHUNK_ITEM_KEY: u8 = 228;
 const BTRFS_DEV_ITEM_KEY: u8 = 216;
 const BTRFS_DEV_EXTENT_KEY: u8 = 204;
@@ -79,18 +79,21 @@ const BTRFS_NODE_INTERNAL: u8 = 1;
 const BTRFS_MAX_LEAF_ITEMS: usize = 128;
 
 // Inode mode bits
-const S_IFMT: u32 = 0o170000;
-const S_IFREG: u32 = 0o100000;
-const S_IFDIR: u32 = 0o040000;
-const S_IFLNK: u32 = 0o120000;
+pub(super) const S_IFMT: u32 = 0o170000;
+pub(super) const S_IFREG: u32 = 0o100000;
+pub(super) const S_IFDIR: u32 = 0o040000;
+pub(super) const S_IFLNK: u32 = 0o120000;
 
 // btrfs name hash (FNV-like used by kernel)
-fn btrfs_name_hash(name: &[u8]) -> u64 {
-    let mut h: u64 = 0xD2A98B26625EEE7B;
+pub(super) fn btrfs_name_hash(name: &[u8]) -> u64 {
+    let mut h = !1u32;
     for &b in name {
-        h = h.wrapping_mul(0x1000193).wrapping_add(b as u64);
+        h ^= b as u32;
+        for _ in 0..8 {
+            h = (h >> 1) ^ if h & 1 != 0 { 0x82f63b78 } else { 0 };
+        }
     }
-    h
+    h as u64
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -108,7 +111,7 @@ impl BtrfsKey {
             offset,
         }
     }
-    fn from_bytes(b: &[u8]) -> Self {
+    pub(super) fn from_bytes(b: &[u8]) -> Self {
         BtrfsKey {
             objectid: u64::from_le_bytes(b[0..8].try_into().unwrap()),
             ty: b[8],
@@ -120,7 +123,7 @@ impl BtrfsKey {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct BtrfsInodeItem {
     pub generation: u64,
     pub transid: u64,
@@ -145,7 +148,7 @@ pub struct BtrfsInodeItem {
 }
 
 impl BtrfsInodeItem {
-    fn from_bytes(b: &[u8]) -> Self {
+    pub(super) fn from_bytes(b: &[u8]) -> Self {
         let r64 = |o: usize| u64::from_le_bytes(b[o..o + 8].try_into().unwrap());
         let r32 = |o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
         BtrfsInodeItem {
@@ -161,17 +164,17 @@ impl BtrfsInodeItem {
             rdev: r64(56),
             flags: r64(64),
             sequence: r64(72),
-            atime_sec: r64(152),
-            atime_nsec: r32(160),
-            ctime_sec: r64(164),
-            ctime_nsec: r32(172),
-            mtime_sec: r64(176),
-            mtime_nsec: r32(184),
-            otime_sec: r64(188),
-            otime_nsec: r32(196),
+            atime_sec: r64(112),
+            atime_nsec: r32(120),
+            ctime_sec: r64(124),
+            ctime_nsec: r32(132),
+            mtime_sec: r64(136),
+            mtime_nsec: r32(144),
+            otime_sec: r64(148),
+            otime_nsec: r32(156),
         }
     }
-    fn to_bytes(&self) -> Vec<u8> {
+    pub(super) fn to_bytes(&self) -> Vec<u8> {
         let mut b = vec![0u8; 160];
         let w64 = |b: &mut Vec<u8>, o, v: u64| b[o..o + 8].copy_from_slice(&v.to_le_bytes());
         let w32 = |b: &mut Vec<u8>, o, v: u32| b[o..o + 4].copy_from_slice(&v.to_le_bytes());
@@ -187,6 +190,14 @@ impl BtrfsInodeItem {
         w64(&mut b, 56, self.rdev);
         w64(&mut b, 64, self.flags);
         w64(&mut b, 72, self.sequence);
+        w64(&mut b, 112, self.atime_sec);
+        w32(&mut b, 120, self.atime_nsec);
+        w64(&mut b, 124, self.ctime_sec);
+        w32(&mut b, 132, self.ctime_nsec);
+        w64(&mut b, 136, self.mtime_sec);
+        w32(&mut b, 144, self.mtime_nsec);
+        w64(&mut b, 148, self.otime_sec);
+        w32(&mut b, 156, self.otime_nsec);
         b
     }
 }
@@ -202,7 +213,7 @@ pub struct BtrfsDirItem {
 }
 
 impl BtrfsDirItem {
-    fn from_bytes(b: &[u8]) -> Option<Self> {
+    pub(super) fn from_bytes(b: &[u8]) -> Option<Self> {
         if b.len() < 30 {
             return None;
         }
@@ -213,10 +224,10 @@ impl BtrfsDirItem {
         let ty = b[29];
         let start = 30;
         let end = start + name_len as usize;
-        if end > b.len() {
+        if end.checked_add(data_len as usize)? > b.len() {
             return None;
         }
-        let name = String::from_utf8_lossy(&b[start..end]).into_owned();
+        let name = core::str::from_utf8(&b[start..end]).ok()?.to_string();
         Some(BtrfsDirItem {
             child_key,
             transid,
@@ -244,8 +255,8 @@ pub struct BtrfsFileExtentItem {
 }
 
 impl BtrfsFileExtentItem {
-    fn from_bytes(b: &[u8]) -> Option<Self> {
-        if b.len() < 13 {
+    pub(super) fn from_bytes(b: &[u8]) -> Option<Self> {
+        if b.len() < 21 {
             return None;
         }
         let generation = u64::from_le_bytes(b[0..8].try_into().ok()?);
@@ -298,10 +309,11 @@ pub struct BtrfsChunkItem {
     pub dev_id: u64,
     pub offset: u64,
     pub dev_uuid: [u8; 16],
+    pub stripes: Vec<(u64, u64)>,
 }
 
 impl BtrfsChunkItem {
-    fn from_bytes(b: &[u8]) -> Option<Self> {
+    pub(super) fn from_bytes(b: &[u8]) -> Option<Self> {
         if b.len() < 80 {
             return None;
         }
@@ -310,6 +322,9 @@ impl BtrfsChunkItem {
         let r16 = |o: usize| u16::from_le_bytes(b[o..o + 2].try_into().unwrap());
         let mut dev_uuid = [0u8; 16];
         dev_uuid.copy_from_slice(&b[64..80]);
+        let count = r16(44) as usize;
+        if count == 0 || b.len() < 48 + count * 32 { return None; }
+        let stripes = (0..count).map(|i| (r64(48 + i * 32), r64(56 + i * 32))).collect();
         Some(BtrfsChunkItem {
             length: r64(0),
             owner: r64(8),
@@ -323,6 +338,7 @@ impl BtrfsChunkItem {
             dev_id: r64(48),
             offset: r64(56),
             dev_uuid,
+            stripes,
         })
     }
 }
@@ -344,8 +360,8 @@ pub struct BtrfsRootItem {
 }
 
 impl BtrfsRootItem {
-    fn from_bytes(b: &[u8]) -> Option<Self> {
-        if b.len() < 256 {
+    pub(super) fn from_bytes(b: &[u8]) -> Option<Self> {
+        if b.len() < 239 {
             return None;
         }
         let r64 = |o: usize| u64::from_le_bytes(b[o..o + 8].try_into().unwrap());
@@ -413,6 +429,14 @@ impl BtrfsSuperblock {
         if magic != BTRFS_MAGIC {
             return None;
         }
+        if r16(196) != 0 || !super::checksum::verify_header_csum(&b[..4096])
+            || r64(48) != BTRFS_SUPERBLOCK_OFFSET || r64(136) != 1
+            || r32(160) > 2048 || r32(144) < 512 || !r32(144).is_power_of_two()
+            || r32(148) < r32(144) || r32(148) > 65536 || !r32(148).is_power_of_two()
+            || r64(96) != 0
+            // Reject layouts whose addressing/ownership semantics are not implemented.
+            || r64(188) & !0x37f != 0
+        { return None; }
         let mut csum = [0u8; 32];
         csum.copy_from_slice(&b[0..32]);
         let mut fsid = [0u8; 16];
@@ -420,7 +444,7 @@ impl BtrfsSuperblock {
         let mut label = [0u8; 256];
         label.copy_from_slice(&b[299..555]);
         let mut sys_chunk_array = [0u8; 2048];
-        sys_chunk_array.copy_from_slice(&b[2048..4096]);
+        sys_chunk_array.copy_from_slice(&b[811..2859]);
         Some(BtrfsSuperblock {
             csum,
             fsid,
@@ -441,14 +465,14 @@ impl BtrfsSuperblock {
             leafsize: r32(152),
             stripesize: r32(156),
             sys_chunk_array_size: r32(160),
-            chunk_root_generation: r64(168),
-            compat_flags: r64(176),
-            compat_ro_flags: r64(184),
-            incompat_flags: r64(192),
-            csum_type: r16(200),
-            root_level: b[202],
-            chunk_root_level: b[203],
-            log_root_level: b[204],
+            chunk_root_generation: r64(164),
+            compat_flags: r64(172),
+            compat_ro_flags: r64(180),
+            incompat_flags: r64(188),
+            csum_type: r16(196),
+            root_level: b[198],
+            chunk_root_level: b[199],
+            log_root_level: b[200],
             label,
             sys_chunk_array,
         })
@@ -534,6 +558,12 @@ pub struct BtrfsFs {
     pub(super) fs_tree_root: u64,
     pub(super) path_cache: BTreeMap<String, u64>,
     pub(super) alloc_cursor: u64,
+    pub(super) lba_start: u64,
+    pub(super) csum_tree_root: u64,
+    pub(super) root_dir: u64,
+    pub(super) writable: bool,
+    /// A transaction stages the single supported FS-tree leaf until commit.
+    pub(super) staged: Option<Vec<u8>>,
 }
 
 pub static BTRFS_MOUNTS: Mutex<BTreeMap<String, BtrfsFs>> = Mutex::new(BTreeMap::new());

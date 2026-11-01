@@ -312,6 +312,15 @@ pub fn sys_setpgid(pid: u32, pgid: u32) -> isize {
 
     // Fetch caller's sid.
     let caller_sid = crate::proc::scheduler::with_proc(caller_pid, |p| p.sid).unwrap_or(0);
+    // Inspect other PCBs before taking the target lock. The target can itself
+    // be a member of this group, so nested iteration would self-deadlock.
+    let pgid_exists = target_pgid as usize == target_pid
+        || crate::proc::scheduler::with_procs_ro(|procs| {
+            procs.iter().any(|owner| {
+                let p = owner.inner.lock();
+                p.pgid == target_pgid as usize && p.sid == caller_sid
+            })
+        });
 
     crate::proc::scheduler::with_proc_mut(target_pid, |p, _| {
         // Must be caller or a direct child.
@@ -328,11 +337,6 @@ pub fn sys_setpgid(pid: u32, pgid: u32) -> isize {
         }
         // pgid must exist in the same session or equal target_pid.
         if target_pgid as usize != target_pid {
-            let pgid_exists = crate::proc::scheduler::with_procs_ro(|procs| {
-                procs
-                    .iter()
-                    .any(|p| p.pgid == target_pgid as usize && p.sid == caller_sid)
-            });
             if !pgid_exists {
                 return -1isize; // EPERM
             }
@@ -367,8 +371,11 @@ pub fn pids_in_process_group(pgid: usize) -> alloc::vec::Vec<usize> {
     crate::proc::scheduler::with_procs_ro(|procs| {
         procs
             .iter()
-            .filter(|p| p.pgid == pgid && p.pid == p.tgid)
-            .map(|p| p.tgid)
+            .filter(|owner| {
+                let p = owner.inner.lock();
+                p.pgid == pgid && p.pid == p.tgid
+            })
+            .map(|p| p.tgid as usize)
             .collect()
     })
 }
@@ -378,8 +385,11 @@ pub fn pids_in_session(sid: usize) -> alloc::vec::Vec<usize> {
     crate::proc::scheduler::with_procs_ro(|procs| {
         procs
             .iter()
-            .filter(|p| p.sid == sid && p.pid == p.tgid)
-            .map(|p| p.tgid)
+            .filter(|owner| {
+                let p = owner.inner.lock();
+                p.sid == sid && p.pid == p.tgid
+            })
+            .map(|p| p.tgid as usize)
             .collect()
     })
 }

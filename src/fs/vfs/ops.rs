@@ -91,22 +91,8 @@ pub fn read_all(path: &str) -> Result<Vec<u8>, isize> {
     }
     let h = mount::resolve(path)?;
     match h.fstype {
-        FsType::Btrfs => crate::fs::btrfs::btrfs_read_all(&h.subpath),
-        FsType::Ext2 => {
-            use crate::fs::fcntl::{fd_close, fd_open, fd_read};
-            let fd = fd_open(path, 0).map_err(|e| e)?;
-            let mut data = Vec::new();
-            let mut chunk = [0u8; 4096];
-            loop {
-                let n = fd_read(fd, &mut chunk);
-                if n <= 0 {
-                    break;
-                }
-                data.extend_from_slice(&chunk[..n as usize]);
-            }
-            fd_close(fd);
-            Ok(data)
-        },
+        FsType::Btrfs => crate::fs::btrfs::btrfs_read_all(path),
+        FsType::Ext2 => crate::fs::ext2::read_file(&h.subpath).map_err(|e| e as isize),
         FsType::Ext4 => {
             let ino = crate::fs::ext4::stat(path).ok_or(-2isize)?;
             crate::fs::ext4::read_file_by_ino(ino).ok_or(-2isize)
@@ -129,6 +115,9 @@ pub fn read_all(path: &str) -> Result<Vec<u8>, isize> {
         FsType::Devfs => crate::fs::devfs::read_all(&h.subpath),
         FsType::Procfs => crate::fs::procfs::read_all(&h.subpath),
         FsType::Sysfs => crate::fs::sysfs::read_all(&h.subpath),
+        FsType::ExFat => crate::fs::exfat::read_file(&h.subpath),
+        FsType::Ntfs => crate::fs::ntfs::read_file(&h.subpath),
+        FsType::Cdfs => crate::fs::cdfs::read_file(&h.subpath),
         FsType::Cgroupfs => unreachable!(),
     }
 }
@@ -151,19 +140,12 @@ pub fn write_all(path: &str, data: &[u8]) -> Result<(), isize> {
         return Err(-30);
     }
     let result = match h.fstype {
-        FsType::Btrfs => crate::fs::btrfs::btrfs_write_all(&h.subpath, data),
-        FsType::Ext2 => {
-            use crate::fs::fcntl::{fd_close, fd_open, fd_write};
-            let fd = fd_open(path, 0x241).map_err(|e| e)?;
-            let n = fd_write(fd, data);
-            fd_close(fd);
-            if n < 0 {
-                Err(n as isize)
-            } else {
-                Ok(())
-            }
+        FsType::Btrfs => crate::fs::btrfs::btrfs_write_all(path, data),
+        FsType::Ext2 => crate::fs::ext2::write_file(&h.subpath, data).map_err(|e| e as isize),
+        FsType::Ext4 => {
+            crate::fs::ext4_write::truncate(path, 0).map_err(|e| e as isize)?;
+            crate::fs::ext4_write::write(path, data, 0).map(|_| ()).map_err(|e| e as isize)
         },
-        FsType::Ext4 => Err(-30),
         FsType::Fat32 => {
             let mp = mount_point_for(&h.subpath, path);
             let mut f = crate::fs::fat32::fat_open(&mp, &h.subpath)
@@ -179,6 +161,8 @@ pub fn write_all(path: &str, data: &[u8]) -> Result<(), isize> {
             crate::fs::overlayfs::write(&om, &h.subpath, data)
         },
         FsType::Devfs | FsType::Procfs | FsType::Sysfs => Err(-30),
+        FsType::ExFat => crate::fs::exfat::write_file(&h.subpath, data),
+        FsType::Ntfs | FsType::Cdfs => Err(-30),
         FsType::Cgroupfs => unreachable!(),
     };
     if result.is_ok() {
@@ -192,11 +176,11 @@ pub fn pread(path: &str, offset: usize, len: usize) -> Result<Vec<u8>, isize> {
     match h.fstype {
         FsType::Tmpfs => crate::fs::tmpfs::tmpfs_pread(path, offset, len),
         FsType::Btrfs => {
-            let data = crate::fs::btrfs::btrfs_read_all(&h.subpath)?;
+            let data = crate::fs::btrfs::btrfs_read_all(path)?;
             if offset >= data.len() {
                 return Ok(Vec::new());
             }
-            let end = (offset + len).min(data.len());
+            let end = offset.saturating_add(len).min(data.len());
             Ok(data[offset..end].to_vec())
         },
         _ => {
@@ -204,7 +188,7 @@ pub fn pread(path: &str, offset: usize, len: usize) -> Result<Vec<u8>, isize> {
             if offset >= data.len() {
                 return Ok(Vec::new());
             }
-            let end = (offset + len).min(data.len());
+            let end = offset.saturating_add(len).min(data.len());
             Ok(data[offset..end].to_vec())
         },
     }
@@ -217,19 +201,19 @@ pub fn pwrite(path: &str, offset: usize, data: &[u8]) -> Result<usize, isize> {
     }
     let result = match h.fstype {
         FsType::Btrfs => {
-            let mut full = crate::fs::btrfs::btrfs_read_all(&h.subpath).unwrap_or_default();
-            let end = offset + data.len();
+            let mut full = crate::fs::btrfs::btrfs_read_all(path)?;
+            let end = offset.checked_add(data.len()).ok_or(-27isize)?;
             if end > full.len() {
                 full.resize(end, 0);
             }
             full[offset..end].copy_from_slice(data);
-            crate::fs::btrfs::btrfs_write_all(&h.subpath, &full)?;
+            crate::fs::btrfs::btrfs_write_all(path, &full)?;
             Ok(data.len())
         },
         FsType::Tmpfs => crate::fs::tmpfs::tmpfs_pwrite(path, offset, data),
         FsType::Ext2 | FsType::Fat32 | FsType::Overlayfs => {
-            let mut full = read_all(path).unwrap_or_default();
-            let end = offset + data.len();
+            let mut full = read_all(path)?;
+            let end = offset.checked_add(data.len()).ok_or(-27isize)?;
             if end > full.len() {
                 full.resize(end, 0);
             }
@@ -237,7 +221,8 @@ pub fn pwrite(path: &str, offset: usize, data: &[u8]) -> Result<usize, isize> {
             write_all(path, &full)?;
             Ok(data.len())
         },
-        FsType::Ext4 => Err(-30),
+        FsType::Ext4 => crate::fs::ext4_write::write(path, data, offset as u64)
+            .map(|n| n as usize).map_err(|e| e as isize),
         _ => Err(-38),
     };
     if result.is_ok() {
@@ -252,16 +237,16 @@ pub fn truncate(path: &str, len: usize) -> Result<(), isize> {
         return Err(-30);
     }
     let result = match h.fstype {
-        FsType::Btrfs => crate::fs::btrfs::btrfs_truncate(&h.subpath, len),
+        FsType::Btrfs => crate::fs::btrfs::btrfs_truncate(path, len as u64),
         FsType::Tmpfs => crate::fs::tmpfs::tmpfs_truncate(path, len),
-        FsType::Ext2 => crate::fs::ext2::sys_truncate(path, len as u64).map(|_| ()),
-        FsType::Ext4 => Err(-30),
+        FsType::Ext2 => crate::fs::ext2::sys_truncate(&h.subpath, len as u64).map_err(|e| e as isize),
+        FsType::Ext4 => crate::fs::ext4_write::truncate(path, len as u64).map(|_| ()).map_err(|e| e as isize),
         FsType::Fat32 => {
             let mp = mount_point_for(&h.subpath, path);
             let mut f = crate::fs::fat32::fat_open(&mp, &h.subpath)?;
             let mut mounts = crate::fs::fat32::FAT_MOUNTS.lock();
             let fs = mounts.get_mut(&mp).ok_or(-2isize)?;
-            fs.truncate(&mut f, len as u64)
+            fs.truncate(&mut f, u32::try_from(len).map_err(|_| -27isize)?)
         },
         FsType::Overlayfs => {
             let om = overlay_mount(&h)?;
@@ -286,14 +271,9 @@ pub fn create(path: &str) -> Result<(), isize> {
         return Err(-30);
     }
     let result = match h.fstype {
-        FsType::Btrfs => crate::fs::btrfs::btrfs_create(&h.subpath),
-        FsType::Ext2 => {
-            use crate::fs::fcntl::{fd_close, fd_open};
-            let fd = fd_open(path, 0x241).map_err(|e| e)?;
-            fd_close(fd);
-            Ok(())
-        },
-        FsType::Ext4 => Err(-30),
+        FsType::Btrfs => crate::fs::btrfs::btrfs_create(path),
+        FsType::Ext2 => crate::fs::ext2::create_file(&h.subpath, 0o666).map_err(|e| e as isize),
+        FsType::Ext4 => crate::fs::ext4_write::create(path, 0o666).map(|_| ()).map_err(|e| e as isize),
         FsType::Fat32 => {
             let mp = mount_point_for(&h.subpath, path);
             crate::fs::fat32::fat_creat(&mp, &h.subpath).map(|_| ())
@@ -343,8 +323,8 @@ pub fn link(existing: &str, new_path: &str) -> Result<(), isize> {
     let result = match h_e.fstype {
         FsType::Btrfs => crate::fs::btrfs::btrfs_link(&src, new_path),
         FsType::Tmpfs => crate::fs::tmpfs::tmpfs_link(&src, new_path),
-        FsType::Ext2 => crate::fs::ext2::sys_link(&src, new_path).map(|_| ()),
-        FsType::Ext4 => Err(-30),
+        FsType::Ext2 => crate::fs::ext2::sys_link(&h_e.subpath, &h_n.subpath).map_err(|e| e as isize),
+        FsType::Ext4 => crate::fs::ext4_write::link(&src, new_path).map(|_| ()).map_err(|e| e as isize),
         FsType::Overlayfs => {
             let om = overlay_mount(&h_e)?;
             crate::fs::overlayfs::link(&om, &h_e.subpath, &h_n.subpath)
@@ -368,9 +348,10 @@ pub fn mkdir(path: &str) -> Result<(), isize> {
         return Err(-30);
     }
     let result = match h.fstype {
-        FsType::Btrfs => crate::fs::btrfs::btrfs_mkdir(&h.subpath),
-        FsType::Ext2 => crate::fs::ext2::sys_mkdir(path, 0o755).map(|_| ()),
-        FsType::Ext4 => Err(-30),
+        FsType::Btrfs => crate::fs::btrfs::btrfs_mkdir(path),
+        FsType::Ext2 => crate::fs::ext2::sys_mkdir(&h.subpath, 0o755).map_err(|e| e as isize),
+        FsType::Ext4 => crate::fs::ext4_write::mkdir(path, 0o755).map(|_| ()).map_err(|e| e as isize),
+        FsType::ExFat => crate::fs::exfat::mkdir(&h.subpath),
         FsType::Fat32 => {
             let mp = mount_point_for(&h.subpath, path);
             let mut mounts = crate::fs::fat32::FAT_MOUNTS.lock();
@@ -400,10 +381,10 @@ pub fn rmdir(path: &str) -> Result<(), isize> {
         return Err(-30);
     }
     let result = match h.fstype {
-        FsType::Btrfs => crate::fs::btrfs::btrfs_rmdir(&h.subpath),
+        FsType::Btrfs => crate::fs::btrfs::btrfs_rmdir(path),
         FsType::Tmpfs => crate::fs::tmpfs::tmpfs_rmdir(path),
-        FsType::Ext2 => crate::fs::ext2::sys_rmdir(path).map(|_| ()),
-        FsType::Ext4 => Err(-30),
+        FsType::Ext2 => crate::fs::ext2::sys_rmdir(&h.subpath).map_err(|e| e as isize),
+        FsType::Ext4 => crate::fs::ext4_write::rmdir(path).map(|_| ()).map_err(|e| e as isize),
         FsType::Fat32 => {
             let mp = mount_point_for(&h.subpath, path);
             let mut mounts = crate::fs::fat32::FAT_MOUNTS.lock();
@@ -459,9 +440,9 @@ pub fn unlink(path: &str) -> Result<(), isize> {
     unlink_preflight(creds, target)?;
 
     let result = match h.fstype {
-        FsType::Btrfs => crate::fs::btrfs::btrfs_unlink(&h.subpath),
-        FsType::Ext2 => crate::fs::ext2::sys_unlink(&resolved).map(|_| ()),
-        FsType::Ext4 => Err(-30),
+        FsType::Btrfs => crate::fs::btrfs::btrfs_unlink(&resolved),
+        FsType::Ext2 => crate::fs::ext2::sys_unlink(&h.subpath).map_err(|e| e as isize),
+        FsType::Ext4 => crate::fs::ext4_write::unlink(&resolved).map(|_| ()).map_err(|e| e as isize),
         FsType::Fat32 => {
             let mp = mount_point_for(&h.subpath, &resolved);
             let mut mounts = crate::fs::fat32::FAT_MOUNTS.lock();
@@ -531,8 +512,8 @@ pub fn rename_with_flags(old: &str, new: &str, flags: u32) -> Result<(), isize> 
     let result = match h_o.fstype {
         FsType::Btrfs => crate::fs::btrfs::btrfs_rename(&old_r, &new_r),
         FsType::Tmpfs => crate::fs::tmpfs::tmpfs_rename(&old_r, &new_r),
-        FsType::Ext2 => crate::fs::ext2::sys_rename(&old_r, &new_r).map(|_| ()),
-        FsType::Ext4 => Err(-30),
+        FsType::Ext2 => crate::fs::ext2::sys_rename(&h_o.subpath, &h_n.subpath).map_err(|e| e as isize),
+        FsType::Ext4 => crate::fs::ext4_write::rename(&old_r, &new_r).map(|_| ()).map_err(|e| e as isize),
         FsType::Overlayfs => {
             let om = overlay_mount(&h_o)?;
             crate::fs::overlayfs::rename(&om, &h_o.subpath, &h_n.subpath)
@@ -575,25 +556,25 @@ fn stat_impl(path: &str, lstat: bool) -> Result<KStat, isize> {
 
     let h = mount::resolve(path)?;
     let result = match h.fstype {
-        FsType::Btrfs => crate::fs::btrfs::btrfs_stat(&h.subpath),
+        FsType::Btrfs => crate::fs::btrfs::btrfs_stat(path),
         FsType::Ext2 => {
             let s = if lstat {
-                crate::fs::ext2::sys_lstat(path).map_err(|e| e as isize)?
+                crate::fs::ext2::sys_lstat(&h.subpath).map_err(|e| e as isize)?
             } else {
-                crate::fs::ext2::sys_stat(path).map_err(|e| e as isize)?
+                crate::fs::ext2::sys_stat(&h.subpath).map_err(|e| e as isize)?
             };
             Ok(KStat {
                 ino: s.ino as u64,
                 mode: s.mode,
-                nlink: s.nlink,
+                nlink: s.nlink as u32,
                 uid: s.uid,
                 gid: s.gid,
                 size: s.size,
-                atime: s.atime,
-                mtime: s.mtime,
-                ctime: s.ctime,
+                atime: s.atime as u64 * 1_000_000_000,
+                mtime: s.mtime as u64 * 1_000_000_000,
+                ctime: s.ctime as u64 * 1_000_000_000,
                 blksize: s.blksize as u64,
-                blocks: s.blocks,
+                blocks: s.blocks as u64,
                 is_dir: (s.mode & 0o170000) == 0o040000,
             })
         },
@@ -622,20 +603,20 @@ fn stat_impl(path: &str, lstat: bool) -> Result<KStat, isize> {
             let mp = mount_point_for(&h.subpath, path);
             let fs_map = crate::fs::fat32::FAT_MOUNTS.lock();
             let fs = fs_map.get(&mp).ok_or(-2isize)?;
-            let e = fs.stat(&h.subpath)?;
+            let e = fs.walk(&h.subpath)?;
             Ok(KStat {
-                ino: e.ino,
-                mode: e.mode,
+                ino: e.cluster as u64,
+                mode: if e.is_dir() { 0o040755 } else { 0o100644 },
                 nlink: 1,
                 uid: 0,
                 gid: 0,
-                size: e.size,
-                atime: e.mtime,
-                mtime: e.mtime,
-                ctime: e.mtime,
+                size: e.size as u64,
+                atime: 0,
+                mtime: fs.mtime_ns(&e)?,
+                ctime: 0,
                 blksize: 4096,
-                blocks: e.size.div_ceil(512),
-                is_dir: e.is_dir,
+                blocks: (e.size as u64).div_ceil(512),
+                is_dir: e.is_dir(),
             })
         },
         FsType::Tmpfs => crate::fs::tmpfs::tmpfs_stat(path),
@@ -660,6 +641,20 @@ fn stat_impl(path: &str, lstat: bool) -> Result<KStat, isize> {
         FsType::Devfs => crate::fs::devfs::stat(&h.subpath),
         FsType::Procfs => crate::fs::procfs::stat(&h.subpath),
         FsType::Sysfs => crate::fs::sysfs::stat(&h.subpath),
+        FsType::ExFat | FsType::Ntfs | FsType::Cdfs => {
+            let (size, is_dir) = match h.fstype {
+                FsType::ExFat => (crate::fs::exfat::file_size(&h.subpath),
+                    crate::fs::exfat::read_dir(&h.subpath).is_ok()),
+                FsType::Ntfs => (crate::fs::ntfs::file_size(&h.subpath),
+                    crate::fs::ntfs::read_dir(&h.subpath).is_ok()),
+                _ => (crate::fs::cdfs::file_size(&h.subpath),
+                    crate::fs::cdfs::read_dir(&h.subpath).is_ok()),
+            };
+            let size = if is_dir { 0 } else { size? };
+            Ok(KStat { mode: if is_dir { 0o040555 } else { 0o100444 },
+                size, is_dir, nlink: 1, blksize: 4096, blocks: size.div_ceil(512),
+                ..KStat::default() })
+        },
         FsType::Cgroupfs => unreachable!(),
     };
 
@@ -682,7 +677,7 @@ pub fn utimens(path: &str, atime_ns: u64, mtime_ns: u64) -> Result<(), isize> {
     }
 
     let result = match h.fstype {
-        FsType::Btrfs => crate::fs::btrfs::btrfs_set_times(&h.subpath, atime_ns, mtime_ns),
+        FsType::Btrfs => crate::fs::btrfs::btrfs_set_times(path, atime_ns, mtime_ns),
         FsType::Ext2 => {
             crate::fs::ext2::set_times(path, atime_ns, mtime_ns).map_err(|e| e as isize)
         },
@@ -700,7 +695,8 @@ pub fn utimens(path: &str, atime_ns: u64, mtime_ns: u64) -> Result<(), isize> {
             crate::fs::tmpfs::tmpfs_set_times(&upper_path, atime_ns, mtime_ns)
         },
         FsType::Devfs | FsType::Procfs | FsType::Sysfs => Ok(()),
-        FsType::Ext4 => Err(-30),
+        FsType::Ext4 => crate::fs::ext4_write::utimens(path, atime_ns, mtime_ns).map(|_| ()).map_err(|e| e as isize),
+        FsType::ExFat | FsType::Ntfs | FsType::Cdfs => Err(-95),
         FsType::Cgroupfs => Ok(()),
     };
 
@@ -726,17 +722,17 @@ pub fn statfs(path: &str) -> Result<KStatfs, isize> {
     }
     let h = mount::resolve(path)?;
     match h.fstype {
-        FsType::Btrfs => Ok(crate::fs::btrfs::btrfs_statfs()),
+        FsType::Btrfs => crate::fs::btrfs::btrfs_statfs(path),
         FsType::Tmpfs => crate::fs::tmpfs::tmpfs_statfs(path),
         FsType::Ext2 => {
             let s = crate::fs::ext2::sys_statfs(path).map_err(|e| e as isize)?;
             Ok(KStatfs {
                 f_type: FSTYPE_EXT2,
-                f_bsize: s.f_bsize as u64,
-                f_blocks: s.f_blocks,
-                f_bfree: s.f_bfree,
-                f_bavail: s.f_bavail,
-                f_namelen: s.f_namelen as u64,
+                f_bsize: s.block_size as u64,
+                f_blocks: s.total_blocks as u64,
+                f_bfree: s.free_blocks as u64,
+                f_bavail: s.free_blocks as u64,
+                f_namelen: 255,
             })
         },
         FsType::Ext4 => {
@@ -754,13 +750,13 @@ pub fn statfs(path: &str) -> Result<KStatfs, isize> {
             let mp = mount_point_for(&h.subpath, path);
             let fs_map = crate::fs::fat32::FAT_MOUNTS.lock();
             let fs = fs_map.get(&mp).ok_or(-2isize)?;
-            let s = fs.statfs()?;
+            let s = fs.statfs();
             Ok(KStatfs {
                 f_type: FSTYPE_FAT32,
-                f_bsize: s.cluster_size as u64,
-                f_blocks: s.total_clusters,
-                f_bfree: s.free_clusters,
-                f_bavail: s.free_clusters,
+                f_bsize: s.f_bsize,
+                f_blocks: s.f_blocks,
+                f_bfree: s.f_bfree,
+                f_bavail: s.f_bavail,
                 f_namelen: 255,
             })
         },
@@ -794,6 +790,7 @@ pub fn statfs(path: &str) -> Result<KStatfs, isize> {
             f_namelen: 255,
             ..KStatfs::default()
         }),
+        FsType::ExFat | FsType::Ntfs | FsType::Cdfs => Err(-95),
     }
 }
 
@@ -824,17 +821,17 @@ pub fn readdir(path: &str) -> Result<Vec<DirEntry>, isize> {
     }
     let h = mount::resolve(path)?;
     match h.fstype {
-        FsType::Btrfs => crate::fs::btrfs::btrfs_readdir(&h.subpath),
+        FsType::Btrfs => crate::fs::btrfs::btrfs_readdir(path),
         FsType::Ext2 => {
-            let entries = crate::fs::ext2::readdir(path).map_err(|e| e as isize)?;
+            let entries = crate::fs::ext2::readdir(&h.subpath).map_err(|e| e as isize)?;
             Ok(entries
                 .into_iter()
                 .map(|e| DirEntry {
                     name: e.name,
-                    ino: e.ino as u64,
-                    is_dir: e.is_dir,
-                    mode: e.mode,
-                    size: e.size,
+                    ino: e.inode as u64,
+                    is_dir: e.file_type == 2,
+                    mode: match e.file_type { 2 => 0o040755, 7 => 0o120777, _ => 0o100644 },
+                    size: 0,
                 })
                 .collect())
         },
@@ -855,15 +852,17 @@ pub fn readdir(path: &str) -> Result<Vec<DirEntry>, isize> {
             let mp = mount_point_for(&h.subpath, path);
             let fs_map = crate::fs::fat32::FAT_MOUNTS.lock();
             let fs = fs_map.get(&mp).ok_or(-2isize)?;
-            let entries = fs.readdir(&h.subpath)?;
+            let dir = fs.walk(&h.subpath)?;
+            if !dir.is_dir() { return Err(-20); }
+            let entries = fs.read_dir(dir.cluster)?;
             Ok(entries
                 .into_iter()
                 .map(|e| DirEntry {
+                    ino: e.cluster as u64,
+                    is_dir: e.is_dir(),
+                    mode: if e.is_dir() { 0o040755 } else { 0o100644 },
+                    size: e.size as u64,
                     name: e.name,
-                    ino: e.ino,
-                    is_dir: e.is_dir,
-                    mode: e.mode,
-                    size: e.size,
                 })
                 .collect())
         },
@@ -885,6 +884,16 @@ pub fn readdir(path: &str) -> Result<Vec<DirEntry>, isize> {
         FsType::Devfs => crate::fs::devfs::readdir(&h.subpath),
         FsType::Procfs => crate::fs::procfs::readdir(&h.subpath),
         FsType::Sysfs => crate::fs::sysfs::readdir(&h.subpath),
+        FsType::ExFat | FsType::Ntfs | FsType::Cdfs => {
+            let entries = match h.fstype {
+                FsType::ExFat => crate::fs::exfat::read_dir(&h.subpath),
+                FsType::Ntfs => crate::fs::ntfs::read_dir(&h.subpath),
+                _ => crate::fs::cdfs::read_dir(&h.subpath),
+            }?;
+            Ok(entries.into_iter().map(|(name, is_dir)| DirEntry {
+                name, ino: 0, is_dir, mode: if is_dir { 0o040555 } else { 0o100444 }, size: 0,
+            }).collect())
+        },
         FsType::Cgroupfs => unreachable!(),
     }
 }
@@ -897,8 +906,8 @@ pub fn symlink(target: &str, link_path: &str) -> Result<(), isize> {
     let result = match h.fstype {
         FsType::Btrfs => crate::fs::btrfs::btrfs_symlink(target, link_path),
         FsType::Tmpfs => crate::fs::tmpfs::tmpfs_symlink(target, link_path),
-        FsType::Ext2 => crate::fs::ext2::sys_symlink(target, link_path).map(|_| ()),
-        FsType::Ext4 => Err(-30),
+        FsType::Ext2 => crate::fs::ext2::sys_symlink(target, &h.subpath).map_err(|e| e as isize),
+        FsType::Ext4 => crate::fs::ext4_write::symlink(target, link_path).map(|_| ()).map_err(|e| e as isize),
         FsType::Overlayfs => {
             let om = overlay_mount(&h)?;
             crate::fs::overlayfs::symlink(&om, target, &h.subpath)
@@ -915,7 +924,7 @@ pub fn symlink(target: &str, link_path: &str) -> Result<(), isize> {
 pub fn readlink(path: &str) -> Result<String, isize> {
     let h = mount::resolve(path)?;
     match h.fstype {
-        FsType::Btrfs => crate::fs::btrfs::btrfs_readlink(&h.subpath),
+        FsType::Btrfs => crate::fs::btrfs::btrfs_readlink(path),
         FsType::Tmpfs => crate::fs::tmpfs::tmpfs_readlink(path),
         FsType::Ext2 => crate::fs::ext2::sys_readlink(path).map_err(|e| e as isize),
         FsType::Ext4 => crate::fs::ext4::sys_readlink(path).map_err(|e| e as isize),
@@ -934,10 +943,10 @@ pub fn chmod(path: &str, mode: u16) -> Result<(), isize> {
         return Err(-30);
     }
     let result = match h.fstype {
-        FsType::Btrfs => crate::fs::btrfs::btrfs_chmod(&h.subpath, mode),
+        FsType::Btrfs => crate::fs::btrfs::btrfs_chmod(path, mode as u32),
         FsType::Tmpfs => crate::fs::tmpfs::tmpfs_chmod(path, mode),
-        FsType::Ext2 => crate::fs::ext2::sys_chmod(path, mode).map(|_| ()),
-        FsType::Ext4 => Err(-30),
+        FsType::Ext2 => crate::fs::ext2::sys_chmod(&h.subpath, mode).map_err(|e| e as isize),
+        FsType::Ext4 => crate::fs::ext4_write::chmod(path, mode).map(|_| ()).map_err(|e| e as isize),
         FsType::Overlayfs => {
             let om = overlay_mount(&h)?;
             crate::fs::overlayfs::copy_up_if_needed(&om, &h.subpath)?;
@@ -958,10 +967,10 @@ pub fn chown(path: &str, uid: u32, gid: u32) -> Result<(), isize> {
         return Err(-30);
     }
     let result = match h.fstype {
-        FsType::Btrfs => crate::fs::btrfs::btrfs_chown(&h.subpath, uid, gid),
+        FsType::Btrfs => crate::fs::btrfs::btrfs_chown(path, uid, gid),
         FsType::Tmpfs => crate::fs::tmpfs::tmpfs_chown(path, uid, gid),
-        FsType::Ext2 => crate::fs::ext2::sys_chown(path, uid, gid).map(|_| ()),
-        FsType::Ext4 => Err(-30),
+        FsType::Ext2 => crate::fs::ext2::sys_chown(&h.subpath, uid, gid).map_err(|e| e as isize),
+        FsType::Ext4 => crate::fs::ext4_write::chown(path, uid, gid).map(|_| ()).map_err(|e| e as isize),
         FsType::Overlayfs => {
             let om = overlay_mount(&h)?;
             crate::fs::overlayfs::copy_up_if_needed(&om, &h.subpath)?;

@@ -39,7 +39,9 @@ pub fn close_uring_fd(fd: usize) -> bool {
     }
     let mut tbl = URING_FD_TABLE.lock();
     if tbl[fd - URING_FD_BASE].is_some() {
-        tbl[fd - URING_FD_BASE] = None;
+        let index = tbl[fd - URING_FD_BASE].take().unwrap();
+        drop(tbl);
+        crate::io_uring::ring::free_ring(index);
         true
     } else {
         false
@@ -62,38 +64,10 @@ pub fn fsync(fd: usize) -> isize {
 /// Used by io_uring READ/READ_FIXED where the destination buffer is
 /// kernel-mapped registered memory.
 pub fn pread_buf(fd: usize, buf: &mut [u8], offset: i64) -> isize {
-    if buf.is_empty() {
-        return 0;
-    }
-    let saved = crate::fs::vfs::seek(fd, 0, crate::fs::vfs::SEEK_CUR);
-    if saved < 0 {
-        return saved;
-    }
-    let s = crate::fs::vfs::seek(fd, offset, crate::fs::vfs::SEEK_SET);
-    if s < 0 {
-        crate::fs::vfs::seek(fd, saved, crate::fs::vfs::SEEK_SET);
-        return s;
-    }
-    let n = crate::fs::vfs::read(fd, buf);
-    crate::fs::vfs::seek(fd, saved, crate::fs::vfs::SEEK_SET);
-    n
+    crate::fs::vfs::pread_buf(fd, buf, offset)
 }
 
 /// Positional write from a kernel slice — no user-space copy.
 pub fn pwrite_buf(fd: usize, buf: &[u8], offset: i64) -> isize {
-    if buf.is_empty() {
-        return 0;
-    }
-    let saved = crate::fs::vfs::seek(fd, 0, crate::fs::vfs::SEEK_CUR);
-    if saved < 0 {
-        return saved;
-    }
-    let s = crate::fs::vfs::seek(fd, offset, crate::fs::vfs::SEEK_SET);
-    if s < 0 {
-        crate::fs::vfs::seek(fd, saved, crate::fs::vfs::SEEK_SET);
-        return s;
-    }
-    let n = crate::fs::vfs::write(fd, buf);
-    crate::fs::vfs::seek(fd, saved, crate::fs::vfs::SEEK_SET);
-    n
+    crate::fs::vfs::pwrite_buf(fd, buf, offset)
 }

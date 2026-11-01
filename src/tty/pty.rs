@@ -93,6 +93,14 @@ pub struct PtyPair {
 }
 
 impl PtyPair {
+    pub fn open_slave(&self) -> Result<(), isize> {
+        if self.locked.load(Ordering::Acquire) {
+            return Err(-5);
+        }
+        self.slave_open.store(true, Ordering::Release);
+        Ok(())
+    }
+
     pub fn new(index: u32) -> Self {
         PtyPair {
             index,

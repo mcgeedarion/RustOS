@@ -82,6 +82,32 @@ impl DCache {
 
 static DCACHE: Mutex<DCache> = Mutex::new(DCache::new());
 
+#[derive(Clone)]
+pub struct CachedStat {
+    pub stat: crate::fs::vfs_ops::KStat,
+}
+static PATH_CACHE: Mutex<BTreeMap<String, CachedStat>> = Mutex::new(BTreeMap::new());
+
+pub fn lookup(path: &str) -> Option<CachedStat> {
+    // Dynamic proc/sys/dev metadata must never be cached as a file snapshot.
+    let handle = crate::fs::mount::resolve(path).ok()?;
+    use crate::fs::mount::FsType;
+    if matches!(handle.fstype, FsType::Procfs | FsType::Sysfs | FsType::Devfs | FsType::Cgroupfs) {
+        return None;
+    }
+    PATH_CACHE.lock().get(path).cloned()
+}
+
+pub fn insert(path: &str, kind: crate::fs::mount::FsType, _ino: u64, stat: crate::fs::vfs_ops::KStat) {
+    use crate::fs::mount::FsType;
+    if matches!(kind, FsType::Procfs | FsType::Sysfs | FsType::Devfs | FsType::Cgroupfs) {
+        return;
+    }
+    let mut cache = PATH_CACHE.lock();
+    if cache.len() >= DCACHE_MAX { cache.clear(); }
+    cache.insert(String::from(path), CachedStat { stat });
+}
+
 /// Return the child inode number for `(parent, name)`, or `None` on a miss.
 pub fn dcache_lookup(parent: u64, name: &str) -> Option<u64> {
     DCACHE.lock().lookup(parent, name)
@@ -105,6 +131,7 @@ pub fn dcache_invalidate_inode(inode: u64) {
 /// Flush the entire cache — call on unmount.
 pub fn dcache_flush() {
     DCACHE.lock().flush();
+    PATH_CACHE.lock().clear();
 }
 
 // ===== short alias for new callers =====

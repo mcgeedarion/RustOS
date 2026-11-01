@@ -146,7 +146,7 @@ pub unsafe fn init() {
 
     println!(
         "acpi/hpet: initialized @ {:#x} (timer {}, min_tick={} fs)",
-        base_addr, hpet.hpet_number, hpet.minimum_clock_tick
+        base_addr, hpet.hpet_number, { hpet.minimum_clock_tick }
     );
 }
 

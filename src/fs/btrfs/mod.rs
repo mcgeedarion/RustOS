@@ -13,6 +13,9 @@ pub mod superblock;
 pub mod transaction;
 pub mod tree;
 
+#[cfg(all(test, not(target_os = "uefi"), not(target_os = "none")))]
+mod regression;
+
 pub use api::{
     btrfs_chmod, btrfs_chown, btrfs_create, btrfs_link, btrfs_mkdir, btrfs_read_all, btrfs_readdir,
     btrfs_readlink, btrfs_rename, btrfs_rmdir, btrfs_set_times, btrfs_stat, btrfs_statfs,

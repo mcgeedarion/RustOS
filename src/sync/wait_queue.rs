@@ -6,6 +6,20 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 use spin::Mutex;
 
+/// Timer callbacks retain no borrowed queue pointer.
+fn wake_expired_waiters(_timer_id: u64) {
+    let now = crate::time::read_monotonic_ns();
+    let mut expired = Vec::new();
+    crate::proc::scheduler::for_each_process(|p| {
+        if p.sleep_deadline_ns != 0 && p.sleep_deadline_ns <= now {
+            expired.push(p.pid);
+        }
+    });
+    for pid in expired {
+        crate::proc::scheduler::wake_pid(pid);
+    }
+}
+
 /// Bitmask of poll-style readiness flags (POLLIN, POLLOUT, …).
 /// Matches the u32 constants in fs::poll.
 pub type ReadyMask = u32;
@@ -112,12 +126,11 @@ impl WaitQueue {
         let task_id = crate::proc::scheduler::current_pid();
         let full_interest = interest | WAKE_TIMEOUT | WAKE_CANCEL;
 
-        let timer_id: Option<u64> = deadline.map(|dl| {
-            let ptr = self as *const WaitQueue as usize;
-            crate::time::timer::add_oneshot(dl, move |_| {
-                let wq = unsafe { &*(ptr as *const WaitQueue) };
-                wq.wake(WAKE_TIMEOUT);
-            })
+        crate::proc::scheduler::with_proc_mut(task_id, |p, _| {
+            p.sleep_deadline_ns = deadline.unwrap_or(0);
+        });
+        let timer_id = deadline.map(|dl| {
+            crate::time::timer::add_oneshot(dl, wake_expired_waiters)
         });
 
         {
@@ -133,6 +146,7 @@ impl WaitQueue {
                 task_id,
                 interest: full_interest,
             });
+            crate::proc::scheduler::prepare_block_current();
         }
 
         if let Some(ct) = cancel {
@@ -141,16 +155,25 @@ impl WaitQueue {
                 if let Some(tid) = timer_id {
                     crate::time::timer::cancel_timer(tid);
                 }
+                crate::proc::scheduler::wake_pid(task_id);
+                crate::proc::scheduler::with_proc_mut(task_id, |p, _| p.sleep_deadline_ns = 0);
                 return WakeReason::Cancelled;
             }
         }
 
-        crate::proc::scheduler::block_current();
+        if self.poll(interest) != 0
+            || deadline.map(|dl| crate::time::read_monotonic_ns() >= dl).unwrap_or(false)
+        {
+            crate::proc::scheduler::wake_pid(task_id);
+        } else {
+            crate::proc::scheduler::park_current();
+        }
 
         self.waiters.lock().retain(|w| w.task_id != task_id);
         if let Some(tid) = timer_id {
             crate::time::timer::cancel_timer(tid);
         }
+        crate::proc::scheduler::with_proc_mut(task_id, |p, _| p.sleep_deadline_ns = 0);
 
         if cancel.map(|c| c.is_cancelled()).unwrap_or(false) {
             return WakeReason::Cancelled;
@@ -168,7 +191,9 @@ impl WaitQueue {
     pub fn register_forwarder(&self, target: &WaitQueue, interest: ReadyMask) {
         let mut fwds = self.forwarders.lock();
         let ptr = target as *const WaitQueue;
-        if !fwds.iter().any(|f| f.target == ptr) {
+        if let Some(existing) = fwds.iter_mut().find(|f| f.target == ptr) {
+            existing.interest |= interest;
+        } else {
             fwds.push(Forwarder {
                 target: ptr,
                 interest,
@@ -230,8 +255,12 @@ impl CancellationToken {
     ///   do_exit          → cancel(Exit,    &pcb.wait_wq)
     ///   timeout expiry   → cancel(Timeout, &pcb.wait_wq)  [handled internally]
     pub fn cancel(&self, reason: CancelReason, wq: &WaitQueue) {
-        self.state.store(reason as u32, Ordering::Release);
+        self.signal(reason);
         wq.wake(WAKE_CANCEL);
+    }
+
+    pub fn signal(&self, reason: CancelReason) {
+        self.state.store(reason as u32, Ordering::Release);
     }
 
     #[inline]

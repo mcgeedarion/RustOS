@@ -6,7 +6,7 @@ use crate::io_uring::{cqe::errno, sqe::Sqe};
 pub fn handle(sqe: &Sqe) -> i32 {
     let sock_fd = sqe.fd;
     let addr_va = sqe.addr;
-    let addrlen = sqe.len;
+    let addrlen = sqe.off;
 
     if sock_fd < 0 {
         log::warn!("[io_uring::connect] invalid sock_fd={}", sock_fd);
@@ -17,7 +17,7 @@ pub fn handle(sqe: &Sqe) -> i32 {
         return errno::E_INVAL;
     }
     // Minimum sockaddr size: sa_family (u16) + at least 2 bytes of address.
-    if addrlen < 4 {
+    if addrlen < 4 || addrlen > u32::MAX as u64 {
         log::warn!("[io_uring::connect] addrlen={} too small", addrlen);
         return errno::E_INVAL;
     }
@@ -31,10 +31,10 @@ pub fn handle(sqe: &Sqe) -> i32 {
         sqe.user_data
     );
 
-    crate::net::socket::core::sys_connect(sock_fd as usize, addr_va as usize, addrlen) as i32
+    crate::net::socket::core::sys_connect(sock_fd as usize, addr_va as usize, addrlen as u32) as i32
 }
 
-use crate::io_uring::{self as ring, IoUringError};
+use crate::io_uring::IoUringError;
 use core::{
     future::Future,
     pin::Pin,
@@ -47,7 +47,7 @@ pub struct IoConnect {
     addr_va: u64,
     addrlen: u32,
     token: u64,
-    submitted: bool,
+    result: Option<i32>,
 }
 
 impl IoConnect {
@@ -57,7 +57,7 @@ impl IoConnect {
             addr_va,
             addrlen,
             token,
-            submitted: false,
+            result: None,
         }
     }
 }
@@ -65,16 +65,14 @@ impl IoConnect {
 impl Future for IoConnect {
     type Output = Result<(), IoUringError>;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        ring::register_waker(self.token, cx.waker().clone());
-
-        if !self.submitted {
+    fn poll(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+        if self.result.is_none() {
             let sqe =
                 crate::io_uring::sqe::Sqe::connect(self.fd, self.addr_va, self.addrlen, self.token);
-            ring::submit(sqe)?;
-            self.submitted = true;
+            self.result = Some(handle(&sqe));
         }
 
-        Poll::Pending
+        let result = self.result.unwrap();
+        Poll::Ready(if result < 0 { Err(IoUringError::OsError(result)) } else { Ok(()) })
     }
 }

@@ -33,6 +33,7 @@
 //!   readlink("/proc/<pid>/ns/X")  → "X:[<ns_id>]"
 
 extern crate alloc;
+use alloc::string::ToString;
 use alloc::borrow::Cow;
 use alloc::format;
 use alloc::string::String;
@@ -100,6 +101,75 @@ pub fn procfs_fds() -> Vec<usize> {
     PROCFS_FDS.lock().keys().cloned().collect()
 }
 
+fn full_path(path: &str) -> String {
+    if path == "/proc" || path.starts_with("/proc/") { path.trim_end_matches('/').into() }
+    else { format!("/proc/{}", path.trim_matches('/')).trim_end_matches('/').into() }
+}
+
+fn inode_for(path: &str) -> u64 {
+    path.bytes().fold(0xcbf29ce484222325u64, |hash, b| (hash ^ b as u64).wrapping_mul(0x100000001b3))
+}
+
+pub fn read_all(path: &str) -> Result<Vec<u8>, isize> {
+    let path = full_path(path);
+    if readdir(&path).is_ok() { return Err(-21); }
+    generate(&path).ok_or(-2)
+}
+
+pub fn stat(path: &str) -> Result<crate::fs::vfs_ops::KStat, isize> {
+    let path = full_path(path);
+    let dir = readdir(&path).is_ok();
+    let (mode, size) = if dir { (0o040555, 0) }
+        else if let Some((_, mode)) = procfs_ns_stat(&path) { (mode as u16, 0) }
+        else {
+            let mut target = [0u8; 4096];
+            let n = procfs_readlink(&path, &mut target);
+            if n >= 0 { (0o120777, n as u64) }
+            else { (0o100444, generate(&path).ok_or(-2isize)?.len() as u64) }
+        };
+    Ok(crate::fs::vfs_ops::KStat {
+        ino: inode_for(&path), mode, nlink: if dir { 2 } else { 1 }, size,
+        blksize: 4096, is_dir: dir, ..Default::default()
+    })
+}
+
+pub fn readdir(path: &str) -> Result<Vec<crate::fs::vfs::ops::DirEntry>, isize> {
+    let path = full_path(path);
+    let path = norm_self(&path, crate::proc::scheduler::current_pid());
+    let mut entries = Vec::new();
+    let mut add = |name: String, mode: u16| {
+        entries.push(crate::fs::vfs::ops::DirEntry {
+            ino: inode_for(&format!("{}/{}", path, name)), name,
+            is_dir: mode & 0o170000 == 0o040000, mode, size: 0,
+        });
+    };
+    if path == "/proc" {
+        for name in ["uptime", "meminfo", "cpuinfo", "perf_core_count", "filesystems",
+            "mounts", "slabinfo", "schemes", "syscall_stats"] { add(name.into(), 0o100444); }
+        add("self".into(), 0o120777);
+        for p in crate::proc::scheduler::procs_lock() { add(p.pid.to_string(), 0o040555); }
+        return Ok(entries);
+    }
+    let tail = path.strip_prefix("/proc/").ok_or(-2isize)?;
+    let (pid, rest) = tail.split_once('/').unwrap_or((tail, ""));
+    let pid = pid.parse::<usize>().map_err(|_| -2isize)?;
+    if crate::proc::scheduler::with_proc(pid, |_| ()).is_none() { return Err(-2); }
+    match rest {
+        "" => {
+            for name in ["maps", "status", "stat", "limits", "cmdline", "mounts"] {
+                add(name.into(), 0o100444);
+            }
+            add("exe".into(), 0o120777);
+            add("fd".into(), 0o040555);
+            add("ns".into(), 0o040555);
+        },
+        "fd" => for fd in crate::fs::process_fd::proc_fd_list(pid) { add(fd.to_string(), 0o120777); },
+        "ns" => for name in NS_NAMES { add((*name).into(), 0o120777); },
+        _ => return Err(-20),
+    }
+    Ok(entries)
+}
+
 /// True if `path` is a /proc/<pid>/ns or /proc/<pid>/ns/<name> path.
 pub fn procfs_is_ns_path(path: &str) -> bool {
     let pid = crate::proc::scheduler::current_pid();
@@ -142,8 +212,7 @@ pub fn procfs_readlink(path: &str, buf: &mut [u8]) -> isize {
     if let Some((tpid, rest)) = strip_pid_prefix(p, "/ns/") {
         let name = rest.trim_end_matches('/');
         if NS_NAMES.contains(&name) {
-            if let Some(ns_id) = crate::proc::namespace::ns_id_of(tpid, name) {
-                let target = crate::proc::namespace::ns_symlink(name, ns_id);
+            if let Some(target) = crate::proc::namespace::ns_symlink(tpid, name) {
                 return copy_link(target.as_bytes(), buf);
             }
             return -3;
@@ -153,15 +222,21 @@ pub fn procfs_readlink(path: &str, buf: &mut [u8]) -> isize {
 
     if let Some((epid, "")) = strip_pid_prefix(p, "/exe") {
         let exe =
-            crate::proc::scheduler::exe_path_of(epid).unwrap_or_else(|| String::from("/init"));
+            match crate::proc::scheduler::with_proc(epid, |p| p.exe_path.clone()).flatten() {
+                Some(path) => path, None => return -2,
+            };
         return copy_link(exe.as_bytes(), buf);
     }
 
-    if let Some((_spid, fdpart)) = strip_pid_prefix(p, "/fd/") {
+    if let Some((spid, fdpart)) = strip_pid_prefix(p, "/fd/") {
         if let Ok(fdno) = fdpart.parse::<usize>() {
-            let target = crate::fs::vfs::fd_get_debug_name(fdno)
-                .or_else(|| crate::fs::vfs::fd_to_path(fdno))
-                .unwrap_or_else(|| format!("socket:[{}]", fdno));
+            let entry = match crate::fs::process_fd::proc_fd_get(spid, fdno) {
+                Some(entry) => entry, None => return -2,
+            };
+            let target = entry.path.clone()
+                .or_else(|| crate::fs::vfs::fd_get_debug_name(entry.backing_fd))
+                .or_else(|| crate::fs::vfs::fd_to_path(entry.backing_fd))
+                .unwrap_or_else(|| format!("anon_inode:[{}]", entry.backing_fd));
             return copy_link(target.as_bytes(), buf);
         }
     }
@@ -209,6 +284,11 @@ fn generate(path: &str) -> Option<Vec<u8>> {
     let pid = crate::proc::scheduler::current_pid();
     let norm = norm_self(path, pid);
     let p = norm.as_ref();
+    if let Some(tail) = p.strip_prefix("/proc/") {
+        if let Some(pid) = tail.split('/').next().and_then(|s| s.parse::<usize>().ok()) {
+            crate::proc::scheduler::with_proc(pid, |_| ())?;
+        }
+    }
 
     if let Some((_tpid, "")) = strip_pid_prefix(p, "/ns") {
         let mut out = String::new();
@@ -222,8 +302,7 @@ fn generate(path: &str) -> Option<Vec<u8>> {
     if let Some((tpid, rest)) = strip_pid_prefix(p, "/ns/") {
         let name = rest.trim_end_matches('/');
         if NS_NAMES.contains(&name) {
-            if let Some(ns_id) = crate::proc::namespace::ns_id_of(tpid, name) {
-                let target = crate::proc::namespace::ns_symlink(name, ns_id);
+            if let Some(target) = crate::proc::namespace::ns_symlink(tpid, name) {
                 return Some(target.into_bytes());
             }
         }
@@ -273,24 +352,21 @@ fn generate(path: &str) -> Option<Vec<u8>> {
         let count = crate::smp::perf_core_count();
         return Some(format!("{count}\n").into_bytes());
     }
-    if p == "/proc/self/cmdline" || p.ends_with("/cmdline") {
-        let exe = crate::proc::scheduler::exe_path_of(pid).unwrap_or_else(|| String::from("/init"));
+    if let Some((pid, "")) = strip_pid_prefix(p, "/cmdline") {
+        let exe = crate::proc::scheduler::with_proc(pid, |p| p.exe_path.clone()).flatten()?;
         let mut v = exe.into_bytes();
         v.push(0);
         return Some(v);
     }
-    if let Some((_spid, fdpart)) = strip_pid_prefix(p, "/fd/") {
+    if let Some((spid, fdpart)) = strip_pid_prefix(p, "/fd/") {
         if let Ok(fdno) = fdpart.parse::<usize>() {
-            if let Some(name) = crate::fs::vfs::fd_get_debug_name(fdno) {
-                return Some(name.into_bytes());
-            }
-            if let Some(path2) = crate::fs::vfs::fd_to_path(fdno) {
-                return Some(path2.into_bytes());
-            }
+            let entry = crate::fs::process_fd::proc_fd_get(spid, fdno)?;
+            return entry.path.clone().or_else(|| crate::fs::vfs::fd_to_path(entry.backing_fd))
+                .map(String::into_bytes);
         }
     }
-    if let Some((_spid, "")) = strip_pid_prefix(p, "/fd") {
-        return Some(gen_fd_dir(pid));
+    if let Some((spid, "")) = strip_pid_prefix(p, "/fd") {
+        return Some(gen_fd_dir(spid));
     }
     if p == "/proc/filesystems" {
         return Some(b"nodev\ttmpfs\next4\nvfat\n".to_vec());
@@ -408,6 +484,8 @@ fn gen_status(pid: usize) -> String {
             State::Running | State::Ready => 'R',
             State::Blocked => 'S',
             State::Zombie => 'Z',
+            State::Stopped | State::StopReported => 'T',
+            State::Continued => 'R',
         };
         let vsize: u64 = p.vmas.iter().map(|v| (v.end - v.start) as u64).sum();
         let comm = exe_basename(&p.exe_path);
@@ -433,6 +511,8 @@ fn gen_stat(pid: usize) -> String {
             State::Running | State::Ready => 'R',
             State::Blocked => 'S',
             State::Zombie => 'Z',
+            State::Stopped | State::StopReported => 'T',
+            State::Continued => 'R',
         };
         let comm = exe_basename(&p.exe_path);
         let comm = if comm.len() > 15 {
@@ -571,12 +651,9 @@ fn gen_maps(pid: usize) -> String {
 }
 
 fn gen_fd_dir(pid: usize) -> Vec<u8> {
-    let _ = pid;
     let mut out = Vec::new();
-    for fdno in 0usize..256 {
-        if crate::fs::vfs::fd_to_path(fdno).is_some() {
-            out.extend_from_slice(format!("{} ", fdno).as_bytes());
-        }
+    for fdno in crate::fs::process_fd::proc_fd_list(pid) {
+        out.extend_from_slice(format!("{} ", fdno).as_bytes());
     }
     out
 }
@@ -615,12 +692,11 @@ pub fn procfs_open(path: &str, _flags: u32) -> isize {
     if let Some((tpid, rest)) = strip_pid_prefix(p, "/ns/") {
         let name = rest.trim_end_matches('/');
         if NS_NAMES.contains(&name) {
-            let ns_fd = crate::proc::namespace::ns_fd_open(tpid, name);
-            if ns_fd < 0 {
-                return ns_fd;
-            }
-            if let Some(ns_id) = crate::proc::namespace::ns_id_of(tpid, name) {
-                let content = crate::proc::namespace::ns_symlink(name, ns_id).into_bytes();
+            let ns_fd = match crate::proc::namespace::ns_fd_open(tpid, name) {
+                Some(fd) => fd, None => return -2,
+            };
+            if let Some(target) = crate::proc::namespace::ns_symlink(tpid, name) {
+                let content = target.into_bytes();
                 PROCFS_FDS.lock().insert(
                     ns_fd as usize,
                     ProcFd {
@@ -630,11 +706,16 @@ pub fn procfs_open(path: &str, _flags: u32) -> isize {
                     },
                 );
             }
-            return ns_fd;
+            return ns_fd as isize;
         }
         return -2;
     }
-    match generate(path) {
+    let content = generate(path).or_else(|| readdir(path).ok().map(|entries| {
+        let mut data = Vec::new();
+        for entry in entries { data.extend_from_slice(entry.name.as_bytes()); data.push(b'\n'); }
+        data
+    }));
+    match content {
         Some(content) => {
             let fdno = next_procfs_fd();
             PROCFS_FDS.lock().insert(
@@ -673,13 +754,9 @@ fn is_debug_path(path: &str) -> bool {
 }
 
 fn next_procfs_fd() -> usize {
-    let guard = PROCFS_FDS.lock();
-    for candidate in 256..512 {
-        if !guard.contains_key(&candidate) {
-            return candidate;
-        }
-    }
-    256
+    static NEXT: core::sync::atomic::AtomicUsize =
+        core::sync::atomic::AtomicUsize::new(0x7200_0000);
+    NEXT.fetch_add(1, core::sync::atomic::Ordering::Relaxed)
 }
 
 fn norm_self(path: &str, pid: usize) -> Cow<'static, str> {

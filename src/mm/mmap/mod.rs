@@ -27,6 +27,9 @@ pub enum VmaKind {
     FileBacked(usize, u64),
     /// Physical memory mapping (framebuffer, MMIO)
     PhysMap(u64),
+    /// Shared PMM backing retained until the last mapping/object releases it.
+    /// The index identifies this one-page VMA within the backing.
+    Shared(Arc<crate::mm::vmm::SharedFrames>, usize),
     Stack,
     Heap,
 }

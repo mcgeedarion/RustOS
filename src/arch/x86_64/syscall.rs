@@ -164,7 +164,7 @@ extern "C" {
 /// kernel stack.  We handle NR 15 (rt_sigreturn) in-line here because it needs
 /// to modify the frame directly; all other syscalls go through `dispatch`.
 #[no_mangle]
-pub extern "C" fn rust_syscall_handler(frame: &mut SyscallFrame) {
+pub extern "sysv64" fn rust_syscall_handler(frame: &mut SyscallFrame) {
     let nr = frame.rax;
 
     // Save a complete user return state before dispatch. A forked child copies
@@ -248,11 +248,7 @@ pub fn syscall_setup() {
 /// sys_set_tid_address(tidptr_va)  [NR 218]
 pub fn sys_set_tid_address(tidptr_va: usize) -> isize {
     let pid = scheduler::current_pid();
-    scheduler::with_procs(|procs| {
-        if let Some(p) = procs.iter_mut().find(|p| p.pid == pid) {
-            p.clear_child_tid_va = tidptr_va;
-        }
-    });
+    scheduler::with_proc_mut(pid, |p, _| p.clear_child_tid_va = tidptr_va);
     pid as isize
 }
 
@@ -265,11 +261,8 @@ pub fn sys_arch_prctl(code: i32, addr: usize) -> isize {
     let pid = scheduler::current_pid();
     match code {
         ARCH_SET_FS => {
-            scheduler::with_procs(|procs| {
-                if let Some(p) = procs.iter_mut().find(|p| p.pid == pid) {
-                    p.ctx.fs_base = addr;
-                }
-            });
+            if !validate_user_ptr(addr, 1) { return -1; }
+            scheduler::with_proc_mut(pid, |p, _| p.tls_base = addr);
             unsafe {
                 core::arch::asm!(
                     "wrmsr",
@@ -282,11 +275,8 @@ pub fn sys_arch_prctl(code: i32, addr: usize) -> isize {
             0
         },
         ARCH_GET_FS => {
-            let base = scheduler::with_proc(pid, |p| p.ctx.fs_base).unwrap_or(0);
-            if addr != 0 && validate_user_ptr(addr, 8) {
-                let _ = copy_to_user(addr, &base.to_ne_bytes());
-            }
-            0
+            let base = scheduler::with_proc(pid, |p| p.tls_base).unwrap_or(0);
+            if copy_to_user(addr, &base.to_ne_bytes()).is_err() { -14 } else { 0 }
         },
         ARCH_SET_GS => {
             unsafe {
@@ -330,14 +320,11 @@ pub extern "C" fn child_first_run_hook() {
     }
 
     let (tid_va, tid_val, fs_base) =
-        scheduler::with_procs(|procs| match procs.iter_mut().find(|p| p.pid == pid) {
-            Some(p) => {
-                let r = (p.child_tid_va, p.child_tid_val, p.ctx.fs_base);
-                p.child_tid_va = 0;
-                r
-            },
-            None => (0, 0, 0),
-        });
+        scheduler::with_proc_mut(pid, |p, _| {
+            let r = (p.child_tid_va, p.child_tid_val, p.tls_base);
+            p.child_tid_va = 0;
+            r
+        }).unwrap_or((0, 0, 0));
 
     if tid_va != 0 {
         let _ = copy_to_user(tid_va, &tid_val.to_ne_bytes());

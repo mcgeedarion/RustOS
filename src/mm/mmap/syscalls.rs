@@ -12,52 +12,19 @@ pub fn sys_munmap(addr: usize, length: usize) -> isize {
     if addr & (PAGE - 1) != 0 || length == 0 {
         return -22;
     }
-    let len = page_align_up(length);
+    let Some(len) = length.checked_add(PAGE - 1).map(|n| n & !(PAGE - 1)) else {
+        return -22;
+    };
+    let Some(end) = addr.checked_add(len) else { return -22; };
+    if end > crate::uaccess::USER_SPACE_END { return -22; }
     let pid = scheduler::current_pid();
-    let user_cr3 = scheduler::with_proc(pid, |p| p.user_pagetable).unwrap_or(0);
-    if user_cr3 == 0 {
-        return -14;
-    }
-
-    // Collect PhysMap ranges once to avoid repeated VMA scans (see bug #19).
-    let phys_ranges: Vec<(usize, usize)> = scheduler::with_proc(pid, |p| {
-        p.vmas
-            .iter()
-            .filter_map(|v| match v.kind {
-                VmaKind::PhysMap(_) => Some((v.start, v.end)),
-                _ => None,
-            })
-            .collect()
-    })
-    .unwrap_or_default();
-    // Collect physical pages to free after TLB shootdown.
-    let mut to_free: Vec<usize> = Vec::new();
-    // Unmap each page in the range and decide whether to free it.
-    for page_va in (addr..addr + len).step_by(PAGE) {
-        if let Some(pa) = <Arch as Paging>::virt_to_phys(user_cr3, page_va) {
-            // Unmap the page in the target address space. Pass the user CR3 so the
-            // correct page-table is manipulated.
-            <Arch as Paging>::unmap_page(user_cr3, page_va);
-            // Determine if this VA belongs to a PhysMap VMA. PhysMap frames must
-            // remain mapped and are not freed.
-            let is_phys = phys_ranges
-                .iter()
-                .any(|&(start, end)| page_va >= start && page_va < end);
-            if !is_phys {
-                to_free.push(pa);
-            }
-        }
-    }
-    // Issue a TLB shootdown for the unmapped range. Use ASID 0 (conservative)
-    // for now; per bug #1/#22 this should ideally use the process's actual ASID.
-    crate::smp::ipi::tlb_shootdown(addr as u64, (addr + len) as u64, 0);
-    // Free collected pages after all CPUs have invalidated their TLB entries.
-    for pa in to_free {
-        crate::mm::pmm::free_page(pa);
-    }
-    // Remove the VMA records for the unmapped range.
-    remove_vma(pid, addr, len);
-    0
+    with_mm_write(pid, |pcb| {
+        if pcb.user_pagetable == 0 { return -14; }
+        // Hold the write side across both leaf removal and VMA splitting.
+        // Shared owners are dropped only after the TLB invalidation.
+        super::mapping::remove_vma_inner(pcb, addr, end);
+        0
+    }).unwrap_or(-3)
 }
 
 pub fn sys_brk(addr: usize) -> isize {

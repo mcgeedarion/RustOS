@@ -232,7 +232,7 @@ unsafe fn parse_dmar_structures(dmar_ptr: *const u8, dmar_len: usize) {
             Err(_) => {
                 println!(
                     "acpi/dmar: unknown structure type {:#x} at offset {}",
-                    struct_hdr.structure_type, offset
+                    { struct_hdr.structure_type }, offset
                 );
             },
         }
@@ -262,7 +262,7 @@ unsafe fn parse_drhd(ptr: *const u8, length: usize) {
 
     println!(
         "acpi/dmar: DRHD @ {:#x}, segment {}, include_all={}",
-        drhd.register_base_addr, drhd.pci_segment, include_pci_all
+        { drhd.register_base_addr }, { drhd.pci_segment }, include_pci_all
     );
 
     // Validate register base address
@@ -274,7 +274,7 @@ unsafe fn parse_drhd(ptr: *const u8, length: usize) {
     if !super::is_valid_physical_address(drhd.register_base_addr as usize, 4096) {
         println!(
             "acpi/dmar: DRHD register address {:#x} is invalid",
-            drhd.register_base_addr
+            { drhd.register_base_addr }
         );
         return;
     }
@@ -314,7 +314,7 @@ unsafe fn parse_rmrr(ptr: *const u8, length: usize) {
 
     println!(
         "acpi/dmar: RMRR segment {}, base {:#x}, limit {:#x}",
-        rmrr.pci_segment, rmrr.rmrr_base_addr, rmrr.rmrr_limit_addr
+        { rmrr.pci_segment }, { rmrr.rmrr_base_addr }, { rmrr.rmrr_limit_addr }
     );
 
     // Validate addresses
@@ -331,7 +331,7 @@ unsafe fn parse_rmrr(ptr: *const u8, length: usize) {
     if !super::is_valid_physical_address(rmrr.rmrr_base_addr as usize, 1) {
         println!(
             "acpi/dmar: RMRR base address {:#x} is invalid",
-            rmrr.rmrr_base_addr
+            { rmrr.rmrr_base_addr }
         );
         return;
     }

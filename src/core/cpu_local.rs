@@ -22,37 +22,26 @@
 //! * The per-CPU pointer **must** be initialised by SMP code before any `get()` call.  Calling
 //!   `get()` before init is undefined behaviour.
 
-use core::cell::UnsafeCell;
 use core::marker::PhantomData;
 
 /// Maximum number of per-CPU slots.  Increase as subsystems register more.
 pub const MAX_CPU_LOCAL_SLOTS: usize = 64;
 
-/// The block of per-CPU data stored at the address held in `tp`/`%gs`.
-#[repr(C)]
-pub struct PerCpuBlock {
-    pub self_ptr: *mut PerCpuBlock,
-    pub cpu_id: u32,
-    pub in_irq: u32,
-    slots: [UnsafeCell<usize>; MAX_CPU_LOCAL_SLOTS],
-}
-
-// SAFETY: `PerCpuBlock` is exclusively owned by one CPU; sharing across
-// CPUs would violate the ownership invariant anyway.
-unsafe impl Sync for PerCpuBlock {}
+/// Use the SMP block rather than interpreting an incompatible layout at GS/TP.
+pub use crate::smp::percpu::PercpuBlock as PerCpuBlock;
 
 impl PerCpuBlock {
     #[inline]
     pub unsafe fn read_slot(&self, index: usize) -> usize {
-        debug_assert!(index < MAX_CPU_LOCAL_SLOTS);
-        unsafe { *self.slots[index].get() }
+        assert!(index < MAX_CPU_LOCAL_SLOTS);
+        unsafe { *self.cpu_local_slots[index].get() }
     }
 
     /// Write `value` into slot `index`.
     #[inline]
     pub unsafe fn write_slot(&self, index: usize, value: usize) {
-        debug_assert!(index < MAX_CPU_LOCAL_SLOTS);
-        unsafe { *self.slots[index].get() = value };
+        assert!(index < MAX_CPU_LOCAL_SLOTS);
+        unsafe { *self.cpu_local_slots[index].get() = value };
     }
 }
 
@@ -65,6 +54,7 @@ pub struct CpuLocalKey {
 impl CpuLocalKey {
     #[doc(hidden)]
     pub const fn new(index: usize) -> Self {
+        assert!(index < MAX_CPU_LOCAL_SLOTS);
         Self { index }
     }
 }
@@ -88,6 +78,7 @@ unsafe impl<T: Copy + 'static> Sync for CpuLocal<T> {}
 
 impl<T: Copy + 'static> CpuLocal<T> {
     pub const fn new(key: CpuLocalKey) -> Self {
+        assert!(core::mem::size_of::<T>() <= core::mem::size_of::<usize>());
         Self {
             key,
             _marker: PhantomData,
@@ -98,6 +89,7 @@ impl<T: Copy + 'static> CpuLocal<T> {
     #[inline]
     pub unsafe fn get(&self) -> T {
         let block = unsafe { current_cpu_block() };
+        assert!(!block.is_null(), "CPU-local access before per-CPU initialization");
         let raw = unsafe { (*block).read_slot(self.key.index) };
         unsafe { core::mem::transmute_copy(&raw) }
     }
@@ -106,7 +98,16 @@ impl<T: Copy + 'static> CpuLocal<T> {
     #[inline]
     pub unsafe fn set(&self, value: T) {
         let block = unsafe { current_cpu_block() };
-        let raw: usize = unsafe { core::mem::transmute_copy(&value) };
+        assert!(!block.is_null(), "CPU-local access before per-CPU initialization");
+        let mut raw = 0usize;
+        // transmute_copy::<T, usize> would read beyond a small T such as bool.
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                (&value as *const T).cast::<u8>(),
+                (&mut raw as *mut usize).cast::<u8>(),
+                core::mem::size_of::<T>(),
+            );
+        }
         unsafe { (*block).write_slot(self.key.index, raw) };
     }
 }
@@ -114,19 +115,5 @@ impl<T: Copy + 'static> CpuLocal<T> {
 /// Retrieve the `PerCpuBlock` pointer for the executing CPU.
 #[inline]
 pub unsafe fn current_cpu_block() -> *mut PerCpuBlock {
-    #[cfg(target_arch = "x86_64")]
-    {
-        let ptr: *mut PerCpuBlock;
-        unsafe {
-            core::arch::asm!(
-                "mov {ptr}, gs:[0]",
-                ptr = out(reg) ptr,
-                options(nostack, readonly, preserves_flags)
-            );
-        }
-        ptr
-    }
-
-    #[cfg(not(target_arch = "x86_64"))]
-    compile_error!("cpu_local: unsupported architecture")
+    crate::smp::percpu::current_block()
 }

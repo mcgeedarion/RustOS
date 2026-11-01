@@ -158,6 +158,8 @@ fn scheme_error_to_errno(e: SchemeError) -> isize {
         SchemeError::WouldBlock => -11,       // EAGAIN
         SchemeError::Io => -5,                // EIO
         SchemeError::Unreachable => -5,       // EIO
+        SchemeError::Interrupted => -4,       // EINTR
+        SchemeError::BrokenPipe => -32,       // EPIPE
         SchemeError::Other => -5,             // EIO
     }
 }

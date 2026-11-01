@@ -115,6 +115,8 @@ pub struct ProcLock {
     pub tgid: u32,
     pub state_atom: core::sync::atomic::AtomicU8,
     pub inner: Mutex<Pcb>,
+    /// A new token per task, not inherited by cloning a PCB.
+    pub cancel: Arc<crate::sync::wait_queue::CancellationToken>,
 }
 
 impl ProcLock {
@@ -125,6 +127,7 @@ impl ProcLock {
             tgid: pcb.tgid as u32,
             state_atom: core::sync::atomic::AtomicU8::new(state_byte),
             inner: Mutex::new(pcb),
+            cancel: Arc::new(crate::sync::wait_queue::CancellationToken::new()),
         })
     }
 
@@ -207,6 +210,8 @@ pub struct Pcb {
 
     // Filesystem
     pub exe_path: Option<String>,
+    pub name: String,
+    pub umask: u32,
     /// Current working directory — absolute, canonical path.
     /// Inherited by fork/clone; updated by chdir/fchdir.
     /// Default: "/".
@@ -215,6 +220,7 @@ pub struct Pcb {
     // Namespaces / security
     pub ns: NsSet,
     pub seccomp: FilterChain,
+    pub no_new_privs: bool,
 
     // Futex / NPTL
     pub robust_list_head: usize,
@@ -239,6 +245,10 @@ pub struct Pcb {
     pub rt_cpu_time_us: u64,
     pub sleep_deadline_ns: u64,
     pub sleep_timer_id: u64,
+    pub rss_pages: u64,
+    pub locked_bytes: u64,
+    pub mcl_future: bool,
+    pub timens_mono_off: i64,
 
     // Scheduler fields
     pub task: *mut Task,
@@ -309,9 +319,12 @@ impl Pcb {
             signal_handlers: Arc::new(Mutex::new(SignalHandlers::default())),
             pending_signals: alloc::collections::VecDeque::new(),
             exe_path: None,
+            name: String::new(),
+            umask: 0o022,
             cwd: String::from("/"),
-            ns: NsSet::default(),
+            ns: NsSet::init(),
             seccomp: FilterChain::default(),
+            no_new_privs: false,
             robust_list_head: 0,
             robust_list_len: 0,
             ptrace_state: PtraceState::None,
@@ -324,6 +337,10 @@ impl Pcb {
             rt_cpu_time_us: 0,
             sleep_deadline_ns: 0,
             sleep_timer_id: 0,
+            rss_pages: 0,
+            locked_bytes: 0,
+            mcl_future: false,
+            timens_mono_off: 0,
             task: core::ptr::null_mut(),
             sched: SchedEntity::new(0),
             cgroup_id: ROOT_CGROUP,

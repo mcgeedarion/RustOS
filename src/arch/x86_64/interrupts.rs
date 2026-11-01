@@ -29,8 +29,8 @@
 use crate::proc::scheduler::SchedPolicy;
 use crate::proc::scheduler::TICK_NS;
 
-const SIGXCPU: u32 = 24;
-const SIGKILL: u32 = 9;
+const SIGXCPU: i32 = 24;
+const SIGKILL: i32 = 9;
 const RLIMIT_CPU: usize = 0;
 const RLIMIT_RTTIME: usize = 15;
 
@@ -41,7 +41,7 @@ const RLIMIT_RTTIME: usize = 15;
 /// frame pointer itself is not used — `schedule()` saves/restores context
 /// through its own mechanism.
 #[no_mangle]
-pub extern "C" fn timer_irq_handler(frame: &mut crate::arch::x86_64::idt::InterruptFrame) {
+pub extern "sysv64" fn timer_irq_handler(frame: &mut crate::arch::x86_64::idt::InterruptFrame) {
     let _ = frame; // reserved for future profiling use
 
     crate::time::tick_advance(TICK_NS);
@@ -58,7 +58,7 @@ pub extern "C" fn timer_irq_handler(frame: &mut crate::arch::x86_64::idt::Interr
         let (soft_cpu, hard_cpu) = crate::proc::rlimit::getrlimit_for(pid, RLIMIT_CPU);
         let (soft_rt, hard_rt) = crate::proc::rlimit::getrlimit_for(pid, RLIMIT_RTTIME);
 
-        let (cpu_secs, prev_ns, rt_us, policy) = crate::proc::scheduler::with_proc_mut(pid, |p| {
+        let (cpu_secs, prev_ns, rt_us, policy) = crate::proc::scheduler::with_proc_mut(pid, |p, _owner| {
             let prev = p.cpu_time_ns;
             p.cpu_time_ns = p.cpu_time_ns.saturating_add(TICK_NS);
 

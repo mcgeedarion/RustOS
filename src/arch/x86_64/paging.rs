@@ -84,6 +84,48 @@ pub fn invlpg(va: usize) {
     }
 }
 
+/// Flush this CPU's non-global translations, preserving the active root.
+pub fn flush_tlb_local() {
+    load_cr3(current_cr3());
+}
+
+/// Find an existing 4 KiB leaf, rejecting huge pages instead of interpreting
+/// their mapped frame as an intermediate page table.
+unsafe fn existing_leaf(root: usize, va: usize) -> Option<*mut u64> {
+    if root == 0 { return None; }
+    let mut table = root;
+    for shift in [39, 30, 21] {
+        let entry = core::ptr::read_volatile(pte_ptr(table, (va >> shift) & 511));
+        if entry & PRESENT == 0 || entry & (1 << 7) != 0 { return None; }
+        table = (entry & ADDR_MASK) as usize;
+    }
+    Some(pte_ptr(table, (va >> 12) & 511))
+}
+
+pub fn read_pte(root: usize, va: usize) -> usize {
+    unsafe { existing_leaf(root, va).map_or(0, |p| core::ptr::read_volatile(p) as usize) }
+}
+
+pub fn set_pte(root: usize, va: usize, entry: usize) -> bool {
+    unsafe {
+        let Some(p) = existing_leaf(root, va) else { return false; };
+        core::ptr::write_volatile(p, entry as u64);
+        invlpg(va);
+        true
+    }
+}
+
+pub fn clear_accessed(root: usize, va: usize) {
+    unsafe {
+        if let Some(p) = existing_leaf(root, va) {
+            // The hardware may concurrently set A/D; atomic RMW preserves D.
+            (&*(p as *const core::sync::atomic::AtomicU64))
+                .fetch_and(!(1 << 5), core::sync::atomic::Ordering::AcqRel);
+            invlpg(va);
+        }
+    }
+}
+
 /// Allocate a zeroed page-table page from the PMM. Returns PA.
 fn alloc_table() -> usize {
     let pa = crate::mm::pmm::alloc_page().expect("pmm: out of pages for page table");

@@ -1,0 +1,14 @@
+[package]
+name = "rustos-btrfs-regression"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+spin = { version = "0.9", default-features = false, features = ["spin_mutex"] }
+
+[[bin]]
+name = "rustos-btrfs-regression"
+path = "main.rs"

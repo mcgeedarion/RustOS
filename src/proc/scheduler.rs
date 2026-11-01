@@ -971,27 +971,79 @@ pub fn schedule_on(task: *mut crate::proc::task_types::Task, cpu: u32) {
 }
 
 pub fn block_current() {
+    if prepare_block_current() {
+        park_current();
+    }
+}
+
+/// Publish Blocked while the caller still serializes waiter registration.
+pub fn prepare_block_current() -> bool {
     let pid = current_pid();
     if let Some(pl) = proc_table::find_proc_lock(pid as usize) {
         let mut inner = pl.inner.lock();
+        if !matches!(inner.state, State::Running | State::Ready | State::Blocked) {
+            return false;
+        }
         if matches!(inner.sched.policy, SchedPolicy::Fifo | SchedPolicy::Rr) {
             inner.rt_cpu_time_us = 0;
         }
         pl.set_state(&mut inner, State::Blocked);
+        return true;
     }
-    let cpu = crate::smp::percpu::current_cpu_id();
-    unsafe {
-        crate::smp::percpu::PERCPU_BLOCKS[cpu as usize]
-            .runqueue
-            .remove_pid(pid);
+    false
+}
+
+/// Keep current_task intact so context switching saves the syscall continuation.
+pub fn park_current() {
+    if proc_table::with_proc(current_pid(), |p| p.state == State::Blocked).unwrap_or(false) {
+        schedule();
     }
-    let blk = crate::smp::percpu::current_block();
-    if !blk.is_null() {
-        unsafe {
-            (*blk).current_task = core::ptr::null_mut();
+}
+
+pub fn block_pid(pid: usize) {
+    proc_table::with_proc_mut(pid, |pcb, owner| {
+        if matches!(pcb.state, State::Ready | State::Running) {
+            owner.set_state(pcb, State::Blocked);
+        }
+    });
+}
+
+pub fn task_cancel_token(
+    pid: usize,
+) -> Option<alloc::sync::Arc<crate::sync::wait_queue::CancellationToken>> {
+    let owner = proc_table::find_proc_lock(pid)?;
+    // A racing signal either appears in the pending test or sets the token
+    // afterward. Clear only a stale token from a previously handled signal.
+    owner.cancel.reset();
+    if crate::proc::signal::has_pending_signal(pid) {
+        owner.cancel.signal(crate::sync::wait_queue::CancelReason::Signal);
+    }
+    Some(alloc::sync::Arc::clone(&owner.cancel))
+}
+
+pub fn wake_for_signal(pid: usize, sig: u32) {
+    if crate::proc::signal::signal_is_masked(pid, sig) {
+        return;
+    }
+    if let Some(owner) = proc_table::find_proc_lock(pid) {
+        owner.cancel.signal(crate::sync::wait_queue::CancelReason::Signal);
+        if sig == 9 || sig == 18 {
+            let mut pcb = owner.inner.lock();
+            if matches!(pcb.state, State::Stopped | State::StopReported) {
+                owner.set_state(&mut pcb, State::Blocked);
+            }
         }
     }
-    schedule();
+    wake_pid(pid);
+}
+
+/// Visit a snapshot; never execute callbacks under the process-table lock.
+pub fn for_each_process(mut f: impl FnMut(&crate::proc::process::Pcb)) {
+    proc_table::with_procs_ro(|snapshot| {
+        for owner in snapshot {
+            f(&owner.inner.lock());
+        }
+    });
 }
 
 pub fn wake_pid(pid: usize) {
@@ -1072,20 +1124,20 @@ pub fn proc_count() -> usize {
 }
 
 #[inline]
-pub fn current_pid() -> u32 {
+pub fn current_pid() -> usize {
     let blk = crate::smp::percpu::current_block();
     if blk.is_null() {
-        return CURRENT_PID.load(core::sync::atomic::Ordering::Relaxed);
+        return CURRENT_PID.load(core::sync::atomic::Ordering::Relaxed) as usize;
     }
     let blk_ref = unsafe { &*blk };
     if blk_ref.current_pid != 0 {
-        return blk_ref.current_pid;
+        return blk_ref.current_pid as usize;
     }
     let task = blk_ref.current_task;
     if task.is_null() {
-        return CURRENT_PID.load(core::sync::atomic::Ordering::Relaxed);
+        return CURRENT_PID.load(core::sync::atomic::Ordering::Relaxed) as usize;
     }
-    unsafe { (*task).pid }
+    unsafe { (*task).pid as usize }
 }
 
 #[inline]

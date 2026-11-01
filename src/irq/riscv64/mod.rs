@@ -9,4 +9,4 @@
 //! - Claim/complete mechanism for interrupt handling
 //! - Support for multiple harts (SMP)
 
-pub mod plic;
+pub use crate::arch::riscv64::interrupts as plic;

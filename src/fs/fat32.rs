@@ -610,6 +610,58 @@ impl Fat32Fs {
         }
     }
 
+    pub fn mtime_ns(&self, entry: &DirEntry) -> Result<u64, isize> {
+        if entry.entry_lba == 0 { return Ok(0); }
+        let mut sec = [0u8; 512];
+        blk_read(self.dev, entry.entry_lba, &mut sec)?;
+        let off = entry.entry_off;
+        let time = u16::from_le_bytes([sec[off + 22], sec[off + 23]]);
+        let date = u16::from_le_bytes([sec[off + 24], sec[off + 25]]);
+        let year = 1980 + (date >> 9) as u64;
+        let month = ((date >> 5) & 15) as usize;
+        let day = (date & 31) as u64;
+        if month == 0 || month > 12 || day == 0 { return Ok(0); }
+        let leap = |y: u64| y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+        let months = [31u64, if leap(year) { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+        let mut days = 0u64;
+        for y in 1970..year { days += if leap(y) { 366 } else { 365 }; }
+        days += months[..month - 1].iter().sum::<u64>() + day - 1;
+        let seconds = days * 86400 + (time >> 11) as u64 * 3600
+            + ((time >> 5) & 63) as u64 * 60 + (time & 31) as u64 * 2;
+        Ok(seconds * 1_000_000_000)
+    }
+
+    pub fn set_mtime(&mut self, path: &str, ns: u64) -> Result<(), isize> {
+        let entry = self.walk(path)?;
+        if entry.entry_lba == 0 { return Err(-95); } // root has no directory record
+        let secs = ns / 1_000_000_000;
+        let mut days = secs / 86400;
+        let leap = |y: u64| y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+        let mut year = 1970u64;
+        loop {
+            let count = if leap(year) { 366 } else { 365 };
+            if days < count { break; }
+            days -= count;
+            year += 1;
+            if year > 2107 { return Err(-75); }
+        }
+        if year < 1980 { return Err(-75); }
+        let months = [31u64, if leap(year) { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+        let mut month = 1;
+        for count in months {
+            if days < count { break; }
+            days -= count;
+            month += 1;
+        }
+        let date = (((year - 1980) << 9) | (month << 5) | (days + 1)) as u16;
+        let time = (((secs % 86400 / 3600) << 11) | ((secs % 3600 / 60) << 5) | (secs % 60 / 2)) as u16;
+        let mut sec = [0u8; 512];
+        blk_read(self.dev, entry.entry_lba, &mut sec)?;
+        sec[entry.entry_off + 22..entry.entry_off + 24].copy_from_slice(&time.to_le_bytes());
+        sec[entry.entry_off + 24..entry.entry_off + 26].copy_from_slice(&date.to_le_bytes());
+        blk_write(self.dev, entry.entry_lba, &sec)
+    }
+
     fn flush_file_meta(&self, file: &FatFile) -> Result<(), isize> {
         let mut sec = [0u8; 512];
         blk_read(self.dev, file.entry_lba, &mut sec)?;

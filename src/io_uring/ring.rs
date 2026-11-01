@@ -22,7 +22,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use spin::Mutex;
 
 use crate::io_uring::sqe::Sqe;
-use crate::mm::pmm::{alloc_page, free_page};
+use crate::mm::vmm::SharedFrames;
 use crate::sync::wait_queue::{ReadyMask, WaitQueue};
 
 /// Maximum SQE/CQE depth for a single ring (must be a power of two).
@@ -77,6 +77,18 @@ impl From<Sqe> for IoUringSqe {
             splice_fd_in: s.splice_fd_in,
             // addr3 and __pad2 go into the two-element _pad array.
             _pad: [s.addr3, s.__pad2],
+        }
+    }
+}
+
+impl From<IoUringSqe> for Sqe {
+    fn from(s: IoUringSqe) -> Self {
+        Self {
+            opcode: s.opcode, flags: s.flags, ioprio: s.ioprio, fd: s.fd,
+            off: s.off_or_addr2, addr: s.addr_or_splice_fd_in,
+            len: s.len, op_flags: s.op_flags, user_data: s.user_data,
+            buf_index: s.buf_index, personality: s.personality,
+            splice_fd_in: s.splice_fd_in, addr3: s._pad[0], __pad2: s._pad[1],
         }
     }
 }
@@ -162,7 +174,7 @@ struct SqRingHdr {
     ring_entries: u32,
     flags: AtomicU32,
     dropped: AtomicU32,
-    _pad: [u32; 12],
+    _pad: [u32; 10],
 }
 
 #[repr(C)]
@@ -175,8 +187,8 @@ struct CqRingHdr {
     _pad: [u32; 11],
 }
 
-const _: () = assert!(core::mem::size_of::<SqRingHdr>() <= RING_HDR_SIZE);
-const _: () = assert!(core::mem::size_of::<CqRingHdr>() <= RING_HDR_SIZE);
+const _: () = assert!(core::mem::size_of::<SqRingHdr>() == RING_HDR_SIZE);
+const _: () = assert!(core::mem::size_of::<CqRingHdr>() == RING_HDR_SIZE);
 
 // Layout compatibility assertions for CqRingHeadTail in ring_pub.rs.
 // CqRingHeadTail is a prefix overlay of CqRingHdr; these assert the
@@ -196,6 +208,10 @@ pub struct IoUringRing {
     pub sq_pa: usize,
     /// Physical address of the CQ page.
     pub cq_pa: usize,
+    pub sqe_pa: usize,
+    pub sq_frames: Arc<SharedFrames>,
+    pub cq_frames: Arc<SharedFrames>,
+    pub sqe_frames: Arc<SharedFrames>,
     /// Registered buffers: `(kernel_va, len)` pairs.
     pub reg_bufs: Vec<(usize, usize)>,
     /// Registered file descriptors.
@@ -220,14 +236,12 @@ impl IoUringRing {
     }
 
     fn sqe_array_mut(&self) -> &mut [IoUringSqe] {
-        let base = self.sq_pa + RING_HDR_SIZE + self.entries as usize * 4;
-        let base = (base + SQE_SIZE - 1) & !(SQE_SIZE - 1);
+        let base = self.sqe_pa;
         unsafe { core::slice::from_raw_parts_mut(base as *mut IoUringSqe, self.entries as usize) }
     }
 
     fn sqe_array(&self) -> &[IoUringSqe] {
-        let base = self.sq_pa + RING_HDR_SIZE + self.entries as usize * 4;
-        let base = (base + SQE_SIZE - 1) & !(SQE_SIZE - 1);
+        let base = self.sqe_pa;
         unsafe { core::slice::from_raw_parts(base as *const IoUringSqe, self.entries as usize) }
     }
 
@@ -278,15 +292,20 @@ impl IoUringRing {
     /// Drain all pending SQEs and return them. Advances `sq_head`.
     #[inline]
     pub fn drain_sq(&self) -> Vec<IoUringSqe> {
+        self.drain_sq_limit(self.entries)
+    }
+
+    pub fn drain_sq_limit(&self, limit: u32) -> Vec<IoUringSqe> {
         let hdr = self.sq_hdr();
         let mask = self.mask();
         let head = hdr.head.load(Ordering::Acquire);
         let tail = hdr.tail.load(Ordering::Acquire);
-        let count = tail.wrapping_sub(head) as usize;
+        let pending = tail.wrapping_sub(head) as usize;
+        let count = pending.min(limit as usize);
         if count == 0 {
             return Vec::new();
         }
-        if count > self.entries as usize {
+        if pending > self.entries as usize {
             hdr.dropped.fetch_add(1, Ordering::Relaxed);
             hdr.head.store(tail, Ordering::Release);
             return Vec::new();
@@ -301,13 +320,10 @@ impl IoUringRing {
             if slot < self.entries as usize {
                 out.push(sqes[slot]);
             } else {
-                let mut nop = IoUringSqe::default();
-                nop.opcode = 0;
-                out.push(nop);
                 hdr.dropped.fetch_add(1, Ordering::Relaxed);
             }
         }
-        hdr.head.store(tail, Ordering::Release);
+        hdr.head.store(head.wrapping_add(count as u32), Ordering::Release);
         out
     }
 
@@ -338,10 +354,7 @@ impl IoUringRing {
         let mut p = IoUringParams::default();
         p.sq_entries = self.entries;
         p.cq_entries = self.entries;
-        p.features = IORING_FEAT_NODROP
-            | IORING_FEAT_SUBMIT_STABLE
-            | IORING_FEAT_RW_CUR_POS
-            | IORING_FEAT_FAST_POLL;
+        p.features = IORING_FEAT_SUBMIT_STABLE | IORING_FEAT_RW_CUR_POS;
 
         p.sq_off.head = offset_of_sq_head();
         p.sq_off.tail = offset_of_sq_tail();
@@ -361,26 +374,9 @@ impl IoUringRing {
     }
 }
 
-impl Drop for IoUringRing {
-    fn drop(&mut self) {
-        if self.sq_pa != 0 {
-            unsafe {
-                free_page(self.sq_pa as *mut u8);
-            }
-        }
-        if self.cq_pa != 0 {
-            unsafe {
-                free_page(self.cq_pa as *mut u8);
-            }
-        }
-    }
-}
-
 macro_rules! field_offset {
     ($T:ty, $field:ident) => {{
-        let base = 0usize;
-        let ptr = unsafe { &(*(base as *const $T)).$field as *const _ as usize };
-        ptr as u32
+        core::mem::offset_of!($T, $field) as u32
     }};
 }
 
@@ -454,30 +450,20 @@ impl RingTable {
 static RING_TABLE: Mutex<Option<RingTable>> = Mutex::new(None);
 
 pub fn init() {
-    *RING_TABLE.lock() = Some(RingTable::new());
+    RING_TABLE.lock().get_or_insert_with(RingTable::new);
 }
 
 pub fn alloc_ring(pid: u32, entries: u32) -> Result<usize, isize> {
-    let entries = entries.next_power_of_two().clamp(1, MAX_ENTRIES);
-
-    let sq_needed = RING_HDR_SIZE + entries as usize * 4 + entries as usize * SQE_SIZE;
+    if entries == 0 || entries > MAX_ENTRIES { return Err(-22); }
+    let entries = entries.next_power_of_two();
+    let sq_needed = RING_HDR_SIZE + entries as usize * 4;
     let cq_needed = RING_HDR_SIZE + entries as usize * CQE_SIZE;
-    if sq_needed > PAGE_SIZE || cq_needed > PAGE_SIZE {
-        return Err(-22);
-    }
-
-    let sq_pa = alloc_page().ok_or(-12isize)? as usize;
-    let cq_pa = alloc_page().ok_or_else(|| {
-        unsafe {
-            free_page(sq_pa as *mut u8);
-        }
-        -12isize
-    })? as usize;
-
-    unsafe {
-        core::ptr::write_bytes(sq_pa as *mut u8, 0, PAGE_SIZE);
-        core::ptr::write_bytes(cq_pa as *mut u8, 0, PAGE_SIZE);
-    }
+    let sq_frames = alloc_ring_frames(sq_needed)?;
+    let cq_frames = alloc_ring_frames(cq_needed)?;
+    let sqe_frames = alloc_ring_frames(entries as usize * SQE_SIZE)?;
+    let sq_pa = sq_frames.frames()[0];
+    let cq_pa = cq_frames.frames()[0];
+    let sqe_pa = sqe_frames.frames()[0];
 
     let sq_hdr = unsafe { &mut *(sq_pa as *mut SqRingHdr) };
     sq_hdr.ring_mask = entries - 1;
@@ -493,19 +479,25 @@ pub fn alloc_ring(pid: u32, entries: u32) -> Result<usize, isize> {
         entries,
         sq_pa,
         cq_pa,
+        sqe_pa,
+        sq_frames,
+        cq_frames,
+        sqe_frames,
         reg_bufs: Vec::new(),
         reg_fds: Vec::new(),
         cq_wq: Arc::new(WaitQueue::new()),
     };
 
     let mut tbl = RING_TABLE.lock();
-    let tbl = tbl.as_mut().ok_or(-5isize)?;
+    let tbl = tbl.get_or_insert_with(RingTable::new);
     tbl.insert(ring).ok_or(-24isize)
 }
 
 pub fn free_ring(idx: usize) {
-    if let Some(tbl) = RING_TABLE.lock().as_mut() {
-        tbl.remove(idx);
+    let removed = RING_TABLE.lock().as_mut().and_then(|tbl| tbl.remove(idx));
+    if let Some(ring) = removed {
+        ring.cq_wq.wake(CQ_READY);
+        drop(ring);
     }
 }
 
@@ -524,12 +516,40 @@ where
 }
 
 pub fn ring_idx_for_fd(pid: u32, fd: usize) -> Option<usize> {
-    let tbl = RING_TABLE.lock();
-    tbl.as_ref()?.rings.iter().position(|r| {
-        r.as_ref()
-            .map(|r| r.pid == pid && r.fd == fd)
-            .unwrap_or(false)
-    })
+    let bfd = crate::fs::process_fd::proc_fd_backing(pid as usize, fd);
+    if bfd < 0 { return None; }
+    crate::fs::vfs_uring::uring_fd_to_ring(bfd as usize)
+}
+
+fn alloc_ring_frames(bytes: usize) -> Result<Arc<SharedFrames>, isize> {
+    let pages = bytes.div_ceil(PAGE_SIZE);
+    let pa = crate::mm::pmm::alloc_pages_contig(pages).ok_or(-12isize)?;
+    unsafe { core::ptr::write_bytes(pa as *mut u8, 0, pages * PAGE_SIZE); }
+    let frames = (0..pages).map(|n| pa + n * PAGE_SIZE).collect();
+    Ok(Arc::new(SharedFrames::from_owned(frames)))
+}
+
+/// Map the actual shared ring frames at the Linux io_uring mmap offsets.
+pub fn mmap_ring(bfd: usize, addr: usize, len: usize, prot: u32, flags: u32, offset: usize) -> isize {
+    let Some(idx) = crate::fs::vfs_uring::uring_fd_to_ring(bfd) else { return -9; };
+    if flags & crate::mm::mmap::MAP_SHARED == 0 || prot & crate::mm::mmap::PROT_EXEC != 0 {
+        return -22;
+    }
+    let owner = with_ring(idx, |r| match offset {
+        0 => Some(r.sq_frames.clone()),
+        0x0800_0000 => Some(r.cq_frames.clone()),
+        0x1000_0000 => Some(r.sqe_frames.clone()),
+        _ => None,
+    }).flatten();
+    let Some(owner) = owner else { return -22; };
+    let Some(rounded) = len.checked_add(PAGE_SIZE - 1).map(|n| n & !(PAGE_SIZE - 1)) else {
+        return -22;
+    };
+    if rounded == 0 || rounded > owner.frames().len() * PAGE_SIZE { return -22; }
+    match crate::mm::vmm::map_shared(addr, rounded, prot, owner) {
+        Ok(va) => va as isize,
+        Err(e) => e,
+    }
 }
 
 /// Clone the `cq_wq` Arc so a caller can sleep on it without holding

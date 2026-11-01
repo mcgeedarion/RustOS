@@ -105,11 +105,17 @@ struct CqEntry {
 // ── Public types
 // ──────────────────────────────────────────────────────────────
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct DiskInfo {
     pub sector_count: u64,
     pub sector_size: u32,
     pub model: [u8; 40],
+}
+
+impl Default for DiskInfo {
+    fn default() -> Self {
+        Self { sector_count: 0, sector_size: 0, model: [0; 40] }
+    }
 }
 
 // ── Controller state

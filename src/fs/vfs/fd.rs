@@ -215,6 +215,24 @@ pub fn path_of_raw(fd: usize) -> Option<String> {
     })
 }
 
+pub fn is_raw_fd(fd: usize) -> bool {
+    RAW_FDS.lock().contains_key(&fd)
+}
+
+pub fn vfs_fionread(fd: usize) -> Option<usize> {
+    let (path, offset) = RAW_FDS.lock().get(&fd).map(|r| (r.path.clone(), r.offset))?;
+    let size = crate::fs::vfs_ops::stat(&path).ok()?.size as usize;
+    Some(size.saturating_sub(offset))
+}
+
+pub fn vfs_set_nonblock(fd: usize, enabled: bool) -> bool {
+    let mut fds = RAW_FDS.lock();
+    let Some(raw) = fds.get_mut(&fd) else { return false; };
+    if enabled { raw.flags |= 0o4000; } else { raw.flags &= !0o4000; }
+    crate::fs::fcntl::set_nonblock(fd, enabled);
+    true
+}
+
 pub fn read_raw(fd: usize, buf: &mut [u8]) -> isize {
     let (path, off, flags) = match RAW_FDS.lock().get(&fd) {
         Some(r) => (r.path.clone(), r.offset, r.flags),
@@ -263,19 +281,24 @@ pub fn write_raw(fd: usize, buf: &[u8]) -> isize {
     {
         return e as isize;
     }
-    let mut data = crate::fs::vfs_ops::read_all(&path).unwrap_or_default();
+    let mut data = match crate::fs::vfs_ops::read_all(&path) {
+        Ok(data) => data,
+        Err(e) => return e,
+    };
+    let off = if flags & 0o2000 != 0 { data.len() } else { off };
     if off > data.len() {
         data.resize(off, 0);
     }
-    if off + buf.len() > data.len() {
-        data.resize(off + buf.len(), 0);
+    let end = match off.checked_add(buf.len()) { Some(end) => end, None => return -27 };
+    if end > data.len() {
+        data.resize(end, 0);
     }
     data[off..off + buf.len()].copy_from_slice(buf);
     if let Err(e) = crate::fs::vfs_ops::write_all(&path, &data) {
         return e;
     }
     if let Some(r) = RAW_FDS.lock().get_mut(&fd) {
-        r.offset = r.offset.saturating_add(buf.len());
+        r.offset = end;
     }
     buf.len() as isize
 }
@@ -452,16 +475,17 @@ pub fn flush_fd(fd: usize, include_metadata: bool) -> isize {
     match h.fstype {
         FsType::Ext2 => {
             let _ = include_metadata;
-            crate::fs::ext2::sync_inode(&path);
-            0
+            crate::fs::ext2::sync_inode(&h.subpath).map(|_| 0).unwrap_or_else(|e| e as isize)
         },
+        FsType::Ext4 => crate::fs::ext4_write::fsync(&path).map(|_| 0).unwrap_or_else(|e| e as isize),
+        FsType::Btrfs => crate::fs::btrfs::sync_inode(&path).map(|_| 0).unwrap_or_else(|e| e),
         _ => 0,
     }
 }
 
 pub fn flush_all_dirty() {
-    const MAX_FD: usize = 256;
-    for fd in 0..MAX_FD {
+    let fds: Vec<usize> = RAW_FDS.lock().keys().copied().collect();
+    for fd in fds {
         let _ = flush_fd(fd, true);
     }
 }
@@ -496,21 +520,8 @@ pub fn pread(fd: usize, buf: *mut u8, len: usize, offset: i64) -> isize {
         return 0;
     }
 
-    let saved = seek(fd, 0, SEEK_CUR);
-    if saved < 0 {
-        return saved;
-    }
-
-    let seeked = seek(fd, offset, SEEK_SET);
-    if seeked < 0 {
-        seek(fd, saved, SEEK_SET);
-        return seeked;
-    }
-
     let kbuf = unsafe { core::slice::from_raw_parts_mut(buf, len) };
-    let n = read(fd, kbuf);
-    seek(fd, saved, SEEK_SET);
-    n
+    pread_buf(fd, kbuf, offset)
 }
 
 pub fn pwrite(fd: usize, buf: *const u8, len: usize, offset: i64) -> isize {
@@ -518,19 +529,35 @@ pub fn pwrite(fd: usize, buf: *const u8, len: usize, offset: i64) -> isize {
         return 0;
     }
 
-    let saved = seek(fd, 0, SEEK_CUR);
-    if saved < 0 {
-        return saved;
-    }
-
-    let seeked = seek(fd, offset, SEEK_SET);
-    if seeked < 0 {
-        seek(fd, saved, SEEK_SET);
-        return seeked;
-    }
-
     let kbuf = unsafe { core::slice::from_raw_parts(buf, len) };
-    let n = write(fd, kbuf);
-    seek(fd, saved, SEEK_SET);
-    n
+    pwrite_buf(fd, kbuf, offset)
+}
+
+pub fn pread_buf(fd: usize, buf: &mut [u8], offset: i64) -> isize {
+    if offset < 0 { return -22; }
+    let (path, flags) = match RAW_FDS.lock().get(&fd) {
+        Some(raw) => (raw.path.clone(), raw.flags), None => return -9,
+    };
+    if flags & O_ACCMODE == O_WRONLY { return -9; }
+    let stat = match crate::fs::vfs_ops::stat(&path) { Ok(s) => s, Err(e) => return e };
+    if stat.is_dir { return -21; }
+    if let Err(e) = crate::security::lsm::lsm_dispatch(
+        crate::security::lsm::Hook::FileRead, &lsm_ctx_for_stat(&stat)) { return e as isize; }
+    match crate::fs::vfs_ops::pread(&path, offset as usize, buf.len()) {
+        Ok(data) => { buf[..data.len()].copy_from_slice(&data); data.len() as isize },
+        Err(e) => e,
+    }
+}
+
+pub fn pwrite_buf(fd: usize, buf: &[u8], offset: i64) -> isize {
+    if offset < 0 { return -22; }
+    let (path, flags) = match RAW_FDS.lock().get(&fd) {
+        Some(raw) => (raw.path.clone(), raw.flags), None => return -9,
+    };
+    if flags & O_ACCMODE == 0 { return -9; }
+    let stat = match crate::fs::vfs_ops::stat(&path) { Ok(s) => s, Err(e) => return e };
+    if stat.is_dir { return -21; }
+    if let Err(e) = crate::security::lsm::lsm_dispatch(
+        crate::security::lsm::Hook::FileWrite, &lsm_ctx_for_stat(&stat)) { return e as isize; }
+    crate::fs::vfs_ops::pwrite(&path, offset as usize, buf).map(|n| n as isize).unwrap_or_else(|e| e)
 }

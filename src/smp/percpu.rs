@@ -1,12 +1,11 @@
 //! Per-CPU storage.
 //!
-//! x86_64: `GSBASE` MSR points to a `PercpuBlock` in a dedicated per-CPU
-//!         mapping.  The `gs:0` slot holds the self-pointer so that
-//!         `current_cpu_id()` is a single `mov rax, gs:[0]` with no memory
-//!         barrier.
+//! x86_64: GSBASE belongs to `arch::x86_64::gdt::PerCpu`, whose first slots
+//! are consumed by syscall entry. Scheduler storage is indexed by that
+//! structure's logical CPU id; it must never replace the syscall GS base.
 
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use core::cell::UnsafeCell;
-use core::sync::atomic::{AtomicU32, Ordering};
 
 /// Size of the interrupt stack allocated per CPU (16 KiB).
 pub const IST_SIZE: usize = 16 * 1024;
@@ -19,8 +18,7 @@ pub const SYSCALL_STACK_SIZE: usize = 16 * 1024;
 /// ## Field ordering note
 ///
 /// `self_ptr` is at offset 0 (8 bytes on LP64), and `cpu_id` is therefore
-/// at offset 8.  The x86_64 `current_cpu_id()` fast path reads `gs:[8]`.
-/// Do NOT reorder the first two fields without updating the inline asm.
+/// at offset 8. This is not the GS-visible syscall structure.
 ///
 /// `current_pid` is written by `scheduler::schedule()` on every CPU every
 /// time a new task is selected.  `scheduler::current_pid()` reads it
@@ -63,22 +61,39 @@ pub struct PercpuBlock {
     /// Incremented on syscall entry, decremented on exit.
     /// When non-zero, scheduler ticks charge stime_ns instead of utime_ns.
     pub in_syscall: u32,
+    /// Typed CPU-local values use fixed word-sized slots.
+    pub(crate) cpu_local_slots: [UnsafeCell<usize>; 64],
 }
 
 impl PercpuBlock {
-    const fn zeroed() -> Self {
-        unsafe { core::mem::zeroed() }
+    const fn new() -> Self {
+        Self {
+            self_ptr: core::ptr::null_mut(),
+            cpu_id: 0,
+            node: 0,
+            intr_disable_depth: 0,
+            intr_was_enabled: false,
+            ist_stack: [0; IST_SIZE],
+            syscall_stack: [0; SYSCALL_STACK_SIZE],
+            current_task: core::ptr::null_mut(),
+            current_pid: 0,
+            runqueue: crate::proc::scheduler::RunQueue::new(),
+            ctx_switches: 0,
+            ipi_pending: AtomicU32::new(0),
+            in_syscall: 0,
+            cpu_local_slots: [const { UnsafeCell::new(0) }; 64],
+        }
     }
 }
 
 /// Static storage for up to MAX_CPUS per-CPU blocks.
-pub static mut PERCPU_BLOCKS: [PercpuBlock; crate::smp::MAX_CPUS] = {
-    let mut arr: [PercpuBlock; crate::smp::MAX_CPUS] = unsafe { core::mem::zeroed() };
-    arr
-};
+pub static mut PERCPU_BLOCKS: [PercpuBlock; crate::smp::MAX_CPUS] =
+    [const { PercpuBlock::new() }; crate::smp::MAX_CPUS];
 
 /// Number of CPUs that have been initialised via `init()`.
 static CPU_COUNT: AtomicU32 = AtomicU32::new(0);
+static INITIALIZED: [AtomicBool; crate::smp::MAX_CPUS] =
+    [const { AtomicBool::new(false) }; crate::smp::MAX_CPUS];
 
 /// Returns the number of CPUs that have called `init()`.
 #[inline]
@@ -92,6 +107,10 @@ pub fn cpu_count() -> u32 {
 /// # Safety
 /// Must be called exactly once per CPU before any other percpu access.
 pub unsafe fn init(cpu_id: u32) {
+    assert!((cpu_id as usize) < crate::smp::MAX_CPUS);
+    if INITIALIZED[cpu_id as usize].load(Ordering::Acquire) {
+        return;
+    }
     let blk = &mut PERCPU_BLOCKS[cpu_id as usize];
     blk.self_ptr = blk as *mut PercpuBlock;
     blk.cpu_id = cpu_id;
@@ -105,57 +124,37 @@ pub unsafe fn init(cpu_id: u32) {
     blk.ctx_switches = 0;
     blk.ipi_pending = AtomicU32::new(0);
     blk.runqueue = crate::proc::scheduler::RunQueue::new();
+    blk.in_syscall = 0;
 
+    INITIALIZED[cpu_id as usize].store(true, Ordering::Release);
     CPU_COUNT.fetch_max(cpu_id + 1, Ordering::Release);
-
-    #[cfg(target_arch = "x86_64")]
-    {
-        // Write GSBASE MSR (0xC000_0101) with pointer to block.
-        let addr = blk as *mut PercpuBlock as u64;
-        let lo = addr as u32;
-        let hi = (addr >> 32) as u32;
-        core::arch::asm!(
-            "wrmsr",
-            in("ecx") 0xC000_0101u32,
-            in("eax") lo,
-            in("edx") hi,
-            options(nostack, preserves_flags)
-        );
-    }
 }
 
 /// Returns the current CPU's logical id.
 #[inline(always)]
 pub fn current_cpu_id() -> u32 {
     #[cfg(target_arch = "x86_64")]
-    unsafe {
-        let id: u32;
-        core::arch::asm!(
-            "mov {}, gs:[8]",  // offset 8 = cpu_id field (self_ptr is 8 bytes on LP64)
-            out(reg) id,
-            options(nostack, preserves_flags, readonly)
-        );
-        id
+    {
+        crate::arch::x86_64::gdt::current_cpu_id()
     }
-    #[cfg(not(target_arch = "x86_64"))]
-    0
+    #[cfg(target_arch = "aarch64")]
+    { crate::arch::aarch64::cpu::cpu_id() as u32 }
+    #[cfg(target_arch = "riscv64")]
+    { crate::arch::riscv64::cpu::cpu_id() }
 }
 
 /// Returns a raw pointer to the current CPU's PercpuBlock.
 #[inline(always)]
 pub fn current_block() -> *mut PercpuBlock {
     #[cfg(target_arch = "x86_64")]
-    unsafe {
-        let ptr: *mut PercpuBlock;
-        core::arch::asm!(
-            "mov {}, gs:[0]",
-            out(reg) ptr,
-            options(nostack, preserves_flags, readonly)
-        );
-        ptr
+    if crate::arch::x86_64::gdt::current_percpu().is_null() {
+        return core::ptr::null_mut();
     }
-    #[cfg(not(target_arch = "x86_64"))]
-    core::ptr::null_mut()
+    let id = current_cpu_id() as usize;
+    if id >= crate::smp::MAX_CPUS || !INITIALIZED[id].load(Ordering::Acquire) {
+        return core::ptr::null_mut();
+    }
+    unsafe { core::ptr::addr_of_mut!(PERCPU_BLOCKS[id]) }
 }
 
 /// Disable interrupts and increment the nesting depth.  Returns `true` if

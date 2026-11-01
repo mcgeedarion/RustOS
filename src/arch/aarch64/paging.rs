@@ -16,6 +16,47 @@ pub const PTE_NORMAL: usize = pte::ATTR_NORMAL;
 pub const PTE_UXN: usize = pte::UXN;
 pub const PTE_PXN: usize = pte::PXN;
 
+unsafe fn existing_leaf(root: usize, va: usize) -> Option<*mut usize> {
+    if root == 0 { return None; }
+    let mut table = root as *mut usize;
+    for shift in [39, 30, 21] {
+        let entry = core::ptr::read_volatile(table.add((va >> shift) & 511));
+        if entry & (pte::VALID | pte::TABLE) != (pte::VALID | pte::TABLE) {
+            return None;
+        }
+        table = (entry & pte::ADDR_MASK) as *mut usize;
+    }
+    Some(table.add((va >> 12) & 511))
+}
+
+pub fn read_pte(root: usize, va: usize) -> usize {
+    unsafe { existing_leaf(root, va).map_or(0, |p| core::ptr::read_volatile(p)) }
+}
+
+pub fn set_pte(root: usize, va: usize, entry: usize) -> bool {
+    unsafe {
+        let Some(p) = existing_leaf(root, va) else { return false; };
+        // Break-before-make when replacing a valid descriptor.
+        core::ptr::write_volatile(p, 0);
+        core::arch::asm!("dsb ishst", "tlbi vaae1is, {va}", "dsb ish", "isb",
+            va = in(reg) va >> 12, options(nostack));
+        core::ptr::write_volatile(p, entry);
+        core::arch::asm!("dsb ishst", "isb", options(nostack));
+        true
+    }
+}
+
+pub fn clear_accessed(root: usize, va: usize) {
+    unsafe {
+        if let Some(p) = existing_leaf(root, va) {
+            (&*(p as *const core::sync::atomic::AtomicUsize))
+                .fetch_and(!pte::AF, core::sync::atomic::Ordering::AcqRel);
+            core::arch::asm!("dsb ishst", "tlbi vaae1is, {va}", "dsb ish", "isb",
+                va = in(reg) va >> 12, options(nostack));
+        }
+    }
+}
+
 static mut KERNEL_TTBR1: usize = 0;
 
 #[inline]

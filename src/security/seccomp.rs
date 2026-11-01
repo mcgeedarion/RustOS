@@ -597,7 +597,7 @@ pub fn sys_seccomp(operation: u32, flags: u32, args_va: usize) -> isize {
             if flags != 0 {
                 return -(EINVAL as isize);
             }
-            crate::proc::scheduler::with_proc_mut(pid, |p| {
+            crate::proc::scheduler::with_proc_mut(pid, |p, _owner| {
                 p.seccomp.strict = true;
                 p.seccomp.filters.clear();
             });
@@ -644,7 +644,7 @@ pub fn sys_seccomp(operation: u32, flags: u32, args_va: usize) -> isize {
             let tsync = flags & SECCOMP_FILTER_FLAG_TSYNC != 0;
             let filter = SeccompFilter { insns, log };
 
-            crate::proc::scheduler::with_proc_mut(pid, |p| {
+            crate::proc::scheduler::with_proc_mut(pid, |p, _owner| {
                 p.seccomp.filters.push(filter.clone());
             });
 
@@ -652,7 +652,7 @@ pub fn sys_seccomp(operation: u32, flags: u32, args_va: usize) -> isize {
                 let tgid = crate::proc::thread::tgid_of(pid);
                 for tid in crate::proc::thread::threads_of(tgid) {
                     if tid != pid {
-                        crate::proc::scheduler::with_proc_mut(tid, |p| {
+                        crate::proc::scheduler::with_proc_mut(tid, |p, _owner| {
                             p.seccomp.filters.push(filter.clone());
                         });
                     }

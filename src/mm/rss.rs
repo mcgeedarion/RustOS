@@ -28,7 +28,7 @@ use crate::proc::scheduler::{with_proc, with_proc_mut};
 /// Returns 0 on success, `-ENOMEM` (-12) if the **hard** `RLIMIT_RSS` would
 /// be exceeded.  The soft limit is informational and never blocks allocation.
 pub fn rss_charge(pid: usize, pages: usize) -> isize {
-    with_proc_mut(pid, |p| {
+    with_proc_mut(pid, |p, _owner| {
         let (_, hard) = p.rlimits.get(RLIMIT_RSS);
         let new_rss = p.rss_pages.saturating_add(pages as u64);
         if hard != RLIM_INFINITY && new_rss > hard {
@@ -42,14 +42,14 @@ pub fn rss_charge(pid: usize, pages: usize) -> isize {
 
 /// Refund `pages` physical pages from process `pid`'s RSS counter.
 pub fn rss_discharge(pid: usize, pages: usize) {
-    let _ = with_proc_mut(pid, |p| {
+    let _ = with_proc_mut(pid, |p, _owner| {
         p.rss_pages = p.rss_pages.saturating_sub(pages as u64);
     });
 }
 
 /// Reset RSS counter to zero (called from `exit.rs`).
 pub fn rss_reset(pid: usize) {
-    let _ = with_proc_mut(pid, |p| {
+    let _ = with_proc_mut(pid, |p, _owner| {
         p.rss_pages = 0;
     });
 }

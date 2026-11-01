@@ -13,10 +13,12 @@
 
 extern crate alloc;
 
-use alloc::string::String;
+use alloc::string::{String, ToString};
+use alloc::{format, vec};
+use crate::println;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use spin::Mutex;
 
 // Re-export existing IPC components
@@ -196,7 +198,7 @@ fn test_futex_basic_wait_wake() -> TestResult {
 
     // In a real test, we would spawn a thread that waits, then wake it.
     // For now, verify the futex functions are callable
-    let wake_result = futex_wake_addr(futex_addr, 1);
+    let wake_result = crate::sync::futex::futex_wake(futex_addr, 1, u32::MAX);
 
     let duration = monotonic_ns() - start;
 
@@ -267,7 +269,7 @@ fn test_futex_multiple_waiters() -> TestResult {
     let futex_addr = &mut futex_word as *mut u32 as usize;
 
     // Wake with no waiters should return 0
-    let wake_count = futex_wake_addr(futex_addr, 10);
+    let wake_count = crate::sync::futex::futex_wake(futex_addr, 10, u32::MAX);
 
     let duration = monotonic_ns() - start;
 
@@ -446,7 +448,7 @@ fn test_socketpair() -> TestResult {
     const SOCK_STREAM: i32 = 1;
 
     let mut sv = [0usize; 2];
-    let result = sys_socketpair(AF_UNIX, SOCK_STREAM, 0, sv.as_mut_ptr() as usize);
+    let result = sys_socketpair(AF_UNIX as u16, SOCK_STREAM as u16, 0, sv.as_mut_ptr() as usize);
 
     let duration = monotonic_ns() - start;
 
@@ -640,7 +642,7 @@ fn benchmark_socketpair_latency() -> BenchmarkResult {
     const SOCK_STREAM: i32 = 1;
 
     let mut sv = [0usize; 2];
-    if sys_socketpair(AF_UNIX, SOCK_STREAM, 0, sv.as_mut_ptr() as usize) == 0 {
+    if sys_socketpair(AF_UNIX as u16, SOCK_STREAM as u16, 0, sv.as_mut_ptr() as usize) == 0 {
         let test_byte: [u8; 1] = [0x42];
 
         for _ in 0..iterations {
@@ -671,7 +673,7 @@ fn benchmark_unix_stream_throughput() -> BenchmarkResult {
     const SOCK_STREAM: i32 = 1;
 
     let mut sv = [0usize; 2];
-    if sys_socketpair(AF_UNIX, SOCK_STREAM, 0, sv.as_mut_ptr() as usize) == 0 {
+    if sys_socketpair(AF_UNIX as u16, SOCK_STREAM as u16, 0, sv.as_mut_ptr() as usize) == 0 {
         let test_data = vec![0xBBu8; buffer_size];
 
         for _ in 0..iterations {
@@ -847,7 +849,7 @@ fn test_smp_socket_concurrent(state: Arc<SmpTestState>) -> TestResult {
 
     for i in 0..10 {
         let mut sv = [0usize; 2];
-        if sys_socketpair(AF_UNIX, SOCK_STREAM, 0, sv.as_mut_ptr() as usize) == 0 {
+        if sys_socketpair(AF_UNIX as u16, SOCK_STREAM as u16, 0, sv.as_mut_ptr() as usize) == 0 {
             sockets.push(sv);
         } else {
             success = false;
@@ -1012,7 +1014,7 @@ pub fn run_ipc_completeness_suite() -> IpcCompletenessReport {
 
     // Phase 3: SMP Integration Tests
     println!("\nPhase 3: SMP Integration Tests");
-    let smp_results = run_smp_integration_tests(crate::arch::cpu_count());
+    let smp_results = run_smp_integration_tests(crate::smp::percpu::cpu_count() as usize);
     println!(
         "  SMP tests: {}/{} passed",
         smp_results

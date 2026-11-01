@@ -80,9 +80,6 @@ fn synth_offset_remove(bfd: usize) {
 
 #[inline]
 fn resolve(fd: usize) -> isize {
-    if fd <= 2 {
-        return fd as isize;
-    }
     proc_fd_backing(cpid(), fd)
 }
 
@@ -93,7 +90,7 @@ const O_APPEND: i32 = 0o2000;
 
 const RLIMIT_FSIZE: usize = 1;
 const RLIM_INFINITY: u64 = u64::MAX;
-const SIGXFSZ: u32 = 25;
+const SIGXFSZ: i32 = 25;
 const EFBIG: isize = -27;
 
 fn fd_allows_read(fd: usize) -> bool {
@@ -174,7 +171,7 @@ pub fn sys_read(fd: usize, buf_va: usize, count: usize) -> isize {
     } else if crate::fs::pipe::is_pipe(bfd) {
         n = crate::fs::pipe::pipe_read(bfd, &mut kbuf);
     } else if crate::net::socket::is_socket_fd(bfd) {
-        n = crate::net::socket::socket_read(bfd, &mut kbuf);
+        n = crate::net::socket::socket_read(bfd, &mut kbuf, 0);
     } else if crate::fs::scheme_fd::is_scheme_fd(bfd) {
         n = crate::fs::scheme_fd::scheme_fd_read(bfd, &mut kbuf);
     } else {
@@ -289,54 +286,12 @@ pub fn sys_openat(dirfd: i32, path_va: usize, flags: u32, mode: u32) -> isize {
 
 /// sys_close(fd)  [NR 3]
 pub fn sys_close(fd: usize) -> isize {
-    if fd > 2 {
-        let bfd_r = proc_fd_backing(cpid(), fd);
-        if bfd_r >= 0 {
-            let bfd = bfd_r as usize;
-            if crate::proc::namespace::is_ns_fd(bfd) {
-                crate::proc::namespace::ns_fd_close(bfd);
-                crate::fs::procfs::procfs_close(bfd);
-                synth_offset_remove(bfd);
-            } else if crate::fs::procfs::is_procfs_fd(bfd) || crate::fs::sysfs::is_sysfs_fd(bfd) {
-                synth_offset_remove(bfd);
-            } else if crate::fs::cgroupfs::is_cgroupfs_fd(bfd) {
-                // cgroupfs owns its own TABLE; proc_fd_close will call
-                // close_backing which calls cgroupfs_close.  Nothing extra
-                // needed.
-            }
-        }
-    }
     proc_fd_close(cpid(), fd)
 }
 
 /// sys_dup(fd)  [NR 32]
 pub fn sys_dup(fd: usize) -> isize {
-    let pid = cpid();
-    let bfd_r = proc_fd_backing(pid, fd);
-    if bfd_r < 0 {
-        return bfd_r;
-    }
-    let bfd = bfd_r as usize;
-
-    let new_bfd = if crate::fs::pipe::is_pipe(bfd) {
-        crate::fs::pipe::pipe_dup(bfd);
-        bfd
-    } else {
-        let r = crate::fs::vfs::dup_from(bfd, bfd);
-        if r >= 0 {
-            r as usize
-        } else {
-            bfd
-        }
-    };
-
-    let entry = match crate::fs::process_fd::proc_fd_get(pid, fd) {
-        Some(e) => e,
-        None => return -9,
-    };
-
-    let flags = (entry.fl_flags as u32) & !crate::fs::process_fd::O_CLOEXEC_FLAG;
-    proc_fd_install(pid, new_bfd, entry.path.clone(), flags, None) as isize
+    crate::fs::process_fd::proc_fd_dup_into(cpid(), fd, cpid(), 0, false)
 }
 
 /// sys_dup2(old_fd, new_fd)  [NR 33]
@@ -346,7 +301,7 @@ pub fn sys_dup2(old_fd: usize, new_fd: usize) -> isize {
 
 /// sys_dup3(old_fd, new_fd, flags)  [NR 292]
 pub fn sys_dup3(old_fd: usize, new_fd: usize, flags: u32) -> isize {
-    if old_fd == new_fd {
+    if old_fd == new_fd || flags & !crate::fs::process_fd::O_CLOEXEC_FLAG != 0 {
         return -22;
     }
     let r = proc_fd_dup2(cpid(), old_fd, new_fd);
@@ -354,6 +309,82 @@ pub fn sys_dup3(old_fd: usize, new_fd: usize, flags: u32) -> isize {
         crate::fs::process_fd::proc_fd_set_cloexec(cpid(), new_fd, true);
     }
     r
+}
+
+/// Copy regular-file data in bounded chunks. Explicit offset pointers do not
+/// change the associated open-file position; null pointers advance it only by
+/// bytes that were successfully written.
+pub fn sys_copy_file_range(
+    fd_in: usize, off_in_va: usize, fd_out: usize, off_out_va: usize, len: usize,
+) -> isize {
+    let input = match proc_fd_get(cpid(), fd_in) { Some(e) => e, None => return -9 };
+    let output = match proc_fd_get(cpid(), fd_out) { Some(e) => e, None => return -9 };
+    if input.fl_flags & O_ACCMODE == O_WRONLY || output.fl_flags & O_ACCMODE == O_RDONLY {
+        return -9;
+    }
+    if output.fl_flags & O_APPEND != 0 { return -9; }
+    let ib = input.backing_fd;
+    let ob = output.backing_fd;
+    if crate::fs::pipe::is_pipe(ib) || crate::fs::pipe::is_pipe(ob) { return -29; }
+    let ipath = match vfs::fd_path(ib) { Some(p) => p, None => return -22 };
+    let opath = match vfs::fd_path(ob) { Some(p) => p, None => return -22 };
+    let istat = match crate::fs::vfs_ops::stat(&ipath) { Ok(s) => s, Err(e) => return e };
+    let ostat = match crate::fs::vfs_ops::stat(&opath) { Ok(s) => s, Err(e) => return e };
+    if istat.is_dir || ostat.is_dir { return -21; }
+    if istat.mode & 0o170000 != 0o100000 || ostat.mode & 0o170000 != 0o100000 { return -22; }
+    fn offset(ptr: usize, bfd: usize) -> Result<i64, isize> {
+        if ptr == 0 {
+            let pos = vfs::seek(bfd, 0, 1);
+            return if pos < 0 { Err(pos) } else { Ok(pos as i64) };
+        }
+        if !validate_user_ptr(ptr, 8) { return Err(-14); }
+        let mut bytes = [0u8; 8];
+        copy_from_user(&mut bytes, ptr).map_err(|_| -14isize)?;
+        let pos = i64::from_ne_bytes(bytes);
+        if pos < 0 { return Err(-22); }
+        // Check writability before transferring file data.
+        copy_to_user(ptr, &bytes).map_err(|_| -14isize)?;
+        Ok(pos)
+    }
+    let mut ipos = match offset(off_in_va, ib) { Ok(n) => n, Err(e) => return e };
+    let mut opos = match offset(off_out_va, ob) { Ok(n) => n, Err(e) => return e };
+    let count = len.min(isize::MAX as usize);
+    let iend = match ipos.checked_add(count as i64) { Some(n) => n, None => return -75 };
+    let oend = match opos.checked_add(count as i64) { Some(n) => n, None => return -75 };
+    if (ib == ob || ipath == opath) && ipos < oend && opos < iend { return -22; }
+    let (soft, _) = crate::proc::rlimit::getrlimit_for(cpid(), RLIMIT_FSIZE);
+    if count != 0 && opos as u64 >= soft {
+        crate::proc::signal::send_signal(cpid(), SIGXFSZ);
+        return EFBIG;
+    }
+    let count = count.min(soft.saturating_sub(opos as u64).min(usize::MAX as u64) as usize);
+    let mut buf = [0u8; 16 * 1024];
+    let mut done = 0usize;
+    let mut error = 0;
+    while done < count {
+        let chunk = buf.len().min(count - done);
+        let n = vfs::pread(ib, buf.as_mut_ptr(), chunk, ipos);
+        if n <= 0 { error = n; break; }
+        let mut written = 0usize;
+        while written < n as usize {
+            let w = vfs::pwrite(ob, buf[written..].as_ptr(), n as usize - written, opos);
+            if w <= 0 { error = if w == 0 { -5 } else { w }; break; }
+            written += w as usize;
+            done += w as usize;
+            ipos += w as i64;
+            opos += w as i64;
+        }
+        if error < 0 { break; }
+    }
+    for (ptr, bfd, pos) in [(off_in_va, ib, ipos), (off_out_va, ob, opos)] {
+        if ptr == 0 {
+            let r = vfs::seek(bfd, pos, 0);
+            if r < 0 && done == 0 { return r; }
+        } else if copy_to_user(ptr, &pos.to_ne_bytes()).is_err() {
+            return -14;
+        }
+    }
+    if done != 0 { done as isize } else { error }
 }
 
 /// sys_pread64(fd, buf_va, count, offset)  [NR 17]
@@ -589,7 +620,7 @@ fn read_bfd(bfd: usize, buf_va: usize, count: usize) -> isize {
     } else if crate::fs::pipe::is_pipe(bfd) {
         n = crate::fs::pipe::pipe_read(bfd, &mut kbuf);
     } else if crate::net::socket::is_socket_fd(bfd) {
-        n = crate::net::socket::socket_read(bfd, &mut kbuf);
+        n = crate::net::socket::socket_read(bfd, &mut kbuf, 0);
     } else if crate::fs::scheme_fd::is_scheme_fd(bfd) {
         n = crate::fs::scheme_fd::scheme_fd_read(bfd, &mut kbuf);
     } else {

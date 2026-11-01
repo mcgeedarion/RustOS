@@ -126,7 +126,7 @@ impl Sqe {
         sqe.opcode = op::ACCEPT;
         sqe.fd = fd;
         sqe.addr = sockaddr_addr;
-        sqe.addr3 = addrlen_addr;
+        sqe.off = addrlen_addr;
         sqe.op_flags = accept_flags;
         sqe.user_data = token;
         sqe
@@ -139,7 +139,7 @@ impl Sqe {
         sqe.opcode = op::CONNECT;
         sqe.fd = fd;
         sqe.addr = sockaddr_addr;
-        sqe.len = addrlen;
+        sqe.off = addrlen as u64;
         sqe.user_data = token;
         sqe
     }

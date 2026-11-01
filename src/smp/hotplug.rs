@@ -345,7 +345,6 @@ pub unsafe fn cpu_up(cpu_id: u32) -> HotplugResult<()> {
     }
 
     // Notify callbacks
-    drop(mgr);
     mgr.notify_callbacks(cpu_id, CpuState::Starting);
 
     // Architecture-specific CPU startup

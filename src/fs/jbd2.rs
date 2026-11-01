@@ -3,6 +3,7 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
+use alloc::vec;
 
 const JBD2_MAGIC: u32 = 0xC03B3998;
 const JBD2_DESCRIPTOR_BLOCK: u32 = 1;
@@ -84,6 +85,7 @@ pub enum ReplayError {
     BadSuperblock,
     UnsupportedFeature(u32),
     OutOfBounds,
+    BadDescriptor,
 }
 
 #[inline]
@@ -171,12 +173,9 @@ pub fn parse_superblock(block: &[u8]) -> Option<JournalSuperblock> {
 }
 
 fn unsupported_incompat(features: JournalFeatures) -> u32 {
-    let supported = JBD2_FEATURE_INCOMPAT_REVOKE
-        | JBD2_FEATURE_INCOMPAT_64BIT
-        | JBD2_FEATURE_INCOMPAT_ASYNC_COMMIT
-        | JBD2_FEATURE_INCOMPAT_CSUM_V2
-        | JBD2_FEATURE_INCOMPAT_CSUM_V3
-        | JBD2_FEATURE_INCOMPAT_FAST_COMMIT;
+    // Checksummed, async and fast-commit journals must not be replayed without
+    // their verification/protocol implementations.
+    let supported = JBD2_FEATURE_INCOMPAT_REVOKE | JBD2_FEATURE_INCOMPAT_64BIT;
     features.incompat & !supported
 }
 
@@ -186,7 +185,7 @@ fn block_by_journal_index<'a>(
     idx: usize,
 ) -> Option<&'a [u8]> {
     let off = idx.checked_mul(block_size)?;
-    journal.get(off..off + block_size)
+    journal.get(off..off.checked_add(block_size)?)
 }
 
 fn parse_descriptor(block: &[u8], sb: &JournalSuperblock) -> Vec<DescriptorTag> {
@@ -202,7 +201,13 @@ fn parse_descriptor(block: &[u8], sb: &JournalSuperblock) -> Vec<DescriptorTag> 
             Some(v) => v,
             None => break,
         };
-        let mut tag_off = off + 4;
+        // Legacy tags contain blocknr, checksum/reserved, flags, then the
+        // optional high blocknr. Flags are not at offset four.
+        let flags = be16(block, off + 6).unwrap_or(0);
+        if flags & !(JBD2_FLAG_ESCAPE | JBD2_FLAG_SAME_UUID | JBD2_FLAG_LAST_TAG) != 0 {
+            return Vec::new();
+        }
+        let mut tag_off = off + 8;
         let hi = if has_64bit {
             let v = be32(block, tag_off).unwrap_or(0);
             tag_off += 4;
@@ -210,10 +215,10 @@ fn parse_descriptor(block: &[u8], sb: &JournalSuperblock) -> Vec<DescriptorTag> 
         } else {
             0
         };
-        let flags = be16(block, tag_off).unwrap_or(0);
-        tag_off += 2;
-
         if flags & JBD2_FLAG_SAME_UUID == 0 {
+            if block.get(tag_off..tag_off + 16) != Some(sb.uuid.as_slice()) {
+                return Vec::new();
+            }
             tag_off += 16;
         }
         if has_csum_v3 {
@@ -223,7 +228,7 @@ fn parse_descriptor(block: &[u8], sb: &JournalSuperblock) -> Vec<DescriptorTag> 
         }
 
         if tag_off > block.len() {
-            break;
+            return Vec::new();
         }
 
         let fs_block = ((hi as u64) << 32) | lo as u64;
@@ -236,10 +241,10 @@ fn parse_descriptor(block: &[u8], sb: &JournalSuperblock) -> Vec<DescriptorTag> 
         }
         off = tag_off;
         if flags & JBD2_FLAG_LAST_TAG != 0 {
-            break;
+            return tags;
         }
     }
-    tags
+    Vec::new()
 }
 
 fn parse_revoke(block: &[u8], sb: &JournalSuperblock, seq: u32) -> Vec<RevokeRecord> {
@@ -311,93 +316,103 @@ pub fn replay_journal_image(
         return Err(ReplayError::InvalidBlockSize);
     }
     let unsupported = unsupported_incompat(sb.features);
-    if unsupported != 0 {
+    if unsupported != 0 || sb.features.compat != 0 || sb.features.ro_compat != 0 {
         return Err(ReplayError::UnsupportedFeature(unsupported));
     }
 
     let mut report = ReplayReport::default();
-    let mut idx = if sb.start == 0 {
-        sb.first as usize
-    } else {
-        sb.start as usize
-    };
-    if idx == 0 {
-        idx = 1;
-    }
-
     let max_len = sb.max_len as usize;
-    if max_len == 0
+    if max_len == 0 || sb.first == 0 || sb.first >= sb.max_len
+        || (sb.start != 0 && (sb.start < sb.first || sb.start >= sb.max_len))
         || max_len
             .checked_mul(sb.block_size)
             .map_or(true, |n| n > journal.len())
     {
         return Err(ReplayError::OutOfBounds);
     }
-
+    // A checkpointed journal may contain stale valid descriptor/commit blocks.
+    // Its start==0 is authoritative, so never scan those old transactions.
+    if sb.start == 0 { return Ok(report); }
+    let mut idx = sb.start as usize;
+    let mut expected = sb.sequence;
+    let mut committed = Vec::new();
     let mut current: Option<PendingTxn> = None;
     let mut blocks_scanned = 0usize;
-    while blocks_scanned < max_len {
-        let block = match block_by_journal_index(journal, sb.block_size, idx) {
-            Some(b) => b,
-            None => break,
-        };
-        let (_, ty, seq) = match header(block) {
-            Some(h) => h,
-            None => {
-                if let Some(txn) = current.as_mut() {
-                    txn.payloads.push(block.to_vec());
-                }
-                idx += 1;
-                if idx >= max_len {
-                    idx = sb.first as usize;
-                }
-                blocks_scanned += 1;
-                continue;
-            },
-        };
-
+    let ring_len = max_len - sb.first as usize;
+    let advance = |index: usize| if index + 1 == max_len { sb.first as usize } else { index + 1 };
+    while blocks_scanned < ring_len {
+        let block = block_by_journal_index(journal, sb.block_size, idx).ok_or(ReplayError::OutOfBounds)?;
+        let Some((_, ty, seq)) = header(block) else { break; };
+        if seq != expected { break; }
+        idx = advance(idx);
+        blocks_scanned += 1;
         match ty {
             JBD2_DESCRIPTOR_BLOCK => {
                 let tags = parse_descriptor(block, &sb);
-                current = Some(PendingTxn {
+                if tags.is_empty() { return Err(ReplayError::BadDescriptor); }
+                if tags.len() > ring_len - blocks_scanned { break; }
+                let txn = current.get_or_insert_with(|| PendingTxn {
                     sequence: seq,
-                    tags,
+                    tags: Vec::new(),
                     payloads: Vec::new(),
                     revokes: Vec::new(),
                 });
-                report.transactions_seen += 1;
-            },
+                // Payloads are identified by descriptor count, not by their
+                // first four bytes: valid data may begin with JBD2 magic.
+                for _ in &tags {
+                    let payload = block_by_journal_index(journal, sb.block_size, idx)
+                        .ok_or(ReplayError::OutOfBounds)?;
+                    txn.payloads.push(payload.to_vec());
+                    idx = advance(idx);
+                    blocks_scanned += 1;
+                }
+                txn.tags.extend(tags);
+            }
             JBD2_REVOKE_BLOCK => {
+                let record_size = if sb.features.incompat & JBD2_FEATURE_INCOMPAT_64BIT != 0 { 8 } else { 4 };
+                let used = be32(block, 12).ok_or(ReplayError::BadDescriptor)? as usize;
+                if used < 16 || used > block.len() || (used - 16) % record_size != 0 {
+                    return Err(ReplayError::BadDescriptor);
+                }
                 let revokes = parse_revoke(block, &sb, seq);
                 report.revoke_records += revokes.len();
-                if let Some(txn) = current.as_mut() {
-                    txn.revokes.extend(revokes);
-                }
-            },
+                current.get_or_insert_with(|| PendingTxn {
+                    sequence: seq, tags: Vec::new(), payloads: Vec::new(), revokes: Vec::new(),
+                }).revokes.extend(revokes);
+            }
             JBD2_COMMIT_BLOCK => {
                 if let Some(txn) = current.take() {
-                    if txn.sequence == seq {
-                        let n = apply_txn(fs_image, sb.block_size, &txn);
-                        report.blocks_replayed += n;
-                        report.transactions_replayed += 1;
-                    }
+                    committed.push(txn);
+                    expected = expected.wrapping_add(1);
+                } else {
+                    break;
                 }
             },
-            JBD2_SUPERBLOCK_V1 | JBD2_SUPERBLOCK_V2 => {},
-            _ => {
-                if ty == JBD2_FEATURE_INCOMPAT_FAST_COMMIT {
-                    report.unsupported_fast_commit_blocks += 1;
-                }
-            },
+            _ => break,
         }
-
-        idx += 1;
-        if idx >= max_len {
-            idx = sb.first as usize;
-        }
-        blocks_scanned += 1;
     }
-
+    report.transactions_seen = committed.len() + usize::from(current.is_some());
+    // Validate every replay destination before touching the caller's image.
+    // Later committed revokes suppress earlier logged data for that block.
+    let mut writes = Vec::new();
+    for (index, txn) in committed.iter().enumerate() {
+        for (tag, payload) in txn.tags.iter().zip(&txn.payloads) {
+            if committed[index..].iter().any(|later| later.revokes.iter().any(|record| record.fs_block == tag.fs_block)) {
+                continue;
+            }
+            let off = usize::try_from(tag.fs_block).ok()
+                .and_then(|block| block.checked_mul(sb.block_size)).ok_or(ReplayError::OutOfBounds)?;
+            let end = off.checked_add(sb.block_size).ok_or(ReplayError::OutOfBounds)?;
+            fs_image.get(off..end).ok_or(ReplayError::OutOfBounds)?;
+            writes.push((off, payload, tag.escaped));
+        }
+    }
+    for (off, payload, escaped) in writes {
+        fs_image[off..off + sb.block_size].copy_from_slice(payload);
+        if escaped { fs_image[off..off + 4].copy_from_slice(&JBD2_MAGIC.to_be_bytes()); }
+        report.blocks_replayed += 1;
+    }
+    report.transactions_replayed = committed.len();
     Ok(report)
 }
 
@@ -416,8 +431,9 @@ pub fn replay_from_block_list(
         let off = (blk as usize)
             .checked_mul(fs_block_size)
             .ok_or(ReplayError::OutOfBounds)?;
+        let end = off.checked_add(fs_block_size).ok_or(ReplayError::OutOfBounds)?;
         let src = fs_image
-            .get(off..off + fs_block_size)
+            .get(off..end)
             .ok_or(ReplayError::OutOfBounds)?;
         journal.extend_from_slice(src);
     }
@@ -443,7 +459,7 @@ pub fn replay_from_block_list(
 /// # Returns
 /// * `Ok(JournalValidationReport)` - Detailed validation results
 /// * `Err(JournalValidationError)` - Specific validation failure
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct JournalValidationReport {
     pub superblock_valid: bool,
     pub magic_valid: bool,
@@ -458,6 +474,8 @@ pub struct JournalValidationReport {
     pub first_valid_sequence: u32,
     pub last_valid_sequence: u32,
     pub transactions_committed: usize,
+    pub blocks_replayed: usize,
+    pub transactions_replayed: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -481,6 +499,12 @@ pub fn validate_journal_superblock(
     let sb_block = journal
         .get(..1024)
         .ok_or(JournalValidationError::EmptyJournal)?;
+    if be32(sb_block, 0) == Some(JBD2_MAGIC) {
+        let size = be32(sb_block, 12).ok_or(JournalValidationError::InvalidBlockSize)?;
+        if !(1024..=65536).contains(&size) || !size.is_power_of_two() {
+            return Err(JournalValidationError::InvalidBlockSize);
+        }
+    }
     let sb = parse_superblock(sb_block).ok_or(JournalValidationError::BadSuperblockMagic)?;
 
     // Validate magic number
@@ -497,7 +521,7 @@ pub fn validate_journal_superblock(
 
     // Check for unsupported features
     let unsupported = unsupported_incompat(sb.features);
-    if unsupported != 0 {
+    if unsupported != 0 || sb.features.compat != 0 || sb.features.ro_compat != 0 {
         return Err(JournalValidationError::UnsupportedFeature(unsupported));
     }
 
@@ -548,7 +572,7 @@ fn validate_sequences(
     Ok((first_seq.unwrap_or(0), last_seq.unwrap_or(0), valid_blocks))
 }
 
-/// Full journal validation - production ready implementation
+/// Structural validation for the explicitly supported legacy journal format.
 pub fn validate_journal(journal: &[u8]) -> Result<JournalValidationReport, JournalValidationError> {
     let mut report = JournalValidationReport::default();
 
@@ -562,6 +586,11 @@ pub fn validate_journal(journal: &[u8]) -> Result<JournalValidationReport, Journ
         },
         Err(e) => return Err(e),
     };
+    if sb.first == 0 || sb.first >= sb.max_len
+        || (sb.max_len as usize).checked_mul(sb.block_size).map_or(true, |len| len > journal.len())
+        || (sb.start != 0 && (sb.start < sb.first || sb.start >= sb.max_len))
+    { return Err(JournalValidationError::OutOfBounds); }
+    if sb.start == 0 { report.sequence_valid = true; return Ok(report); }
 
     // Step 2: Scan and validate all blocks
     let mut idx = if sb.start == 0 {
@@ -585,6 +614,14 @@ pub fn validate_journal(journal: &[u8]) -> Result<JournalValidationReport, Journ
         };
 
         report.total_blocks_scanned += 1;
+        // Data is consumed according to descriptor count, regardless of magic.
+        if pending_tags > 0 {
+            pending_tags -= 1;
+            idx += 1;
+            if idx >= max_len { idx = sb.first as usize; }
+            blocks_scanned += 1;
+            continue;
+        }
 
         if let Some((magic, ty, seq)) = header(block) {
             let _ = magic; // Already validated in header()
@@ -598,7 +635,7 @@ pub fn validate_journal(journal: &[u8]) -> Result<JournalValidationReport, Journ
             match ty {
                 JBD2_DESCRIPTOR_BLOCK => {
                     let tags = parse_descriptor(block, &sb);
-                    if tags.is_empty() && pending_tags == 0 {
+                    if tags.is_empty() {
                         return Err(JournalValidationError::DescriptorBlockCorrupt);
                     }
                     pending_tags = tags.len();
@@ -672,29 +709,31 @@ pub fn validate_ext4_journal(
     journal_inode_block: u64,
     do_replay: bool,
 ) -> Result<JournalValidationReport, JournalValidationError> {
-    use crate::ext4::{get_journal_inode, read_block};
-
-    // Get journal inode location (simplified - actual impl would use ext4 module)
-    let journal_block = journal_inode_block;
-
-    // Extract journal data from filesystem
-    let block_size = 4096; // Would be read from ext4 superblock
-    let journal_len = 8192 * block_size; // Typical journal size
-
-    let journal_start = (journal_block as usize)
-        .checked_mul(block_size)
+    // This legacy API accepts the first physical journal block, not an inode
+    // number. Resolve dimensions from the actual ext4 and journal superblocks.
+    // Non-contiguous journal inodes must use replay_from_block_list instead.
+    let log_size = fs_data.get(1048..1052).ok_or(JournalValidationError::OutOfBounds)?;
+    let log_size = u32::from_le_bytes(log_size.try_into().map_err(|_| JournalValidationError::OutOfBounds)?);
+    if log_size > 6 { return Err(JournalValidationError::InvalidBlockSize); }
+    let block_size = 1024usize << log_size;
+    let journal_start = usize::try_from(journal_inode_block).ok()
+        .and_then(|block| block.checked_mul(block_size))
         .ok_or(JournalValidationError::OutOfBounds)?;
-
-    let journal = fs_data
-        .get(journal_start..journal_start + journal_len)
-        .ok_or(JournalValidationError::OutOfBounds)?;
+    let prefix_end = journal_start.checked_add(1024).ok_or(JournalValidationError::OutOfBounds)?;
+    let prefix = fs_data.get(journal_start..prefix_end).ok_or(JournalValidationError::OutOfBounds)?;
+    let sb = parse_superblock(prefix).ok_or(JournalValidationError::BadSuperblockMagic)?;
+    if sb.block_size != block_size { return Err(JournalValidationError::InvalidBlockSize); }
+    let end = (sb.max_len as usize).checked_mul(block_size)
+        .and_then(|len| journal_start.checked_add(len)).ok_or(JournalValidationError::OutOfBounds)?;
+    let journal = fs_data.get(journal_start..end)
+        .ok_or(JournalValidationError::OutOfBounds)?.to_vec();
 
     // Validate journal structure
-    let mut report = validate_journal(journal)?;
+    let mut report = validate_journal(&journal)?;
 
     // Optionally replay valid transactions
     if do_replay && report.incomplete_transactions == 0 {
-        let replay_result = replay_journal_image(fs_data, journal);
+        let replay_result = replay_journal_image(fs_data, &journal);
         match replay_result {
             Ok(replay_report) => {
                 report.blocks_replayed = replay_report.blocks_replayed;
@@ -763,29 +802,14 @@ mod tests {
 // Runtime Journal Functions (for kernel use)
 // ============================================================================
 
-use crate::fs::ext4::Ext4Fs;
-use spin::Mutex;
-
-/// Current journal transaction state
-static JOURNAL_STATE: Mutex<JournalState> = Mutex::new(JournalState {
-    current_sequence: 0,
-    in_transaction: false,
-    dirty_blocks: 0,
-});
-
-struct JournalState {
-    current_sequence: u32,
-    in_transaction: bool,
-    dirty_blocks: usize,
-}
-
 /// Error type for journal operations
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JournalError {
     NoTransaction,
     IoError,
     NoSpace,
     InvalidBlock,
+    UnsupportedFeature,
 }
 
 impl From<JournalError> for i32 {
@@ -795,24 +819,16 @@ impl From<JournalError> for i32 {
             JournalError::IoError => -5,       // EIO
             JournalError::NoSpace => -28,      // ENOSPC
             JournalError::InvalidBlock => -22, // EINVAL
+            JournalError::UnsupportedFeature => -95,
         }
     }
 }
 
-/// Begin a new journal write transaction.
-/// Returns a transaction handle on success.
+/// On-disk JBD2 transaction creation is not implemented. Do not substitute
+/// direct home-block writes for write-ahead logging: that falsely promises
+/// crash consistency. The real ext4 writer supports non-journaled profiles.
 pub fn journal_start_write() -> Result<u32, JournalError> {
-    let mut state = JOURNAL_STATE.lock();
-
-    if state.in_transaction {
-        return Err(JournalError::NoTransaction);
-    }
-
-    state.current_sequence = state.current_sequence.wrapping_add(1);
-    state.in_transaction = true;
-    state.dirty_blocks = 0;
-
-    Ok(state.current_sequence)
+    Err(JournalError::UnsupportedFeature)
 }
 
 /// Write a block through the journal.
@@ -821,122 +837,25 @@ pub fn journal_start_write() -> Result<u32, JournalError> {
 /// * `txn` - Transaction handle from `journal_start_write`
 /// * `block_num` - Physical block number to write
 /// * `data` - Block data (must be exactly one block size)
-pub fn journal_write_block(txn: u32, block_num: u64, data: &[u8]) -> Result<(), JournalError> {
-    let mut state = JOURNAL_STATE.lock();
-
-    if !state.in_transaction || state.current_sequence != txn {
-        return Err(JournalError::NoTransaction);
-    }
-
-    // In a full implementation, we would:
-    // 1. Write descriptor tag to journal
-    // 2. Write data block to journal
-    // 3. Track the mapping for replay
-
-    // For now, write directly to the block device via ext4
-    let result = crate::fs::ext4::with_fs(|fs| {
-        // Calculate sector address
-        let block_size = fs.block_size as usize;
-        let sectors_per_block = block_size / 512;
-
-        // Write each sector of the block
-        for sector_offset in 0..sectors_per_block {
-            let sector_num = block_num * sectors_per_block as u64 + sector_offset as u64;
-            let start = sector_offset * 512;
-            let end = start + 512;
-
-            if end > data.len() {
-                break;
-            }
-
-            let mut sector_data = [0u8; 512];
-            sector_data.copy_from_slice(&data[start..end]);
-
-            if !crate::block::virtio_blk::write_sector(sector_num, &sector_data) {
-                return Err(JournalError::IoError);
-            }
-        }
-
-        Ok(())
-    });
-
-    match result {
-        Some(Ok(())) => {
-            state.dirty_blocks += 1;
-            Ok(())
-        },
-        _ => Err(JournalError::IoError),
-    }
+pub fn journal_write_block(_txn: u32, _block_num: u64, _data: &[u8]) -> Result<(), JournalError> {
+    Err(JournalError::UnsupportedFeature)
 }
 
 /// Commit the current journal transaction.
-pub fn journal_commit(txn: u32) -> Result<(), JournalError> {
-    let mut state = JOURNAL_STATE.lock();
-
-    if !state.in_transaction || state.current_sequence != txn {
-        return Err(JournalError::NoTransaction);
-    }
-
-    // Write commit block to journal
-    // In a full implementation, this would:
-    // 1. Write commit block with checksum
-    // 2. Update journal superblock with new sequence
-
-    state.in_transaction = false;
-
-    log::debug!(
-        "jbd2: committed transaction {} ({} blocks)",
-        txn,
-        state.dirty_blocks
-    );
-
-    Ok(())
+pub fn journal_commit(_txn: u32) -> Result<(), JournalError> {
+    Err(JournalError::UnsupportedFeature)
 }
 
 /// Replay the journal after an unclean shutdown.
 /// This is called during filesystem mount.
 pub fn replay_journal() -> Result<(), JournalError> {
-    let result = crate::fs::ext4::with_fs(|fs| {
-        // Get journal location from superblock
-        let journal_block = fs.journal_block;
-        let block_size = fs.block_size as usize;
-
-        // Read journal superblock
-        let mut journal_sb = vec![0u8; block_size];
-        for i in 0..(block_size / 512) {
-            let sector = journal_block * (block_size / 512) as u64 + i as u64;
-            let mut sector_data = [0u8; 512];
-            if !crate::block::virtio_blk::read_sector(sector, &mut sector_data) {
-                return Err(JournalError::IoError);
-            }
-            journal_sb[i * 512..(i + 1) * 512].copy_from_slice(&sector_data);
-        }
-
-        // Parse and validate journal
-        if let Some(sb) = parse_superblock(&journal_sb) {
-            // Replay transactions
-            let _ = replay_journal_image(&[], &sb);
-        }
-
-        Ok(())
-    });
-
-    result.unwrap_or(Err(JournalError::IoError))
+    // Recovery is a mount-time operation requiring exclusive ownership of the
+    // image and block mappings. mount() currently refuses NEEDS_RECOVERY; this
+    // runtime entry point must not pretend an empty replay recovered the disk.
+    Err(JournalError::UnsupportedFeature)
 }
 
 /// Checkpoint the journal - flush all committed transactions to main filesystem.
 pub fn checkpoint_journal() -> Result<(), JournalError> {
-    // Force a cache flush on the block device
-    if !crate::block::virtio_blk::flush_cache() {
-        return Err(JournalError::IoError);
-    }
-
-    // Update journal superblock to indicate checkpoint complete
-    // In a full implementation, this would:
-    // 1. Mark all replayed transactions as checkpointed
-    // 2. Free journal space for reuse
-
-    log::debug!("jbd2: checkpoint complete");
-
-    Ok(())
+    Err(JournalError::UnsupportedFeature)
 }

@@ -36,7 +36,10 @@ pub fn current_as_bytes(pid: usize) -> usize {
 }
 
 pub fn check_rlimit_as(pid: usize, extra: usize) -> isize {
-    let over = scheduler::with_proc(pid, |p| p.rlimits.exceeds_as(current_as_bytes(pid), extra))
+    let over = scheduler::with_proc(pid, |p| {
+        let used = p.vmas.iter().fold(0usize, |n, v| n.saturating_add(v.end - v.start));
+        p.rlimits.exceeds_as(used, extra)
+    })
         .unwrap_or(false);
     if over {
         -12

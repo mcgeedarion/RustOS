@@ -156,7 +156,7 @@ fn read_regs(pid: usize, buf: &mut [u8]) -> isize {
         if p.kstack_top == 0 {
             return None;
         }
-        Some(build_user_regs_pub(p.kstack_top, p.ctx.fs_base))
+        Some(build_user_regs_pub(p.kstack_top, p.tls_base as u64))
     }) {
         Some(Some(r)) => r,
         _ => return -3,

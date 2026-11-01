@@ -165,45 +165,28 @@ fn compute_mul_shift(freq_hz: u64) {
 }
 
 fn cpuid3(leaf: u32) -> (u32, u32, u32) {
-    let (eax, ebx, ecx): (u32, u32, u32);
     #[cfg(target_arch = "x86_64")]
     unsafe {
-        core::arch::asm!(
-            "cpuid",
-            inout("eax") leaf => eax,
-            out("ebx") ebx,
-            inout("ecx") 0u32 => ecx,
-            out("edx") _,
-            options(nostack, preserves_flags),
-        );
+        let result = core::arch::x86_64::__cpuid_count(leaf, 0);
+        return (result.eax, result.ebx, result.ecx);
     }
     #[cfg(not(target_arch = "x86_64"))]
     {
         let _ = leaf;
         (0, 0, 0)
     }
-    #[cfg(target_arch = "x86_64")]
-    (eax, ebx, ecx)
 }
 
 fn cpuid_edx(leaf: u32) -> u32 {
-    let edx: u32;
     #[cfg(target_arch = "x86_64")]
     unsafe {
-        core::arch::asm!(
-            "cpuid",
-            inout("eax") leaf => _,
-            out("ebx") _, out("ecx") _,
-            out("edx") edx,
-            options(nostack, preserves_flags),
-        );
+        return core::arch::x86_64::__cpuid_count(leaf, 0).edx;
     }
     #[cfg(not(target_arch = "x86_64"))]
     {
         let _ = leaf;
-        edx = 0;
+        0
     }
-    edx
 }
 
 #[cfg(target_arch = "x86_64")]

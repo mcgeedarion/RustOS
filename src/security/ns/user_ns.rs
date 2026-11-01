@@ -48,6 +48,10 @@ pub struct UserNs {
 }
 
 impl UserNs {
+    pub fn parent(&self) -> Option<Arc<UserNs>> {
+        self.parent.clone()
+    }
+
     pub fn new_init() -> Self {
         let mut caps = CapSet::default();
         // Initial ns: all capabilities permitted and effective for uid 0.
