@@ -1,0 +1,84 @@
+name: Apply and compile-check Task 4 fault sites
+on:
+  push:
+    branches: [ci/smoke-fault-tasks-2-4]
+    paths:
+      - scripts/ci/apply-task4-fault-sites.py
+      - .github/workflows/task4-fault-sites.yml
+permissions:
+  contents: read
+jobs:
+  apply-and-check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
+          components: rust-src
+      - name: Apply compilation blockers first
+        run: |
+          test "$GITHUB_REF" = refs/heads/ci/smoke-fault-tasks-2-4
+          mkdir -p target
+          python3 scripts/ci/apply-task4-fault-sites.py --apply --phase blockers
+          rustup target add x86_64-unknown-uefi
+      - name: Test actual engine and marker formatting on the host
+        run: |
+          set -o pipefail
+          rustc --edition=2021 --test --cfg 'feature="fault-inject"' scripts/ci/tests/fault_engine.rs -o "$RUNNER_TEMP/fault-engine"
+          "$RUNNER_TEMP/fault-engine" 2>&1 | tee target/task4-engine.log
+          rustc --edition=2021 --test src/fault_inject/markers.rs -o "$RUNNER_TEMP/fault-markers"
+          "$RUNNER_TEMP/fault-markers" 2>&1 | tee target/task4-markers.log
+      - name: Check blockers with fault injection and kmtest enabled
+        run: |
+          set -o pipefail
+          cargo check --locked --target x86_64-unknown-uefi --no-default-features \
+            --features full_kernel,fault-inject,kmtest -Z build-std=core,alloc,compiler_builtins \
+            -Z build-std-features=compiler-builtins-mem 2>&1 | tee target/task4-blockers.log
+      - name: Apply six production sites and evidence-boundary documentation
+        run: python3 scripts/ci/apply-task4-fault-sites.py --apply --phase all
+      - name: Check enabled and disabled production configurations
+        run: |
+          set -o pipefail
+          for features in full_kernel,fault-inject,kmtest full_kernel,kmtest; do
+            cargo check --locked --target x86_64-unknown-uefi --no-default-features \
+              --features "$features" -Z build-std=core,alloc,compiler_builtins \
+              -Z build-std-features=compiler-builtins-mem 2>&1 | tee "target/task4-${features//,/-}.log"
+          done
+      - name: Commit only Task 4 sources after every check passes
+        run: |
+          git add -- src/mm/mod.rs src/syscall/mod.rs src/kmtest/mod.rs \
+            src/kmtest/fault_inject_tests.rs src/fault_inject/mod.rs src/fault_inject/markers.rs \
+            src/mm/pmm.rs src/mm/mmap/mapping.rs src/fs/pipe.rs src/ipc/mod.rs docs/fault-recovery.md
+          if ! git diff --cached --quiet; then
+            git config user.name github-actions[bot]
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git commit -m "fault-inject: wire bounded production recovery sites and fix feature graph"
+            git push origin HEAD:refs/heads/ci/smoke-fault-tasks-2-4
+          fi
+      - name: Upload compile and host-test evidence, including failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: task4-compile-host-evidence
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            target/task4-*.log
+            src/mm/mod.rs
+            src/syscall/mod.rs
+            src/kmtest/mod.rs
+            src/kmtest/fault_inject_tests.rs
+            src/fault_inject/mod.rs
+            src/fault_inject/markers.rs
+            src/mm/pmm.rs
+            src/mm/mmap/mapping.rs
+            src/fs/pipe.rs
+            src/ipc/mod.rs
+            docs/fault-recovery.md
