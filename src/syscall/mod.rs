@@ -706,7 +706,3 @@ pub(crate) fn mq_getsetattr_dispatch(mqd: u64, new_va: usize, old_va: usize) -> 
 pub fn altstack_clear_pid(pid: usize) {
     crate::proc::signal::altstack_clear_pid(pid);
 }
-
-pub fn proc_name_clear(pid: usize) {
-    crate::syscall::proc_name_clear(pid);
-}

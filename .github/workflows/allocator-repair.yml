@@ -1,0 +1,33 @@
+name: Allocator repair validation
+
+on:
+  push:
+    branches: [fix/kernel-allocator-exit-signals-pmm]
+  pull_request:
+    branches: [main]
+    paths:
+      - src/allocator.rs
+      - src/allocator/**
+      - src/mm/heap.rs
+      - scripts/ci/test-region-heap.sh
+      - .github/workflows/allocator-repair.yml
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
+          components: rust-src
+      - name: Test production free-region allocator
+        run: bash scripts/ci/test-region-heap.sh
+      - name: Check canonical x86_64 kernel
+        if: ${{ !cancelled() }}
+        run: cargo xtask check --arch x86_64

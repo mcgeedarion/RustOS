@@ -1,891 +1,465 @@
-//! Physical Memory Manager (PMM) — buddy allocator with NUMA awareness
-//! and per-page reference counting.
-//!
-//! The PMM is now initialised from an arch-agnostic `Regions` description
-//! defined in `mm::boot_memory`. Arch-specific code is responsible for
-//! discovering the memory map and passing it here.
-
+//! Boot-map-sized PMM with serialized buddy lists and a contiguous boot pool.
+//! init_from_regions must run before APs or concurrent memory-map updates.
+//! This retains the existing identity-addressable physical-frame convention.
+#![allow(unexpected_cfgs)] // pmm_host_test is supplied only by the standalone harness.
+use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU8, AtomicUsize, Ordering};
-
-use crate::mm::boot_memory::{Region, RegionKind, Regions};
+use crate::allocator::InterruptGuard;
+use crate::mm::boot_memory::Regions;
 
 pub const PAGE_SIZE: usize = 4096;
 pub const MAX_ORDER: usize = 11;
 pub const MAX_NODES: usize = 8;
-pub const MAX_PA: usize = 64 * 1024 * 1024 * 1024; // P2-3: was 16 GiB, now 64 GiB
+pub const MAX_PA: usize = 64 * 1024 * 1024 * 1024;
 const MAX_FRAMES: usize = MAX_PA / PAGE_SIZE;
 const POOL_PAGES: usize = 16_384;
+static PMM_LOCK: spin::Mutex<()> = spin::Mutex::new(());
 
 #[repr(C, align(4096))]
-struct Pool([u8; POOL_PAGES * PAGE_SIZE]);
-static POOL: Pool = Pool([0u8; POOL_PAGES * PAGE_SIZE]);
+struct Pool(UnsafeCell<[u8; POOL_PAGES * PAGE_SIZE]>);
+// Allocation is serialized by PMM_LOCK; disjoint issued pages belong to callers.
+unsafe impl Sync for Pool {}
+static POOL: Pool = Pool(UnsafeCell::new([0; POOL_PAGES * PAGE_SIZE]));
 static BUMP: AtomicUsize = AtomicUsize::new(0);
-const BITMAP_WORDS: usize = POOL_PAGES / 64;
-static POOL_FREE_BITS: [core::sync::atomic::AtomicU64; BITMAP_WORDS] = {
-    const Z: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
-    [Z; BITMAP_WORDS]
-};
-
-#[inline]
-fn pool_base() -> usize {
-    POOL.0.as_ptr() as usize
-}
-#[inline]
-fn pool_index(pa: usize) -> Option<usize> {
-    let b = pool_base();
-    if pa >= b && pa < b + POOL_PAGES * PAGE_SIZE {
-        Some((pa - b) / PAGE_SIZE)
-    } else {
-        None
-    }
-}
-#[inline]
-fn pool_bit_set_free(idx: usize) -> bool {
-    let w = idx / 64;
-    let bit = 1u64 << (idx % 64);
-    POOL_FREE_BITS[w].fetch_or(bit, Ordering::AcqRel) & bit == 0
-}
-#[inline]
-fn pool_bit_clear(idx: usize) {
-    let w = idx / 64;
-    let bit = 1u64 << (idx % 64);
-    POOL_FREE_BITS[w].fetch_and(!bit, Ordering::AcqRel);
-}
-
 static BOOT_FREE_HEAD: AtomicPtr<u8> = AtomicPtr::new(core::ptr::null_mut());
 static BOOT_FREE_CNT: AtomicUsize = AtomicUsize::new(0);
-
-fn boot_push(pa: usize) {
-    let node = pa as *mut *mut u8;
-    loop {
-        let head = BOOT_FREE_HEAD.load(Ordering::Acquire);
-        unsafe {
-            node.write(head);
-        }
-        if BOOT_FREE_HEAD
-            .compare_exchange_weak(head, pa as *mut u8, Ordering::Release, Ordering::Relaxed)
-            .is_ok()
-        {
-            BOOT_FREE_CNT.fetch_add(1, Ordering::Relaxed);
-            return;
-        }
-        core::hint::spin_loop();
-    }
+static POOL_FREE_BITS: [core::sync::atomic::AtomicU64; POOL_PAGES / 64] = {
+    const Z: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+    [Z; POOL_PAGES / 64]
+};
+fn pool_base() -> usize { POOL.0.get() as *mut u8 as usize }
+fn pool_index(pa: usize) -> Option<usize> {
+    let base = pool_base();
+    (pa >= base && pa - base < POOL_PAGES * PAGE_SIZE).then(|| (pa - base) / PAGE_SIZE)
 }
-
+fn pool_bit_set_free(index: usize) -> bool {
+    let bit = 1u64 << (index % 64);
+    POOL_FREE_BITS[index / 64].fetch_or(bit, Ordering::Relaxed) & bit == 0
+}
+fn boot_push(pa: usize) {
+    unsafe { (pa as *mut *mut u8).write(BOOT_FREE_HEAD.load(Ordering::Relaxed)) };
+    BOOT_FREE_HEAD.store(pa as *mut u8, Ordering::Relaxed);
+    BOOT_FREE_CNT.fetch_add(1, Ordering::Relaxed);
+}
 fn boot_pop() -> usize {
-    loop {
-        let head = BOOT_FREE_HEAD.load(Ordering::Acquire);
-        if head.is_null() {
-            return 0;
-        }
-        let next = unsafe { (head as *const *mut u8).read() };
-        if BOOT_FREE_HEAD
-            .compare_exchange_weak(head, next, Ordering::Release, Ordering::Relaxed)
-            .is_ok()
-        {
-            BOOT_FREE_CNT.fetch_sub(1, Ordering::Relaxed);
-            return head as usize;
-        }
-        core::hint::spin_loop();
+    let head = BOOT_FREE_HEAD.load(Ordering::Relaxed);
+    if head.is_null() { return 0; }
+    let next = unsafe { (head as *const *mut u8).read() };
+    BOOT_FREE_HEAD.store(next, Ordering::Relaxed);
+    BOOT_FREE_CNT.fetch_sub(1, Ordering::Relaxed);
+    if let Some(index) = pool_index(head as usize) {
+        POOL_FREE_BITS[index / 64].fetch_and(!(1u64 << (index % 64)), Ordering::Relaxed);
     }
+    head as usize
+}
+// Called only under PMM_LOCK. A failed request never advances the cursor.
+fn reserve_boot_pages(pages: usize) -> Option<usize> {
+    let current = BUMP.load(Ordering::Relaxed);
+    let end = current.checked_add(pages)?;
+    if pages == 0 || end > POOL_PAGES { return None; }
+    BUMP.store(end, Ordering::Relaxed);
+    Some(pool_base() + current * PAGE_SIZE)
+}
+fn alloc_boot_pages(pages: usize) -> Option<usize> {
+    let pa = if pages == 1 {
+        let recycled = boot_pop();
+        if recycled != 0 { recycled } else { reserve_boot_pages(1)? }
+    } else { reserve_boot_pages(pages)? };
+    unsafe { zero_pages(pa, pages) };
+    Some(pa)
 }
 
 pub mod page_flags {
-    pub const FLAG_FREE: u8 = 1 << 0;
-    pub const FLAG_RESERVED: u8 = 1 << 1;
-    pub const FLAG_BUDDY: u8 = 1 << 2;
-    pub const FLAG_BOOT: u8 = 1 << 3;
+    pub const FLAG_FREE: u8 = 1;
+    pub const FLAG_RESERVED: u8 = 2;
+    pub const FLAG_BUDDY: u8 = 4;
+    pub const FLAG_BOOT: u8 = 8;
 }
 use page_flags::*;
-
 #[repr(C, align(8))]
 pub struct PageInfo {
-    pub refcount: AtomicU32,
-    pub flags: AtomicU8,
-    pub order: AtomicU8,
-    pub numa_node: AtomicU8,
-    pub _pad: u8,
-    pub free_next: AtomicPtr<PageInfo>,
+    pub refcount: AtomicU32, pub flags: AtomicU8, pub order: AtomicU8,
+    pub numa_node: AtomicU8, pub _pad: u8, pub free_next: AtomicPtr<PageInfo>,
 }
-
 impl PageInfo {
     const fn zero() -> Self {
-        Self {
-            refcount: AtomicU32::new(0),
-            flags: AtomicU8::new(0),
-            order: AtomicU8::new(0),
-            numa_node: AtomicU8::new(0),
-            _pad: 0,
-            free_next: AtomicPtr::new(core::ptr::null_mut()),
-        }
+        Self { refcount: AtomicU32::new(0), flags: AtomicU8::new(0),
+            order: AtomicU8::new(0), numa_node: AtomicU8::new(0), _pad: 0,
+            free_next: AtomicPtr::new(core::ptr::null_mut()) }
     }
 }
-
 static PAGE_INFO_PTR: AtomicPtr<PageInfo> = AtomicPtr::new(core::ptr::null_mut());
 static PAGE_INFO_LEN: AtomicUsize = AtomicUsize::new(0);
-const EMERGENCY_FRAMES: usize = (1 * 1024 * 1024 * 1024) / PAGE_SIZE;
+const EMERGENCY_FRAMES: usize = (1024 * 1024 * 1024) / PAGE_SIZE;
 static EMERGENCY_TABLE: [PageInfo; EMERGENCY_FRAMES] = {
-    const Z: PageInfo = PageInfo::zero();
-    [Z; EMERGENCY_FRAMES]
+    const Z: PageInfo = PageInfo::zero(); [Z; EMERGENCY_FRAMES]
 };
-
+// Serialized, immutable in size after first publication: PageInfo pointers must
+// remain stable. Unsupported late growth fails explicitly rather than dropping RAM.
 fn ensure_page_info_table(max_pfn: usize) {
-    use spin::Once;
-    static INIT: Once<()> = Once::new();
-    INIT.call_once(|| {
-        let needed = max_pfn + 1;
-        let bytes  = needed * core::mem::size_of::<PageInfo>();
-        let pages  = (bytes + PAGE_SIZE - 1) / PAGE_SIZE;
-        let bump_before = BUMP.load(Ordering::Relaxed);
-        let new_bump    = bump_before + pages;
-        if new_bump <= POOL_PAGES
-            && BUMP.compare_exchange(
-                bump_before, new_bump,
-                Ordering::AcqRel, Ordering::Relaxed,
-            ).is_ok()
-        {
-            let base = pool_base() + bump_before * PAGE_SIZE;
-            unsafe { core::ptr::write_bytes(base as *mut u8, 0, pages * PAGE_SIZE); }
-            for i in 0..pages {
-                if let Some(idx) = pool_index(base + i * PAGE_SIZE) {
-                    pool_bit_set_free(idx);
-                }
-            }
-            PAGE_INFO_PTR.store(base as *mut PageInfo, Ordering::Release);
-            PAGE_INFO_LEN.store(needed, Ordering::Release);
-            return;
-        }
-        if needed <= EMERGENCY_FRAMES {
-            log::warn!("pmm: bootstrap pool full; using emergency PageInfo table (covers first 1 GiB only)");
-            PAGE_INFO_PTR.store(EMERGENCY_TABLE.as_ptr() as *mut PageInfo, Ordering::Release);
-            PAGE_INFO_LEN.store(EMERGENCY_FRAMES, Ordering::Release);
-        } else {
-            panic!("pmm: cannot allocate PageInfo table: bootstrap pool full and max_pfn {} > EMERGENCY_FRAMES {}", max_pfn, EMERGENCY_FRAMES);
-        }
-    });
+    let needed = max_pfn.checked_add(1).expect("pmm: PFN overflow");
+    let existing = PAGE_INFO_LEN.load(Ordering::Acquire);
+    if existing != 0 {
+        assert!(needed <= existing, "pmm: metadata growth requires full-map initialization");
+        return;
+    }
+    let bytes = needed.checked_mul(core::mem::size_of::<PageInfo>()).expect("pmm: metadata overflow");
+    let pages = bytes.div_ceil(PAGE_SIZE);
+    let ptr = if let Some(base) = reserve_boot_pages(pages) {
+        unsafe { core::ptr::write_bytes(base as *mut u8, 0, pages * PAGE_SIZE) };
+        base as *mut PageInfo
+    } else {
+        assert!(needed <= EMERGENCY_FRAMES, "pmm: insufficient bootstrap metadata capacity");
+        EMERGENCY_TABLE.as_ptr() as *mut PageInfo
+    };
+    // Metadata pool pages stay allocated and are never added to BOOT_FREE_HEAD.
+    let len = if ptr == EMERGENCY_TABLE.as_ptr() as *mut PageInfo { EMERGENCY_FRAMES } else { needed };
+    PAGE_INFO_LEN.store(len, Ordering::Relaxed);
+    PAGE_INFO_PTR.store(ptr, Ordering::Release);
 }
-
-#[inline]
-fn pfn(pa: usize) -> usize {
-    pa / PAGE_SIZE
-}
-
-#[inline]
+fn pfn(pa: usize) -> usize { pa / PAGE_SIZE }
 pub fn page_info(pa: usize) -> Option<&'static PageInfo> {
-    if pa == 0 || pa & (PAGE_SIZE - 1) != 0 {
-        return None;
-    }
+    if pa == 0 || pa & (PAGE_SIZE - 1) != 0 { return None; }
     let ptr = PAGE_INFO_PTR.load(Ordering::Acquire);
-    if ptr.is_null() {
-        return None;
-    }
-    let idx = pfn(pa);
-    let len = PAGE_INFO_LEN.load(Ordering::Relaxed);
-    if idx >= len {
-        return None;
-    }
-    Some(unsafe { &*ptr.add(idx) })
+    if ptr.is_null() || pfn(pa) >= PAGE_INFO_LEN.load(Ordering::Relaxed) { return None; }
+    Some(unsafe { &*ptr.add(pfn(pa)) })
 }
-
-#[derive(Copy, Clone)]
-struct NodeRange {
-    base: usize,
-    end: usize,
-}
-
+#[derive(Clone, Copy)]
+struct NodeRange { base: usize, end: usize }
 static NODE_RANGES: [spin::Mutex<NodeRange>; MAX_NODES] = {
-    const Z: spin::Mutex<NodeRange> = spin::Mutex::new(NodeRange {
-        base: usize::MAX,
-        end: 0,
-    });
+    const Z: spin::Mutex<NodeRange> = spin::Mutex::new(NodeRange { base: usize::MAX, end: 0 });
     [Z; MAX_NODES]
 };
 static NODE_COUNT: AtomicUsize = AtomicUsize::new(0);
-
 fn register_node_range(node: u8, base: usize, end: usize) {
-    let n = node as usize;
-    if n >= MAX_NODES {
-        return;
-    }
-    let mut nr = NODE_RANGES[n].lock();
-    nr.base = nr.base.min(base);
-    nr.end = nr.end.max(end);
-    let old = NODE_COUNT.load(Ordering::Relaxed);
-    if n + 1 > old {
-        NODE_COUNT
-            .compare_exchange(old, n + 1, Ordering::Relaxed, Ordering::Relaxed)
-            .ok();
-    }
+    let mut range = NODE_RANGES[node as usize].lock();
+    range.base = range.base.min(base); range.end = range.end.max(end);
+    NODE_COUNT.fetch_max(node as usize + 1, Ordering::Relaxed);
 }
-
 pub fn node_of(pa: usize) -> u8 {
-    let n = NODE_COUNT.load(Ordering::Relaxed);
-    for i in 0..n {
-        let nr = NODE_RANGES[i].lock();
-        if pa >= nr.base && pa < nr.end {
-            return i as u8;
-        }
+    for node in 0..NODE_COUNT.load(Ordering::Relaxed) {
+        let range = NODE_RANGES[node].lock();
+        if pa >= range.base && pa < range.end { return node as u8; }
     }
     0
 }
-
 struct BuddyNode {
-    free_lists: [AtomicPtr<PageInfo>; MAX_ORDER],
-    free_pages: AtomicUsize,
-    total_pages: AtomicUsize,
+    free_lists: [AtomicPtr<PageInfo>; MAX_ORDER], free_pages: AtomicUsize, total_pages: AtomicUsize,
 }
-
 impl BuddyNode {
     const fn new() -> Self {
         const NP: AtomicPtr<PageInfo> = AtomicPtr::new(core::ptr::null_mut());
-        Self {
-            free_lists: [NP; MAX_ORDER],
-            free_pages: AtomicUsize::new(0),
-            total_pages: AtomicUsize::new(0),
-        }
+        Self { free_lists: [NP; MAX_ORDER], free_pages: AtomicUsize::new(0), total_pages: AtomicUsize::new(0) }
     }
 }
-
-static BUDDY: [BuddyNode; MAX_NODES] = {
-    const Z: BuddyNode = BuddyNode::new();
-    [Z; MAX_NODES]
-};
+static BUDDY: [BuddyNode; MAX_NODES] = { const Z: BuddyNode = BuddyNode::new(); [Z; MAX_NODES] };
 static BUDDY_LIVE: AtomicBool = AtomicBool::new(false);
-
-#[inline]
+static BUILDING_MAP: AtomicBool = AtomicBool::new(false);
+static INIT_REGIONS: spin::Once<()> = spin::Once::new();
 unsafe fn pi_to_pa(pi: *const PageInfo) -> usize {
     let base = PAGE_INFO_PTR.load(Ordering::Relaxed);
-    let idx = (pi as usize - base as usize) / core::mem::size_of::<PageInfo>();
-    idx * PAGE_SIZE
+    (pi as usize - base as usize) / core::mem::size_of::<PageInfo>() * PAGE_SIZE
 }
-
-#[inline]
-fn order_size(order: usize) -> usize {
-    PAGE_SIZE << order
-}
-#[inline]
-fn buddy_pa(pa: usize, order: usize) -> usize {
-    pa ^ order_size(order)
-}
-#[inline]
-fn is_aligned(pa: usize, order: usize) -> bool {
-    pa & (order_size(order) - 1) == 0
-}
-
+fn order_size(order: usize) -> usize { PAGE_SIZE << order }
+// All buddy and boot-list manipulation is covered by PMM_LOCK.
 unsafe fn buddy_push(node: u8, pa: usize, order: usize) {
-    let pi = match page_info(pa) {
-        Some(p) => p,
-        None => return,
-    };
-    pi.flags.fetch_or(FLAG_FREE, Ordering::Release);
+    let pi = page_info(pa).expect("pmm: free block lacks metadata");
+    let buddy = &BUDDY[node as usize];
+    pi.flags.store(FLAG_FREE | FLAG_BUDDY, Ordering::Relaxed);
     pi.order.store(order as u8, Ordering::Relaxed);
-    let n = node as usize;
-    let list = &BUDDY[n].free_lists[order];
-    loop {
-        let head = list.load(Ordering::Acquire);
-        pi.free_next.store(head, Ordering::Relaxed);
-        if list
-            .compare_exchange_weak(
-                head,
-                pi as *const PageInfo as *mut PageInfo,
-                Ordering::Release,
-                Ordering::Relaxed,
-            )
-            .is_ok()
-        {
-            BUDDY[n].free_pages.fetch_add(1 << order, Ordering::Relaxed);
-            return;
-        }
-        core::hint::spin_loop();
-    }
+    pi.free_next.store(buddy.free_lists[order].load(Ordering::Relaxed), Ordering::Relaxed);
+    buddy.free_lists[order].store(pi as *const _ as *mut _, Ordering::Relaxed);
+    buddy.free_pages.fetch_add(1 << order, Ordering::Relaxed);
 }
-
 unsafe fn buddy_pop(node: u8, order: usize) -> usize {
-    let n = node as usize;
-    let list = &BUDDY[n].free_lists[order];
-    loop {
-        let head_ptr = list.load(Ordering::Acquire);
-        if head_ptr.is_null() {
-            return 0;
-        }
-        let next = (*head_ptr).free_next.load(Ordering::Relaxed);
-        if list
-            .compare_exchange_weak(head_ptr, next, Ordering::Release, Ordering::Relaxed)
-            .is_ok()
-        {
-            (*head_ptr).flags.fetch_and(!FLAG_FREE, Ordering::Release);
-            BUDDY[n].free_pages.fetch_sub(1 << order, Ordering::Relaxed);
-            return pi_to_pa(head_ptr);
-        }
-        core::hint::spin_loop();
-    }
+    let buddy = &BUDDY[node as usize];
+    let head = buddy.free_lists[order].load(Ordering::Relaxed);
+    if head.is_null() { return 0; }
+    buddy.free_lists[order].store((*head).free_next.load(Ordering::Relaxed), Ordering::Relaxed);
+    (*head).flags.fetch_and(!FLAG_FREE, Ordering::Relaxed);
+    buddy.free_pages.fetch_sub(1 << order, Ordering::Relaxed);
+    pi_to_pa(head)
 }
-
-/// P0-4: Grow scratch buffer from 256 to 512 entries so deeply-loaded
-/// free-lists do not silently abort the search and return `false`.
+// Unlink in place: no bounded scratch buffer, restoration race, or ABA loop.
 unsafe fn buddy_remove(node: u8, pa: usize, order: usize) -> bool {
-    let n = node as usize;
-    let list = &BUDDY[n].free_lists[order];
-    let target = match page_info(pa) {
-        Some(p) => p as *const PageInfo as *mut PageInfo,
-        None => return false,
-    };
-    let mut popped: [*mut PageInfo; 512] = [core::ptr::null_mut(); 512];
-    let mut count = 0usize;
-    let mut found = false;
+    let Some(target) = page_info(pa) else { return false };
+    let target = target as *const _ as *mut PageInfo;
+    let buddy = &BUDDY[node as usize];
+    let mut link = &buddy.free_lists[order];
     loop {
-        let head_ptr = list.load(Ordering::Acquire);
-        if head_ptr.is_null() {
-            break;
+        let current = link.load(Ordering::Relaxed);
+        if current.is_null() { return false; }
+        if current == target {
+            link.store((*current).free_next.load(Ordering::Relaxed), Ordering::Relaxed);
+            (*current).flags.fetch_and(!FLAG_FREE, Ordering::Relaxed);
+            buddy.free_pages.fetch_sub(1 << order, Ordering::Relaxed);
+            return true;
         }
-        let next = (*head_ptr).free_next.load(Ordering::Relaxed);
-        if list
-            .compare_exchange_weak(head_ptr, next, Ordering::Release, Ordering::Relaxed)
-            .is_err()
-        {
-            core::hint::spin_loop();
-            continue;
-        }
-        (*head_ptr).flags.fetch_and(!FLAG_FREE, Ordering::Release);
-        BUDDY[n].free_pages.fetch_sub(1 << order, Ordering::Relaxed);
-        if head_ptr == target {
-            found = true;
-            break;
-        }
-        if count < popped.len() {
-            popped[count] = head_ptr;
-            count += 1;
-        } else {
-            (*head_ptr).flags.fetch_or(FLAG_FREE, Ordering::Relaxed);
-            BUDDY[n].free_pages.fetch_add(1 << order, Ordering::Relaxed);
-            for &p in &popped[..count] {
-                (*p).flags.fetch_or(FLAG_FREE, Ordering::Release);
-                BUDDY[n].free_pages.fetch_add(1 << order, Ordering::Relaxed);
-                let h = list.load(Ordering::Acquire);
-                (*p).free_next.store(h, Ordering::Relaxed);
-                list.store(p, Ordering::Release);
-            }
-            return false;
-        }
+        link = &(*current).free_next;
     }
-    for &p in &popped[..count] {
-        (*p).flags.fetch_or(FLAG_FREE, Ordering::Release);
-        BUDDY[n].free_pages.fetch_add(1 << order, Ordering::Relaxed);
-        let h = list.load(Ordering::Acquire);
-        (*p).free_next.store(h, Ordering::Relaxed);
-        list.store(p, Ordering::Release);
-    }
-    found
 }
-
-extern "C" {
-    static _kernel_start: u8;
-    static _end: u8;
-}
-
-/// P1-4: Return the physical start/end of the kernel image.
-/// On a direct-mapped kernel the linker symbols ARE physical addresses
-/// (identity or offset-mapped). We subtract PHYS_OFFSET when the kernel
-/// is loaded above the direct-map base so comparisons against raw PA work.
-#[inline]
+#[cfg(not(pmm_host_test))]
 fn kernel_phys_range() -> (usize, usize) {
-    use crate::mm::phys::PHYS_OFFSET;
-    let start_va = unsafe { &_kernel_start as *const u8 as usize };
-    let end_va = unsafe { &_end as *const u8 as usize };
-    // If the linker symbols are virtual addresses in the direct map, convert;
-    // if they are already physical (e.g. identity-mapped), subtraction yields
-    // the same result because PHYS_OFFSET == 0 in that case.
-    let start_pa = if start_va >= PHYS_OFFSET {
-        start_va - PHYS_OFFSET
-    } else {
-        start_va
-    };
-    let end_pa = if end_va >= PHYS_OFFSET {
-        end_va - PHYS_OFFSET
-    } else {
-        end_va
-    };
-    (start_pa, end_pa)
+    extern "C" { static _kernel_start: u8; static _end: u8; }
+    let offset = crate::mm::phys::PHYS_OFFSET;
+    let convert = |va: usize| if va >= offset { va - offset } else { va };
+    unsafe { (convert(core::ptr::addr_of!(_kernel_start) as usize), convert(core::ptr::addr_of!(_end) as usize)) }
 }
-
-#[inline]
 fn is_kernel_page(pa: usize) -> bool {
-    let (start, end) = kernel_phys_range();
-    pa >= start && pa < end
+    #[cfg(not(pmm_host_test))]
+    { let (start, end) = kernel_phys_range(); pa < end && pa.saturating_add(PAGE_SIZE) > start }
+    #[cfg(pmm_host_test)]
+    { let _ = pa; false }
 }
-
-unsafe fn buddy_alloc_node(node: u8) -> usize {
-    for order in 0..MAX_ORDER {
+#[cfg(pmm_host_test)]
+static TEST_MEMORY_BASE: AtomicUsize = AtomicUsize::new(0);
+#[cfg(pmm_host_test)]
+static TEST_MEMORY_LEN: AtomicUsize = AtomicUsize::new(0);
+unsafe fn zero_pages(pa: usize, pages: usize) {
+    #[cfg(pmm_host_test)]
+    let address = if pa < TEST_MEMORY_LEN.load(Ordering::Relaxed) {
+        TEST_MEMORY_BASE.load(Ordering::Relaxed) + pa
+    } else { pa };
+    #[cfg(not(pmm_host_test))]
+    let address = pa;
+    core::ptr::write_bytes(address as *mut u8, 0, pages * PAGE_SIZE);
+}
+unsafe fn buddy_alloc_order_node(node: u8, wanted: usize) -> usize {
+    for order in wanted..MAX_ORDER {
         let pa = buddy_pop(node, order);
-        if pa == 0 {
-            continue;
+        if pa == 0 { continue; }
+        for split in (wanted..order).rev() { buddy_push(node, pa + order_size(split), split); }
+        for page in 0..(1usize << wanted) {
+            let pi = page_info(pa + page * PAGE_SIZE).unwrap();
+            pi.refcount.store(1, Ordering::Relaxed); pi.flags.store(FLAG_BUDDY, Ordering::Relaxed);
+            pi.order.store(wanted as u8, Ordering::Relaxed); pi.numa_node.store(node, Ordering::Relaxed);
         }
-        let current_pa = pa;
-        let mut current_order = order;
-        while current_order > 0 {
-            current_order -= 1;
-            let buddy_half = current_pa + order_size(current_order);
-            if let Some(bpi) = page_info(buddy_half) {
-                bpi.numa_node.store(node, Ordering::Relaxed);
-            }
-            buddy_push(node, buddy_half, current_order);
-        }
-        if let Some(pi) = page_info(current_pa) {
-            pi.refcount.store(1, Ordering::Release);
-            pi.order.store(0, Ordering::Relaxed);
-            pi.flags.store(FLAG_BUDDY, Ordering::Release);
-            pi.numa_node.store(node, Ordering::Relaxed);
-        }
-        core::ptr::write_bytes(current_pa as *mut u8, 0, PAGE_SIZE);
-        return current_pa;
+        zero_pages(pa, 1 << wanted);
+        return pa;
     }
     0
 }
-
-unsafe fn buddy_alloc_order_node(node: u8, order: usize) -> usize {
-    if order >= MAX_ORDER {
-        return 0;
-    }
-    for try_order in order..MAX_ORDER {
-        let pa = buddy_pop(node, try_order);
-        if pa == 0 {
-            continue;
-        }
-        let current_pa = pa;
-        let mut current_order = try_order;
-        while current_order > order {
-            current_order -= 1;
-            let split_off = current_pa + order_size(current_order);
-            if let Some(bpi) = page_info(split_off) {
-                bpi.numa_node.store(node, Ordering::Relaxed);
-            }
-            buddy_push(node, split_off, current_order);
-        }
-        let block_pages = 1usize << order;
-        for i in 0..block_pages {
-            let ppa = current_pa + i * PAGE_SIZE;
-            if let Some(pi) = page_info(ppa) {
-                pi.refcount.store(1, Ordering::Release);
-                pi.order.store(order as u8, Ordering::Relaxed);
-                pi.flags.store(FLAG_BUDDY, Ordering::Release);
-                pi.numa_node.store(node, Ordering::Relaxed);
-            }
-        }
-        core::ptr::write_bytes(current_pa as *mut u8, 0, block_pages * PAGE_SIZE);
-        return current_pa;
-    }
-    0
-}
-
-/// P0-5: Fix TOCTOU merge race in buddy_free_page.
-///
-/// The old code read bpi.flags / bpi.order as separate loads, which meant
-/// a concurrent free on the same buddy could pass the flag check and the
-/// order check independently while the buddy was being removed from the
-/// free-list by another CPU.  Fix: call `buddy_remove` first (which
-/// atomically unlinks the buddy), then re-validate order and node on the
-/// now-exclusive page before committing the merge.
 unsafe fn buddy_free_page(pa: usize) {
-    if pa == 0 || pa & (PAGE_SIZE - 1) != 0 {
-        return;
-    }
-    let pi = match page_info(pa) {
-        Some(p) => p,
-        None => return,
-    };
+    let pi = page_info(pa).expect("pmm: freed page lacks metadata");
     let node = pi.numa_node.load(Ordering::Relaxed);
-    let mut current_pa = pa;
-    let mut current_order = 0usize;
-    core::ptr::write_bytes(current_pa as *mut u8, 0, PAGE_SIZE);
-    pi.refcount.store(0, Ordering::Release);
-    pi.flags.store(0, Ordering::Relaxed);
-    while current_order + 1 < MAX_ORDER {
-        let bpa = buddy_pa(current_pa, current_order);
-        if bpa >= MAX_PA {
-            break;
-        }
-        // Attempt to atomically remove the buddy from the free-list first.
-        // If buddy_remove returns false the buddy is not free (or not in this
-        // order's list), so we stop merging.
-        if !buddy_remove(node, bpa, current_order) {
-            break;
-        }
-        // We now own the buddy exclusively; validate it is still a matching
-        // buddy block (re-check order and NUMA node now that we hold it).
-        let bpi = match page_info(bpa) {
-            Some(p) => p,
-            None => {
-                // Should not happen, but push the buddy back rather than leaking.
-                buddy_push(node, bpa, current_order);
-                break;
-            },
-        };
-        if bpi.order.load(Ordering::Relaxed) as usize != current_order
-            || bpi.numa_node.load(Ordering::Relaxed) != node
-        {
-            // Stale metadata after race; restore the buddy and stop.
-            buddy_push(node, bpa, current_order);
-            break;
-        }
-        let merged = current_pa.min(bpa);
-        if !is_aligned(merged, current_order + 1) {
-            buddy_push(node, bpa, current_order);
-            break;
-        }
-        current_pa = merged;
-        current_order += 1;
+    let mut base = pa;
+    let mut order = 0;
+    zero_pages(pa, 1);
+    pi.refcount.store(0, Ordering::Relaxed); pi.flags.store(FLAG_BUDDY, Ordering::Relaxed);
+    while order + 1 < MAX_ORDER {
+        let other = base ^ order_size(order);
+        let Some(info) = page_info(other) else { break };
+        if info.flags.load(Ordering::Relaxed) & FLAG_FREE == 0
+            || info.order.load(Ordering::Relaxed) as usize != order
+            || info.numa_node.load(Ordering::Relaxed) != node { break; }
+        if !buddy_remove(node, other, order) { break; }
+        base = base.min(other); order += 1;
     }
-    if let Some(cpi) = page_info(current_pa) {
-        cpi.flags.store(FLAG_FREE | FLAG_BUDDY, Ordering::Relaxed);
-    }
-    buddy_push(node, current_pa, current_order);
+    buddy_push(node, base, order);
 }
-
-#[inline]
 fn local_node() -> u8 {
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(all(target_arch = "x86_64", not(pmm_host_test)))]
     {
         let cpu = crate::arch::x86_64::gdt::current_cpu_id();
-        if let Some(info) = crate::smp::cpu_info(cpu) {
-            return info.node as u8;
-        }
+        if let Some(info) = crate::smp::cpu_info(cpu) { return info.node as u8; }
     }
     0
 }
-
 pub fn alloc_page() -> Option<usize> {
-    if BUDDY_LIVE.load(Ordering::Relaxed) {
-        let preferred = local_node();
-        let n_nodes = NODE_COUNT.load(Ordering::Relaxed).max(1);
-        for i in 0..n_nodes {
-            let node = ((preferred as usize + i) % n_nodes) as u8;
-            let pa = unsafe { buddy_alloc_node(node) };
-            if pa != 0 {
-                return Some(pa);
-            }
-        }
-    }
-    let pa = boot_pop();
-    if pa != 0 {
-        if let Some(idx) = pool_index(pa) {
-            pool_bit_clear(idx);
-        }
-        unsafe {
-            core::ptr::write_bytes(pa as *mut u8, 0, PAGE_SIZE);
-        }
-        return Some(pa);
-    }
-    let idx = BUMP.fetch_add(1, Ordering::Relaxed);
-    if idx >= POOL_PAGES {
-        BUMP.fetch_sub(1, Ordering::Relaxed);
-        return None;
-    }
-    Some(pool_base() + idx * PAGE_SIZE)
+    // GS/per-CPU state is not available during pre-GDT bootstrap allocation.
+    let node = if BUDDY_LIVE.load(Ordering::Acquire) { local_node() } else { 0 };
+    alloc_page_on_node(node)
 }
-
-pub fn alloc_page_on_node(node: u8) -> Option<usize> {
-    if BUDDY_LIVE.load(Ordering::Relaxed) {
-        let pa = unsafe { buddy_alloc_node(node) };
-        if pa != 0 {
+pub fn alloc_page_on_node(preferred: u8) -> Option<usize> {
+    let _interrupts = InterruptGuard::new(); let _lock = PMM_LOCK.lock();
+    if BUDDY_LIVE.load(Ordering::Acquire) {
+        let nodes = NODE_COUNT.load(Ordering::Relaxed).max(1);
+        for offset in 0..nodes {
+            let node = ((preferred as usize + offset) % nodes) as u8;
+            let pa = unsafe { buddy_alloc_order_node(node, 0) };
+            if pa != 0 { return Some(pa); }
+        }
+    }
+    alloc_boot_pages(1)
+}
+pub fn alloc_pages_contig(n: usize) -> Option<usize> {
+    if n == 0 || n > (1usize << (MAX_ORDER - 1)) { return None; }
+    let _interrupts = InterruptGuard::new(); let _lock = PMM_LOCK.lock();
+    if BUDDY_LIVE.load(Ordering::Acquire) {
+        let order = n.next_power_of_two().trailing_zeros() as usize;
+        let nodes = NODE_COUNT.load(Ordering::Relaxed).max(1);
+        let preferred = local_node();
+        for offset in 0..nodes {
+            let node = ((preferred as usize + offset) % nodes) as u8;
+            let pa = unsafe { buddy_alloc_order_node(node, order) };
+            if pa == 0 { continue; }
+            for tail in n..(1usize << order) { unsafe { buddy_free_page(pa + tail * PAGE_SIZE) }; }
             return Some(pa);
         }
     }
-    alloc_page()
+    alloc_boot_pages(n)
 }
-
-/// P0-2: Fix pre-buddy path — it used to allocate N pages into an array but
-/// only return `pages[0]`, leaking pages[1..N-1]. When buddy is not live
-/// we can only hand out one physically contiguous page at a time (the bootstrap
-/// pool has no order concept), so return None for n > 1 pre-buddy.
-pub fn alloc_pages_contig(n: usize) -> Option<usize> {
-    if n == 0 {
-        return None;
-    }
-    if n == 1 {
-        return alloc_page();
-    }
-    if !BUDDY_LIVE.load(Ordering::Relaxed) {
-        // Pre-buddy bootstrap pool cannot satisfy contiguous multi-page
-        // requests; fail rather than leaking N-1 pages.
-        return None;
-    }
-    let mut order = 0usize;
-    while (1 << order) < n {
-        order += 1;
-    }
-    if order >= MAX_ORDER {
-        return None;
-    }
-    let preferred = local_node();
-    let n_nodes = NODE_COUNT.load(Ordering::Relaxed).max(1);
-    for i in 0..n_nodes {
-        let node = ((preferred as usize + i) % n_nodes) as u8;
-        let pa = unsafe { buddy_alloc_order_node(node, order) };
-        if pa == 0 {
-            continue;
-        }
-        let block_pages = 1usize << order;
-        // Free back the tail pages that exceed the requested n.
-        for j in n..block_pages {
-            let tail_pa = pa + j * PAGE_SIZE;
-            unsafe {
-                buddy_free_page(tail_pa);
-            }
-        }
-        return Some(pa);
-    }
-    None
-}
-
 pub fn free_pages_contig(base_pa: usize, n: usize) {
-    for i in 0..n {
-        free_page(base_pa + i * PAGE_SIZE);
-    }
+    for page in 0..n { free_page(base_pa + page * PAGE_SIZE); }
 }
-
 pub fn free_page(pa: usize) {
-    if pa == 0 {
-        return;
+    if pa == 0 { return; }
+    let _interrupts = InterruptGuard::new(); let _lock = PMM_LOCK.lock();
+    assert_eq!(pa & (PAGE_SIZE - 1), 0, "pmm: unaligned free");
+    // Bootstrap pages belong to the kernel image but are explicitly allocatable.
+    if let Some(index) = pool_index(pa) {
+        assert!(index < BUMP.load(Ordering::Relaxed), "pmm: unissued bootstrap page");
+        assert!(pool_bit_set_free(index), "pmm: duplicate bootstrap free");
+        unsafe { zero_pages(pa, 1) }; boot_push(pa); return;
     }
-    assert_eq!(
-        pa & (PAGE_SIZE - 1),
-        0,
-        "free_page: PA {:#x} not page-aligned",
-        pa
-    );
-    assert!(
-        !is_kernel_page(pa),
-        "free_page: attempt to free kernel page {:#x}",
-        pa
-    );
-    if let Some(idx) = pool_index(pa) {
-        let ok = pool_bit_set_free(idx);
-        assert!(ok, "free_page: double-free of bootstrap page {:#x}", pa);
-        unsafe {
-            zero_page(pa);
-        }
-        boot_push(pa);
-        return;
-    }
-    if let Some(pi) = page_info(pa) {
-        let old = pi.refcount.fetch_sub(1, Ordering::AcqRel);
-        assert!(old > 0, "free_page: refcount underflow at PA {:#x}", pa);
-        if old == 1 {
-            unsafe {
-                buddy_free_page(pa);
-            }
-        }
-        return;
-    }
+    assert!(!is_kernel_page(pa), "pmm: attempted kernel-image free");
+    let pi = page_info(pa).expect("pmm: unknown physical page");
+    let refs = pi.refcount.load(Ordering::Relaxed);
+    assert!(refs > 0, "pmm: page refcount underflow");
+    if refs == 1 { unsafe { buddy_free_page(pa) }; }
+    else { pi.refcount.store(refs - 1, Ordering::Relaxed); }
 }
-
 pub fn get_page(pa: usize) {
-    if let Some(pi) = page_info(pa) {
-        pi.refcount.fetch_add(1, Ordering::Relaxed);
-    }
+    let _interrupts = InterruptGuard::new(); let _lock = PMM_LOCK.lock();
+    if let Some(pi) = page_info(pa) { pi.refcount.fetch_add(1, Ordering::Relaxed); }
 }
-
-#[inline]
-pub fn put_page(pa: usize) {
-    free_page(pa);
-}
-#[inline]
+pub fn put_page(pa: usize) { free_page(pa); }
 pub fn page_refcount(pa: usize) -> u32 {
-    page_info(pa)
-        .map(|pi| pi.refcount.load(Ordering::Relaxed))
-        .unwrap_or(0)
+    page_info(pa).map(|pi| pi.refcount.load(Ordering::Relaxed)).unwrap_or(0)
 }
-
-pub fn pmm_add_region_node(base: usize, size: usize, node: u8) {
-    let start = (base + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
-    let end = base + size;
-    if start >= end {
-        return;
-    }
-    let max_pfn = pfn(end - 1);
-    if max_pfn < MAX_FRAMES {
-        ensure_page_info_table(max_pfn);
-    }
-    register_node_range(node, start, end);
-    BUDDY_LIVE.store(true, Ordering::Relaxed);
+// Page-aligned, exclusive-end usable span, clipped to the PMM's address limit.
+fn usable_span(start: u64, length: u64) -> Option<(usize, usize)> {
+    let end = start.checked_add(length)?.min(MAX_PA as u64) as usize & !(PAGE_SIZE - 1);
+    if start >= MAX_PA as u64 { return None; }
+    let start = (start as usize).checked_add(PAGE_SIZE - 1)? & !(PAGE_SIZE - 1);
+    let start = start.max(PAGE_SIZE);
+    (start < end).then_some((start, end))
+}
+fn seed_run(start: usize, end: usize, node: u8) {
     let mut pa = start;
-    while pa + PAGE_SIZE <= end {
-        if pa == 0 || is_kernel_page(pa) || pfn(pa) >= PAGE_INFO_LEN.load(Ordering::Relaxed) {
+    while pa < end {
+        let remaining = (end - pa) / PAGE_SIZE;
+        let alignment = (pa / PAGE_SIZE).trailing_zeros() as usize;
+        let fitting = usize::BITS as usize - 1 - remaining.leading_zeros() as usize;
+        let order = alignment.min(fitting).min(MAX_ORDER - 1);
+        unsafe { buddy_push(node, pa, order) };
+        pa += order_size(order);
+    }
+    BUDDY[node as usize].total_pages.fetch_add((end - start) / PAGE_SIZE, Ordering::Relaxed);
+}
+/// Boot-only region registration. Hot-add after publication is not supported.
+pub fn pmm_add_region_node(base: usize, size: usize, node: u8) {
+    let _interrupts = InterruptGuard::new(); let _lock = PMM_LOCK.lock();
+    assert!((node as usize) < MAX_NODES, "pmm: invalid NUMA node");
+    assert!(!BUDDY_LIVE.load(Ordering::Acquire), "pmm: late region registration is unsupported");
+    let Some((start, end)) = usable_span(base as u64, size as u64) else { return };
+    ensure_page_info_table(pfn(end - 1));
+    register_node_range(node, start, end);
+    let mut pa = start;
+    while pa < end {
+        let eligible = |address| !is_kernel_page(address) && pool_index(address).is_none()
+            && page_info(address).is_some_and(|pi| pi.flags.load(Ordering::Relaxed) == 0);
+        if !eligible(pa) { pa += PAGE_SIZE; continue; }
+        let run_start = pa;
+        while pa < end && eligible(pa) {
+            let pi = page_info(pa).unwrap();
+            pi.flags.store(FLAG_BUDDY, Ordering::Relaxed); pi.refcount.store(0, Ordering::Relaxed);
+            pi.numa_node.store(node, Ordering::Relaxed); pi.order.store(0, Ordering::Relaxed);
             pa += PAGE_SIZE;
-            continue;
         }
-        if let Some(pi) = page_info(pa) {
-            pi.refcount.store(0, Ordering::Relaxed);
-            pi.flags.store(FLAG_FREE | FLAG_BUDDY, Ordering::Relaxed);
-            pi.order.store(0, Ordering::Relaxed);
-            pi.numa_node.store(node, Ordering::Relaxed);
-            unsafe {
-                zero_page(pa);
-            }
-            unsafe {
-                buddy_push(node, pa, 0);
-            }
-            BUDDY[node as usize]
-                .total_pages
-                .fetch_add(1, Ordering::Relaxed);
-        }
-        pa += PAGE_SIZE;
+        seed_run(run_start, pa, node);
     }
+    if !BUILDING_MAP.load(Ordering::Relaxed) { BUDDY_LIVE.store(true, Ordering::Release); }
 }
-
-pub fn pmm_add_region(base: usize, size: usize) {
-    pmm_add_region_node(base, size, 0);
-}
-
-/// Arch-agnostic PMM init from a boot-memory map.
-///
-/// This replaces the old `init()` and `init(fdt_ptr)` entrypoints. Arch
-/// code is responsible for building a `Regions` value and passing it here.
+pub fn pmm_add_region(base: usize, size: usize) { pmm_add_region_node(base, size, 0); }
+/// Initialize once from the full memory map before concurrent PMM use.
+/// # Safety
+/// Usable regions must describe exclusively available, identity-addressable
+/// RAM. Initialization and all region registration must finish before AP use.
 pub unsafe fn init_from_regions(regions: &Regions) {
-    for r in regions.iter() {
-        if !r.is_usable() {
-            continue;
+    INIT_REGIONS.call_once(|| {
+        let highest = regions.iter().filter(|r| r.is_usable())
+            .filter_map(|r| usable_span(r.start, r.length).map(|(_, end)| end / PAGE_SIZE)).max();
+        let Some(frames) = highest else { return };
+        {
+            let _interrupts = InterruptGuard::new(); let _lock = PMM_LOCK.lock();
+            assert!(!BUDDY_LIVE.load(Ordering::Acquire), "pmm: map already published");
+            assert!(frames <= MAX_FRAMES);
+            ensure_page_info_table(frames - 1);
+            BUILDING_MAP.store(true, Ordering::Relaxed);
         }
-        let base = r.start as usize;
-        let size = r.length as usize;
-        pmm_add_region(base, size);
-    }
+        for region in regions.iter().filter(|r| r.is_usable()) {
+            if let Some((start, end)) = usable_span(region.start, region.length) {
+                pmm_add_region_node(start, end - start, 0);
+            }
+        }
+        BUILDING_MAP.store(false, Ordering::Relaxed);
+        BUDDY_LIVE.store(true, Ordering::Release);
+    });
 }
-
 pub fn free_pages() -> usize {
-    let n = NODE_COUNT.load(Ordering::Relaxed).max(1);
-    (0..n)
-        .map(|i| BUDDY[i].free_pages.load(Ordering::Relaxed))
-        .sum::<usize>()
-        + BOOT_FREE_CNT.load(Ordering::Relaxed)
-        + (POOL_PAGES - BUMP.load(Ordering::Relaxed))
+    let _interrupts = InterruptGuard::new(); let _lock = PMM_LOCK.lock();
+    BUDDY.iter().map(|n| n.free_pages.load(Ordering::Relaxed)).sum::<usize>()
+        + BOOT_FREE_CNT.load(Ordering::Relaxed) + POOL_PAGES - BUMP.load(Ordering::Relaxed)
 }
-
 pub fn total_pages() -> usize {
-    let n = NODE_COUNT.load(Ordering::Relaxed).max(1);
-    (0..n)
-        .map(|i| BUDDY[i].total_pages.load(Ordering::Relaxed))
-        .sum::<usize>()
-        + POOL_PAGES
+    BUDDY.iter().map(|n| n.total_pages.load(Ordering::Relaxed)).sum::<usize>() + POOL_PAGES
 }
-
 pub fn free_pages_node(node: u8) -> usize {
-    BUDDY[node as usize].free_pages.load(Ordering::Relaxed)
+    BUDDY.get(node as usize).map(|n| n.free_pages.load(Ordering::Relaxed)).unwrap_or(0)
 }
-
 pub fn total_pages_node(node: u8) -> usize {
-    BUDDY[node as usize].total_pages.load(Ordering::Relaxed)
+    BUDDY.get(node as usize).map(|n| n.total_pages.load(Ordering::Relaxed)).unwrap_or(0)
 }
-
 pub fn dump_stats() {
-    let n = NODE_COUNT.load(Ordering::Relaxed).max(1);
-    for i in 0..n {
-        let free = BUDDY[i].free_pages.load(Ordering::Relaxed);
-        let total = BUDDY[i].total_pages.load(Ordering::Relaxed);
-        log::info!(
-            "pmm: node {} — {} / {} pages free ({} MiB / {} MiB)",
-            i,
-            free,
-            total,
-            free * PAGE_SIZE / (1024 * 1024),
-            total * PAGE_SIZE / (1024 * 1024),
-        );
+    for node in 0..NODE_COUNT.load(Ordering::Relaxed) {
+        log::info!("pmm: node {}: {} / {} pages free", node, free_pages_node(node as u8), total_pages_node(node as u8));
     }
 }
-
 pub fn dump_freelist() {
-    let n_nodes = NODE_COUNT.load(Ordering::Relaxed).max(1);
-    log::info!("=== PMM free-list dump ===");
-    for node in 0..n_nodes {
-        for order in 0..MAX_ORDER {
-            let mut count = 0usize;
-            let mut ptr = BUDDY[node].free_lists[order].load(Ordering::Acquire);
-            while !ptr.is_null() && count < 8192 {
-                count += 1;
-                ptr = unsafe { (*ptr).free_next.load(Ordering::Relaxed) };
-            }
-            if count > 0 {
-                log::info!(
-                    "pmm: node={} order={} block={}KiB free_blocks={} total={}KiB",
-                    node,
-                    order,
-                    (PAGE_SIZE << order) / 1024,
-                    count,
-                    count * ((PAGE_SIZE << order) / 1024),
-                );
+    let mut counts = [[0usize; MAX_ORDER]; MAX_NODES];
+    {
+        let _interrupts = InterruptGuard::new(); let _lock = PMM_LOCK.lock();
+        for node in 0..MAX_NODES {
+            for order in 0..MAX_ORDER {
+                let mut pi = BUDDY[node].free_lists[order].load(Ordering::Relaxed);
+                while !pi.is_null() {
+                    counts[node][order] += 1;
+                    pi = unsafe { (*pi).free_next.load(Ordering::Relaxed) };
+                }
             }
         }
     }
-    log::info!(
-        "pmm: bootstrap pool bump_used={} free_list={} capacity={}",
-        BUMP.load(Ordering::Relaxed),
-        BOOT_FREE_CNT.load(Ordering::Relaxed),
-        POOL_PAGES,
-    );
+    // Logging occurs outside the PMM lock.
+    for node in 0..MAX_NODES {
+        for order in 0..MAX_ORDER {
+            if counts[node][order] != 0 {
+                log::info!("pmm: node={} order={} free_blocks={}", node, order, counts[node][order]);
+            }
+        }
+    }
 }
-
-#[inline]
-unsafe fn zero_page(pa: usize) {
-    core::ptr::write_bytes(pa as *mut u8, 0, PAGE_SIZE);
-}
-
-// ===== Caller-expected public API aliases =====
-
-/// Alias of `alloc_pages_contig` — callers use `pmm::alloc_pages(n)`.
-#[inline]
-pub fn alloc_pages(n: usize) -> Option<usize> {
-    alloc_pages_contig(n)
-}
-
-/// P0-3: Align-aware allocator with proper prefix/suffix free.
-///
-/// Over-allocates by `align / PAGE_SIZE` pages to guarantee an aligned base
-/// falls within the allocation, then frees the unused prefix and suffix pages.
+pub fn alloc_pages(n: usize) -> Option<usize> { alloc_pages_contig(n) }
 pub fn alloc_pages_aligned(n: usize, align: usize) -> Option<core::ptr::NonNull<u8>> {
     if align == 0 || !align.is_power_of_two() {
-        // Treat as unaligned; just use the basic contig allocator.
-        let pa = alloc_pages_contig(n)?;
-        return core::ptr::NonNull::new(pa as *mut u8);
+        return core::ptr::NonNull::new(alloc_pages_contig(n)? as *mut u8);
     }
-
     let pa = alloc_pages_contig(n)?;
-    if pa & (align - 1) == 0 {
-        // Already aligned: fast path.
-        return core::ptr::NonNull::new(pa as *mut u8);
-    }
-    // Free and retry with extra pages for alignment slop.
+    if pa & (align - 1) == 0 { return core::ptr::NonNull::new(pa as *mut u8); }
     free_pages_contig(pa, n);
-
-    let align_pages = align / PAGE_SIZE;
-    let total = n + align_pages;
-    let pa2 = alloc_pages_contig(total)?;
-
-    // Compute the first address at or after pa2 that is `align`-aligned.
-    let aligned = (pa2 + align - 1) & !(align - 1);
-    let prefix_pages = (aligned - pa2) / PAGE_SIZE;
-    let suffix_pages = total - prefix_pages - n;
-
-    // P0-3: Free the prefix (before the aligned base).
-    for i in 0..prefix_pages {
-        free_page(pa2 + i * PAGE_SIZE);
-    }
-    // P0-3: Free the suffix (after the requested n pages).
-    for i in 0..suffix_pages {
-        free_page(aligned + n * PAGE_SIZE + i * PAGE_SIZE);
-    }
-
+    let total = n.checked_add(align / PAGE_SIZE)?;
+    let base = alloc_pages_contig(total)?;
+    let Some(aligned) = base.checked_add(align - 1).map(|v| v & !(align - 1)) else {
+        free_pages_contig(base, total); return None;
+    };
+    let prefix = (aligned - base) / PAGE_SIZE;
+    if prefix > total || n > total - prefix { free_pages_contig(base, total); return None; }
+    free_pages_contig(base, prefix);
+    free_pages_contig(aligned + n * PAGE_SIZE, total - prefix - n);
     core::ptr::NonNull::new(aligned as *mut u8)
 }
-
-/// Alias of `pmm_add_region` — callers use `pmm::add_region(base, size)`.
-#[inline]
-pub fn add_region(base: usize, size: usize) {
-    pmm_add_region(base, size);
-}
-
-/// Free a page-table root page.
-#[inline]
-pub fn free_page_table(pa: usize) {
-    free_page(pa);
-}
+pub fn add_region(base: usize, size: usize) { pmm_add_region(base, size); }
+pub fn free_page_table(pa: usize) { free_page(pa); }
+#[cfg(all(test, pmm_host_test))]
+#[path = "pmm/init_tests.rs"]
+mod init_tests;

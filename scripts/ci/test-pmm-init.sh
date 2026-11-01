@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/../.."
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+rustc --edition=2021 --target x86_64-unknown-linux-gnu --test --cfg pmm_host_test \
+  tests/host/pmm_init.rs -o "$work/pmm-init-tests"
+"$work/pmm-init-tests" --test-threads=1
