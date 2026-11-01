@@ -9,6 +9,7 @@ on:
     paths:
       - ".github/workflows/parser-fuzz.yml"
       - "fuzz/**"
+      - "scripts/ci/fuzz-coverage.sh"
       - "src/init/initramfs/**"
       - "src/exec/elf.rs"
       - "src/fs/vfs/symlink.rs"
@@ -17,6 +18,7 @@ on:
     paths:
       - ".github/workflows/parser-fuzz.yml"
       - "fuzz/**"
+      - "scripts/ci/fuzz-coverage.sh"
       - "src/init/initramfs/**"
       - "src/exec/elf.rs"
       - "src/fs/vfs/symlink.rs"
@@ -67,3 +69,30 @@ jobs:
             fuzz-*.log
             fuzz/artifacts/**
             fuzz/corpus/**
+
+  fuzz-coverage:
+    name: Advisory corpus source coverage
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src, llvm-tools-preview
+      - name: Install coverage build dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends clang lld
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      - name: Replay each corpus and generate source coverage reports
+        run: bash scripts/ci/fuzz-coverage.sh
+      - name: Upload advisory fuzz coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-coverage-report
+          if-no-files-found: warn
+          retention-days: 14
+          path: fuzz-coverage-report/
